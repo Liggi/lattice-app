@@ -1,8 +1,35 @@
-# Lattice
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/lattice-wordmark-dark.svg">
+    <img src="docs/images/lattice-wordmark-light.svg" alt="Lattice" width="360">
+  </picture>
+</p>
 
-Lattice is a self-hosted web workspace for running coding agents on your projects. You talk to a coordinator for each project; it dispatches workers, keeps a shared record of what has been decided, and reports back. It runs on your own machine with your own Claude Code and Codex logins, and works from a desktop or phone browser (over Tailscale, for example). You can move a project's coordinator between models and keep its context.
+<p align="center">
+  A self-hosted workspace for running Claude Code and Codex agents on your projects.
+  <br>
+  <a href="#install">Install</a>
+  ·
+  <a href="#your-first-project">First project</a>
+  ·
+  <a href="#use-it-from-your-phone-with-tailscale">Phone access</a>
+  ·
+  <a href="#configuration">Configuration</a>
+  ·
+  <a href="#development">Development</a>
+</p>
 
-Lattice is pre-release software.
+<p align="center">
+  <img src="docs/images/desktop.png" alt="Lattice in a desktop browser, showing a project's coordinator conversation with its workers" width="100%">
+</p>
+
+## About
+
+Each project in Lattice has a coordinator: one conversation you talk to about the outcome you want. It agrees the goal with you, starts worker sessions to do the work, keeps a record of what has been decided and what is still open, and reports back in the same thread. You can leave for a day and come back to a project that still knows where it was.
+
+Lattice runs on your own machine and drives the Claude Code and Codex CLIs you already have, signed in with your own accounts. A coordinator can move from Claude to Codex, or back, and keep the project's context. The interface works in a desktop or phone browser, and Tailscale is the simplest way to reach it from your phone.
+
+There is no hosted service. Lattice is pre-release software.
 
 ## Requirements
 
@@ -18,46 +45,14 @@ You sign each CLI in with your own account. Lattice never sees a password; it ru
 
 ```bash
 npm install -g lattice-app
-```
-
-This installs the `lattice-app` command. To work on Lattice itself, build it from a clone instead; see [Development](#development).
-
-## Run
-
-```bash
 lattice-app                  # start the server on port 3001
-lattice-app --port 3100      # another port
 ```
 
-Open http://localhost:3001 (or your port). The server keeps running in that terminal; stop it with Ctrl+C. Run it inside `tmux` or `screen`, or under your own service manager, if it should outlive the terminal.
+Open http://localhost:3001. The server keeps running in that terminal; stop it with Ctrl+C. Run it inside `tmux` or `screen`, or under your own service manager, if it should outlive the terminal. `lattice-app --port 3100` picks another port.
 
-Settings and data live in `~/.lattice-app/`. Set `LATTICE_CONFIG_DIR` to keep them somewhere else, for example to run a second instance on another port.
+Settings and data live in `~/.lattice-app/`. Set `LATTICE_CONFIG_DIR` to keep them somewhere else, for example to run a second instance on another port. If you already run the older `lattice-orchestrator` package, see [Running next to an existing Lattice](docs/running-next-to-lattice-orchestrator.md).
 
-Already running the older Lattice from npm? See [Running next to an existing Lattice](#running-next-to-an-existing-lattice).
-
-## Running next to an existing Lattice
-
-If you already use the older Lattice from npm (the `lattice-orchestrator` package, with the global `lattice` command and data in `~/.lattice`), you can install this one beside it without uninstalling anything. They are separate npm packages with separate commands, `lattice` and `lattice-app`, and they don't share files, a daemon or a port:
-
-- This Lattice keeps everything in `~/.lattice-app/`: settings, sessions, logs, its daemon's socket, and the `lattice` command its coordinators dispatch workers with. It never reads or writes `~/.lattice`.
-- Its agents call that command by its full path, so they reach this server even though the old `lattice` is on your PATH. In a terminal, `lattice` is still the old one and `lattice-app` is this one.
-
-Both default to port 3001, and this one refuses to start while the old one holds it. Pick another port once, before you start it:
-
-```bash
-mkdir -p ~/.lattice-app
-echo '{ "server": { "port": 3101 } }' > ~/.lattice-app/config.json
-lattice-app
-```
-
-Then open http://localhost:3101. Lattice adds its other settings to that file on first run.
-
-To stop or restart either one, stop it the way you started it; the other keeps running and keeps its sessions. `npm update -g lattice-app` and `npm update -g lattice-orchestrator` each update only their own package. To remove this one, run `npm uninstall -g lattice-app` and delete `~/.lattice-app/`.
-
-Two things are shared, because they belong to your user account rather than to either Lattice:
-
-- **Claude hooks.** The old Lattice registers hooks in `~/.claude/settings.json` that point at its port, so this Lattice's Claude workers call it on every tool use. While it is running it answers "no opinion" for sessions it doesn't know. While it is stopped, each call fails immediately and Claude carries on. Either way, this Lattice's workers run normally. Don't create the host-integration marker ([docs/host-integration-marker.md](docs/host-integration-marker.md)) for this Lattice while the old one is installed: the two would keep overwriting each other's hooks.
-- **Tailscale.** `tailscale serve --bg 3101` replaces whatever is served at your machine's Tailscale address, which is probably the old Lattice. To keep both reachable from your phone, serve this one on another HTTPS port: `tailscale serve --bg --https=8443 3101`, then open `https://your-machine.your-tailnet.ts.net:8443`. **Settings → Access** and the startup log check what Tailscale already serves and give you this form, with a free port, when 443 is taken.
+To work on Lattice itself, build it from a clone instead; see [Development](#development).
 
 ## Your first project
 
@@ -71,9 +66,12 @@ The coordinator is the conversation you talk to. It agrees the goal with you, st
 
 To run a single agent without a coordinator, choose **Claude**, **Codex** or **OpenCode** instead.
 
-⚠️ Agents run with permission prompts off by default (Claude's `bypassPermissions` mode; Codex runs with full access). They can run any command your user account can, in any folder. Point them only at work you're happy for an agent to do unattended.
+> [!WARNING]
+> Agents run with permission prompts off by default (Claude's `bypassPermissions` mode; Codex runs with full access). They can run any command your user account can, in any folder. Point them only at work you're happy for an agent to do unattended.
 
 ## Use it from your phone with Tailscale
+
+<img src="docs/images/phone.png" alt="A coordinator's report on a phone" width="260" align="right">
 
 The server only listens on this machine (`127.0.0.1`). To reach it from your phone or another computer, use [Tailscale](https://tailscale.com):
 
@@ -137,7 +135,7 @@ Agents refer to you as "the user" unless you set a name. Standing guidance you w
 Building from a clone needs pnpm 10 as well as Node. Install pnpm with `npm install -g pnpm@10` or `brew install pnpm`. On Node 22–24 `corepack enable` also works; Node 25 and later no longer include corepack.
 
 ```bash
-git clone <this repository> lattice
+git clone https://github.com/Liggi/lattice-app.git lattice
 cd lattice
 pnpm install     # also builds the bundled harness and toolkit packages
 pnpm build
@@ -159,4 +157,4 @@ pnpm dev              # server with reload on change, from source
 
 ## Licence
 
-Apache License 2.0; see [LICENSE](LICENSE). The harness and toolkit packages are MIT-licensed; see their own LICENSE files. Lattice began as a fork of [CUI](https://github.com/bmpixel/cui) by Wenbo Pan; see [NOTICE](NOTICE).
+Apache License 2.0; see [LICENSE](LICENSE). The harness and toolkit packages are MIT-licensed; see their own LICENSE files. Lattice began as a fork of [CUI](https://github.com/wbopan/cui) by Wenbo Pan; see [NOTICE](NOTICE).
