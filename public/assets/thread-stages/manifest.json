@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "treatment": "colour-wash",
+  "stages": {
+    "exploration": { "model": "nano-banana-2", "direction": "abstract" },
+    "research": { "model": "gpt-image-2", "direction": "instrumental" },
+    "investigation": { "model": "gpt-image-2", "direction": "instrumental" },
+    "design": { "model": "nano-banana-2", "direction": "instrumental" },
+    "implementation": { "model": "nano-banana-2", "direction": "abstract" },
+    "debugging": { "model": "nano-banana-2", "direction": "instrumental" },
+    "testing": { "model": "nano-banana-2", "direction": "abstract" },
+    "synthesis": { "model": "nano-banana-2", "direction": "instrumental" },
+    "operations": { "model": "gpt-image-2", "direction": "abstract" }
+  }
+}

@@ -1,0 +1,65 @@
+{
+  "name": "@liggi/agent-ui-toolkit",
+  "version": "0.6.0",
+  "description": "React components for rendering Claude Code tool calls: diffs, terminals, task trees, MCP tools. Themeable, with composer.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./styles.css": "./dist/styles/toolkit.css"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.build.json && tailwindcss -i ./src/styles/toolkit.dist.css -o ./dist/styles/toolkit.css --minify",
+    "build:css": "tailwindcss -i ./src/styles/toolkit.dist.css -o ./dist/styles/toolkit.css --minify",
+    "dev": "tsc --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:ct": "playwright test -c playwright-ct.config.ts",
+    "storybook": "storybook dev -p 6006",
+    "build-storybook": "storybook build"
+  },
+  "peerDependencies": {
+    "react": ">=18",
+    "react-dom": ">=18"
+  },
+  "dependencies": {
+    "@radix-ui/react-collapsible": "^1.1.0",
+    "@radix-ui/react-dialog": "^1.1.15",
+    "@radix-ui/react-popover": "^1.1.23",
+    "@radix-ui/react-tooltip": "^1.2.8",
+    "clsx": "^2.1.0",
+    "diff": "^7.0.0",
+    "lucide-react": "^0.400.0",
+    "react-markdown": "^9.0.0",
+    "remark-gfm": "^4.0.0",
+    "shiki": "^3.0.0",
+    "tailwind-merge": "^3.0.0"
+  },
+  "devDependencies": {
+    "@playwright/experimental-ct-react": "1.59.1",
+    "@playwright/test": "1.59.1",
+    "@storybook/react": "^10.3.5",
+    "@storybook/react-vite": "^10.3.5",
+    "@tailwindcss/cli": "^4.2.2",
+    "@tailwindcss/typography": "^0.5.19",
+    "@tailwindcss/vite": "^4.2.2",
+    "@types/diff": "^7.0.0",
+    "@types/react": "^18.2.66",
+    "@types/react-dom": "^18.2.22",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "storybook": "^10.3.5",
+    "tailwindcss": "^4.2.2",
+    "typescript": "^5.7.0",
+    "vitest": "^4.1.4"
+  }
+}

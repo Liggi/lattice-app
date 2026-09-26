@@ -1,0 +1,264 @@
+/**
+ * The readable summary at the top of a worker's report card.
+ *
+ * A report is written by one agent for another. It is long, it is in the
+ * worker's own vocabulary, and the card showed the first few lines of it
+ * clipped — so reading the thread meant expanding report after report to find
+ * out what had happened. This writes the missing top: a result line, then two
+ * to four short lines, one fact each — what changed, what is running, what was
+ * checked, what remains — with the report itself still underneath, whole and
+ * unaltered. Lines rather than a paragraph: parallel facts run together into
+ * prose are exactly what made the report hard to read in the first place.
+ *
+ * Three rules shape the prompt, and they matter more than the brevity:
+ *
+ * 1. **The report is a claim, not a finding.** The worker is saying what it
+ *    did; nobody has checked it. A summary that flattens "I believe the
+ *    sidebar now renders" into "the sidebar renders" has turned the worker's
+ *    account into the coordinator's, which is exactly the confusion the card
+ *    exists to prevent.
+ * 2. **What is running and what is not are different facts.** Not the same as
+ *    "uncommitted means dead": an edit the dev server has picked up is live
+ *    with nothing committed, while the server half of the same change waits on
+ *    a restart. Reports say which is which, usually in a clause near the end,
+ *    and it is the first thing a summariser flattens.
+ * 3. **The bad news survives.** Blockers, open questions, things left
+ *    undone, checks that failed or were never run — a summary that keeps only
+ *    the accomplishments is worse than no summary, because it reads as
+ *    completion.
+ *
+ * Bounds: gated by `generation.workerReportSummary`, closed by default; one
+ * call per report and never a retry loop; skipped when a summary for that
+ * report already exists, so a replayed delivery cannot write a second one.
+ *
+ * It runs after the report has already reached the coordinator — the delivery
+ * path does not wait on it — and it is never sent to the coordinator itself.
+ * See `WORKER_REPORT_SUMMARY_EVENT` in `src/types/worker-events.ts`.
+ */
+
+import type Anthropic from '@anthropic-ai/sdk';
+import { anthropicClientFactory } from '../infrastructure/anthropic-client-factory.js';
+import { ConfigService } from '../infrastructure/config-service.js';
+import { allowGeneration } from '../infrastructure/generation-gates.js';
+import { getCostTracker } from '../infrastructure/cost-tracker.js';
+import { createLogger } from '../infrastructure/logger.js';
+import { DEFAULT_MODELS } from '../insights/anthropic-service.js';
+import { getHarnessSessionManager } from '../../harness/setup.js';
+import { appendCustomHarnessEvent } from '../../harness/harness-custom-events.js';
+import { getEvents } from '../../session-history/repository.js';
+import {
+  foldWorkerStates,
+  usableReportSummary,
+  WORKER_REPORT_SUMMARY_EVENT,
+  type WorkerReportSummaryData,
+} from '../../types/worker-events.js';
+import { userName } from '../user-profile.js';
+
+const logger = createLogger('WorkerReportSummary');
+
+const MAX_OUTPUT_TOKENS = 400;
+
+/**
+ * Pinned off, for the same measured reason as every insight call (see
+ * `anthropic-service.ts`): on the 5-family an omitted `thinking` means
+ * adaptive thinking is ON, and it spends a small `max_tokens` budget on
+ * thinking and returns no text at all, with no error. This summary is 400
+ * tokens of writing, so left adaptive it produced an empty answer and the
+ * card silently fell back to the report on every single report — which reads
+ * exactly like the feature not being switched on.
+ */
+const THINKING: Anthropic.ThinkingConfigParam = { type: 'disabled' };
+
+/**
+ * The generation tier, not the quick one. This is a faithfulness task under
+ * three rules that a small model drops quietly — the failure is a confident,
+ * well-formed summary that says the work is done — and it fires once per
+ * report rather than on a timer, so the volume is bounded by how often
+ * workers finish.
+ */
+export function summaryModel(): string {
+  try {
+    return ConfigService.getInstance().getConfig().anthropic?.models?.generation?.trim() || DEFAULT_MODELS.generation;
+  } catch {
+    return DEFAULT_MODELS.generation;
+  }
+}
+
+/** The whole prompt, exported so tests can see what the writer is told. */
+export function buildSummaryPrompt(task: string | null, report: string): { system: string; user: string } {
+  const system = [
+    `You write the summary at the top of a worker's report card, for ${userName()}. They are reading a thread of these to`,
+    'follow what their agents have done. The full report sits underneath yours and they can open it; your job is to',
+    'let them decide whether they need to.',
+    '',
+    'Answer in exactly this shape, and nothing else — no preamble, no closing line:',
+    '',
+    '  line 1  the result in three to eight words: one clause, sentence case, no full stop, no comma. Say the',
+    '          outcome — "Header and sidebar simplified", "Sidebar layout rejected", "Blocked on the migration" —',
+    '          never "Report on ..." or "Work on ...".',
+    '  line 2  blank.',
+    '  then    two to four lines, each beginning "- ". One fact per line, one sentence, under twenty-five words,',
+    '          plain prose with no bold, no headings and no nested bullets. Separate lines, because these facts',
+    '          are read at a glance and do not belong run together into a paragraph.',
+    '',
+    'This is the shape and the length:',
+    '',
+    '  Header and sidebar simplified',
+    '',
+    '  - The requested controls are gone, and on mobile the sidebar and menu buttons now sit together at the top right.',
+    '  - Desktop and mobile interactions were checked in the running app.',
+    '  - The interface changes are live now through the dev server.',
+    '  - Fully removing the commitments backend still needs a restart.',
+    '',
+    'Four lines is the most a card can carry. A report holds far more than four facts, so choose: the outcome,',
+    `what is actually running, and the one or two things most likely to change what ${userName()} does next. A line with`,
+    'three clauses bolted together to smuggle in a fifth fact is worse than leaving it out. Everything you leave',
+    'out is in the report underneath, unaltered — you are not responsible for carrying all of it, only for not',
+    'misleading them about what you did carry.',
+    '',
+    'Faithfulness, which matters more than brevity:',
+    '- Use only what the report says. Never add a fact, a cause, a next step or a conclusion it does not contain.',
+    '- The report is the worker\'s own account. Nobody has checked it. Do not harden what the worker hedged: if it',
+    '  says it believes, expects, or could not verify something, your line says so too.',
+    '- Say what is running and what is not, and keep them apart, on their own lines when they differ. Uncommitted',
+    '  code can be running: an edit the dev server has picked up is live even though nothing is committed. Other',
+    '  work is not running until it is restarted, deployed, merged, released, or its flag is opened. Take which is',
+    '  which from the report rather than deciding it yourself — if it says the interface is live and the server',
+    '  half needs a restart, your summary says both. A passing test and a passing typecheck are neither.',
+    '- Repeat check results as the report gives them. If tests failed, or a suite was not run, or a check was only',
+    '  partly done, say so and say how many failed. Never round a partial result up to a clean one, and never say',
+    '  tests pass when the report says some fail.',
+    '- Keep every blocker, open question, uncertainty and remaining step that changes what happens next. If the',
+    '  worker is stuck, is asking something, or disagrees with the approach, that is the first line.',
+    '- No praise, no verdict on the quality of the work, no "successfully", no counts of files or lines, no time',
+    '  or effort estimates.',
+    `- Name the part of the product ${userName()} would point at rather than the mechanism inside it. They have not read this`,
+    '  code today and will not open the files.',
+  ].join('\n');
+  const user = [
+    ...(task ? ['What this worker was sent to do:', task, ''] : []),
+    'The report it ended its turn on, as written:',
+    report,
+  ].join('\n');
+  return { system, user };
+}
+
+/**
+ * Whether this report already has a summary, and the task the coordinator
+ * wrote for the worker at dispatch.
+ *
+ * Both from one read of the log, because a coordinator's log is long — front's
+ * was past 41,000 events on 2026-09-21 — and asking twice reads all of it
+ * twice for one report.
+ */
+function summaryContext(
+  coordinator: string,
+  worker: string,
+  reportSeq: number,
+): { alreadySummarised: boolean; task: string | null } {
+  try {
+    const events = getEvents(coordinator);
+    const alreadySummarised = events.some(
+      (event) => event.type === WORKER_REPORT_SUMMARY_EVENT
+        && (event.data as { reportSeq?: number })?.reportSeq === reportSeq,
+    );
+    const task = foldWorkerStates(events).find((state) => state.worker === worker)?.task ?? null;
+    return { alreadySummarised, task };
+  } catch (err) {
+    logger.debug('Could not read the coordinator log for context', {
+      coordinator,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return { alreadySummarised: false, task: null };
+  }
+}
+
+export interface ReportToSummarise {
+  coordinator: string;
+  worker: string;
+  /** The seq of the `worker:reported` event; the card joins the summary to the report by it. */
+  reportSeq: number;
+  report: string;
+}
+
+/**
+ * Called from the delivery path once the report is already on its way to the
+ * coordinator. Fire and forget: nothing waits on it, and a failure leaves the
+ * card showing the report as stored. Never rejects.
+ */
+export function noteWorkerReport(request: ReportToSummarise): void {
+  if (!allowGeneration('workerReportSummary')) return;
+  void summariseReport(request).catch((err) => {
+    logger.debug('Report summary failed; the card shows the report as stored', {
+      worker: request.worker,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  });
+}
+
+async function summariseReport({ coordinator, worker, reportSeq, report }: ReportToSummarise): Promise<void> {
+  if (!allowGeneration('workerReportSummary')) return;
+  if (!report.trim()) return;
+  const context = summaryContext(coordinator, worker, reportSeq);
+  if (context.alreadySummarised) {
+    logger.debug('Report already has a summary', { worker, reportSeq });
+    return;
+  }
+
+  const client = anthropicClientFactory.getClient();
+  if (!client) {
+    logger.debug('No Anthropic client; report cards show the report as stored', { worker });
+    return;
+  }
+
+  // The whole report, never an excerpt. A summariser given a report with its
+  // middle cut out writes a summary that is wrong about what it cannot see,
+  // and it has no way to tell that is what happened.
+  const prompt = buildSummaryPrompt(context.task, report.trim());
+  const model = summaryModel();
+  const started = Date.now();
+  const response = await client.messages.create({
+    model,
+    max_tokens: MAX_OUTPUT_TOKENS,
+    thinking: THINKING,
+    system: prompt.system,
+    messages: [{ role: 'user', content: prompt.user }],
+  });
+  const durationMs = Date.now() - started;
+  try {
+    getCostTracker().log({
+      sessionId: worker,
+      operation: 'WORKER_REPORT_SUMMARY',
+      model,
+      inputTokens: response.usage?.input_tokens ?? 0,
+      outputTokens: response.usage?.output_tokens ?? 0,
+      cacheCreationInputTokens: response.usage?.cache_creation_input_tokens ?? 0,
+      cacheReadInputTokens: response.usage?.cache_read_input_tokens ?? 0,
+      durationMs,
+    });
+  } catch (err) {
+    logger.debug('Cost tracking failed', { error: err });
+  }
+
+  const summary = usableReportSummary(
+    response.content.map((block) => (block.type === 'text' ? block.text : '')).join('\n'),
+  );
+  if (!summary) {
+    logger.debug('No usable report summary; the card shows the report as stored', { worker, model });
+    return;
+  }
+
+  const manager = getHarnessSessionManager();
+  if (!manager) {
+    logger.warn('No harness session manager; report summary dropped', { coordinator, worker });
+    return;
+  }
+  appendCustomHarnessEvent(manager, coordinator, WORKER_REPORT_SUMMARY_EVENT, {
+    worker,
+    reportSeq,
+    title: summary.title,
+    text: summary.text,
+    model,
+  } satisfies WorkerReportSummaryData);
+  logger.info('Report summary written', { worker, reportSeq, model, ms: durationMs, title: summary.title });
+}

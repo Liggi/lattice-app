@@ -1,0 +1,17 @@
+{
+  "name": "streaming-scroll-growth",
+  "description": "Several delayed assistant blocks grow the live edge while the reader is scrolled into history.",
+  "events": [
+    { "type": "system_init" },
+    { "delay": 100, "type": "assistant", "content": [
+      { "type": "text", "text": "FIRST STREAM BLOCK. The response has started, and the reader can now move upward into the existing conversation while more content is still arriving below. This first block deliberately occupies several wrapped lines in the message list so the session remains actively streaming during the viewport measurement." }
+    ]},
+    { "delay": 700, "type": "assistant", "content": [
+      { "type": "text", "text": "SECOND STREAM BLOCK. More explanation arrives at the live edge after the reader has deliberately scrolled away. This paragraph is intentionally long enough to change the rendered height by a visible amount. The text already under the reader's eyes must remain in the same viewport position even though the response below continues to expand with additional sentences and wrapped lines." }
+    ]},
+    { "delay": 700, "type": "assistant", "content": [
+      { "type": "text", "text": "FINAL STREAM BLOCK. This final section adds another substantial height change below the historical reading position. A stable message list compensates the reversed container's scroll offset for that growth. The historical anchor must not move before this block appears, and the user can choose when to return to the latest response using the existing control." }
+    ]},
+    { "delay": 300, "type": "result", "duration_ms": 1800 }
+  ]
+}

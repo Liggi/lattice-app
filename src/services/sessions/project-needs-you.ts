@@ -1,0 +1,222 @@
+/**
+ * Whether a project needs the user now. Candidates are collected from the
+ * project record deterministically: open threads the user owns or that wait
+ * on a decision. Jev then scores each for "does the user need to act on this
+ * now" and "has the user parked it on purpose"; a thread counts when
+ * act × (1 − parked) is over the bar. The bar was set on 2026-09-26
+ * from a table of real scores.
+ *
+ * The status poll only ever reads the cache. A thread without a current score
+ * is scored in the background; when the score lands the project's status is
+ * pushed as changed, so the client refetches it. A score stands until the
+ * thread's `updatedAt` changes.
+ */
+
+import { withoutThreadRefs, type ProjectOpenThread } from '../../types/project-state.js';
+import { getEventStorage } from '../../harness/event-message-reader.js';
+import { DatabaseProvider } from '../infrastructure/database-provider.js';
+import { createLogger } from '../infrastructure/logger.js';
+import { judgeNouls, type NoulQuestion } from '../infrastructure/typesafe-client.js';
+import { SessionInfoService } from './session-info-service.js';
+import { readProjectState } from './project-state.js';
+import { getEvents } from '../../session-history/repository.js';
+import { WORKER_EVENT_TYPES, foldWorkerStates } from '../../types/worker-events.js';
+import { userName } from '../user-profile.js';
+import { noteStatusChanged } from './session-status-changes.js';
+
+const logger = createLogger('ProjectNeedsYou');
+
+export const NEEDS_YOU_THRESHOLD = 0.55;
+const JEV_TIMEOUT_MS = 15_000;
+const RETRY_AFTER_FAILURE_MS = 5 * 60_000;
+const MAX_IN_FLIGHT = 4;
+const DAY_MS = 86_400_000;
+
+export interface NeedsYouItem {
+  seq: number;
+  /** What it waits on, in the record's own words. */
+  text: string;
+  /** What the thread is for. */
+  thread: string;
+  /** When the thread started waiting on what it waits on now. */
+  since: number;
+  score: number;
+}
+
+interface ThreadScore {
+  updatedAt: number;
+  act: number;
+  parked: number;
+  score: number;
+}
+
+const scores = new Map<string, ThreadScore>();
+const failedAt = new Map<string, number>();
+/** Queued or running, so a second poll does not queue the same thread twice. */
+const pending = new Set<string>();
+let running = 0;
+const queue: Array<() => Promise<void>> = [];
+const snapshots = new Map<string, ProjectSnapshot>();
+let loggedUnavailable = false;
+
+/** Test seam: the caches are module-level. */
+export function __resetNeedsYouForTests(): void {
+  scores.clear();
+  failedAt.clear();
+  pending.clear();
+  running = 0;
+  queue.length = 0;
+  snapshots.clear();
+  loggedUnavailable = false;
+}
+
+export function isNeedsYouCandidate(thread: ProjectOpenThread): boolean {
+  return thread.owner?.kind === 'user' || thread.waitingOn?.kind === 'decision';
+}
+
+function actQuestion(name: string): NoulQuestion {
+  return {
+    instructions: `${name} is the person these AI agents work for. Does ${name} need to act on \`thread\` now? Read what the thread is for, where it has got to, who owns it, what it is waiting on and the next action, and how long it has waited.`,
+    criteria: {
+      true: `Work is held up until ${name} himself acts, and nothing but his action is missing: a decision or choice only he can make, his go-ahead to merge, ship or build something already prepared, feedback or a test he was asked for.`,
+      false: `${name} does not need to act now: someone or something else moves it next (a worker, another person, an event that has not happened yet), ${name} deliberately parked it for later, or it is an optional idea or a check that will happen on its own in normal use.`,
+    },
+  };
+}
+
+function parkedQuestion(name: string): NoulQuestion {
+  return {
+    instructions: `Has ${name} put \`thread\` off on purpose? Read the waiting-on text, the next action and where it has got to.`,
+    criteria: {
+      true: `${name} has deliberately parked or deferred it, or it is set to wait until something later happens (after a game, after fixes land, after another person answers, when he next uses a feature, when he says to resume).`,
+      false: `Nothing says it was put off: it is ready for ${name}'s answer or go-ahead now.`,
+    },
+  };
+}
+
+function renderState(project: string, thread: ProjectOpenThread, now: number): string {
+  return JSON.stringify({
+    project,
+    thread: {
+      purpose: thread.text,
+      where_it_has_got_to: thread.summary,
+      owner: thread.owner?.kind ?? null,
+      waiting_on: thread.waitingOn ?? null,
+      next_action: thread.nextAction,
+      days_since_last_update: Math.round(((now - thread.updatedAt) / DAY_MS) * 10) / 10,
+    },
+  });
+}
+
+function projectName(coordinatorId: string): string {
+  const info = SessionInfoService.getInstance().getSessionInfoSync(coordinatorId);
+  return info?.custom_name?.trim() || info?.project_name?.trim() || coordinatorId;
+}
+
+function pump(): void {
+  while (running < MAX_IN_FLIGHT && queue.length > 0) {
+    running++;
+    void queue.shift()!().finally(() => {
+      running--;
+      pump();
+    });
+  }
+}
+
+function scoreInBackground(coordinatorId: string, thread: ProjectOpenThread): void {
+  const key = `${coordinatorId}:${thread.seq}`;
+  if (pending.has(key)) return;
+  const failed = failedAt.get(key);
+  if (failed !== undefined && Date.now() - failed < RETRY_AFTER_FAILURE_MS) return;
+  pending.add(key);
+  queue.push(async () => {
+    try {
+      const name = userName();
+      const { nouls } = await judgeNouls(
+        renderState(projectName(coordinatorId), thread, Date.now()),
+        { act: actQuestion(name), parked: parkedQuestion(name) },
+        { timeoutMs: JEV_TIMEOUT_MS },
+      );
+      const score = nouls.act * (1 - nouls.parked);
+      scores.set(key, { updatedAt: thread.updatedAt, act: nouls.act, parked: nouls.parked, score });
+      failedAt.delete(key);
+      noteStatusChanged(coordinatorId);
+      logger.info('Scored a thread waiting on the user', { coordinatorId, seq: thread.seq, act: nouls.act, parked: nouls.parked, score });
+    } catch (err) {
+      failedAt.set(key, Date.now());
+      const error = err instanceof Error ? err.message : String(err);
+      if (!loggedUnavailable) logger.warn('Needs-you scoring unavailable', { coordinatorId, seq: thread.seq, error });
+      loggedUnavailable = true;
+    } finally {
+      pending.delete(key);
+    }
+  });
+  pump();
+}
+
+function isCoordinator(conversationId: string): boolean {
+  const row = DatabaseProvider.getInstance().getDb()
+    .prepare('SELECT coordinator FROM conversations WHERE conversation_id = ?')
+    .get(conversationId) as { coordinator?: number } | undefined;
+  return row?.coordinator === 1;
+}
+
+interface ProjectSnapshot {
+  seq: number;
+  threads: ProjectOpenThread[];
+  workingOn: string | null;
+  workerTasks: Record<string, string>;
+}
+
+function snapshot(coordinatorId: string): ProjectSnapshot {
+  const seq = getEventStorage().maxSeq(coordinatorId);
+  const cached = snapshots.get(coordinatorId);
+  if (cached && cached.seq === seq) return cached;
+  const state = readProjectState(coordinatorId);
+  const focus = state.priority?.text ?? state.now;
+  const entry = {
+    seq,
+    threads: state.open.filter(isNeedsYouCandidate),
+    workingOn: focus ? withoutThreadRefs(focus) || null : null,
+    workerTasks: Object.fromEntries(foldWorkerStates(getEvents(coordinatorId, { types: [...WORKER_EVENT_TYPES] }))
+      .map(worker => [worker.worker, worker.task])),
+  };
+  snapshots.set(coordinatorId, entry);
+  return entry;
+}
+
+/** The project's Working on line, as the right panel heads it; null when it has none or is not a project. */
+export function projectWorkingOn(conversationId: string): string | null {
+  return isCoordinator(conversationId) ? snapshot(conversationId).workingOn : null;
+}
+
+/** Each worker's task, the name its card in the right panel carries; null when not a project. */
+export function projectWorkerTasks(conversationId: string): Record<string, string> | null {
+  return isCoordinator(conversationId) ? snapshot(conversationId).workerTasks : null;
+}
+
+/**
+ * The threads in this project over the bar, highest first; null when the
+ * conversation is not a coordinator. Never waits on Jev.
+ */
+export function projectNeedsYou(conversationId: string): NeedsYouItem[] | null {
+  if (!isCoordinator(conversationId)) return null;
+  const items: NeedsYouItem[] = [];
+  for (const thread of snapshot(conversationId).threads) {
+    const scored = scores.get(`${conversationId}:${thread.seq}`);
+    if (!scored || scored.updatedAt !== thread.updatedAt) {
+      scoreInBackground(conversationId, thread);
+      continue;
+    }
+    if (scored.score > NEEDS_YOU_THRESHOLD) {
+      items.push({
+        seq: thread.seq,
+        text: thread.waitingOn?.text || thread.nextAction || thread.text,
+        thread: thread.text,
+        since: thread.waitingSince,
+        score: Math.round(scored.score * 100) / 100,
+      });
+    }
+  }
+  return items.sort((a, b) => b.score - a.score);
+}

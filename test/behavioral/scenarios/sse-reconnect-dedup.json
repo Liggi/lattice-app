@@ -1,0 +1,23 @@
+{
+  "name": "sse-reconnect-dedup",
+  "description": "Multi-turn session for testing SSE event deduplication after reconnect. First turn produces a distinctive response, follow-up via on_stdin produces a second distinctive response.",
+  "events": [
+    { "type": "system_init" },
+    { "delay": 100, "type": "assistant", "content": [{ "type": "text", "text": "First turn — this is the initial response." }] },
+    { "delay": 50, "type": "result", "duration_ms": 500 }
+  ],
+  "resume_events": [
+    { "type": "system_init" },
+    { "delay": 200, "type": "assistant", "content": [{ "type": "text", "text": "Resumed turn — this text should appear exactly once." }] },
+    { "delay": 50, "type": "result", "duration_ms": 300 }
+  ],
+  "on_stdin": {
+    "responses": [
+      [
+        { "delay": 200, "type": "assistant", "content": [{ "type": "text", "text": "Follow-up turn — this text should appear exactly once." }] },
+        { "delay": 50, "type": "result", "duration_ms": 300 }
+      ]
+    ]
+  },
+  "exit_after_main": true
+}

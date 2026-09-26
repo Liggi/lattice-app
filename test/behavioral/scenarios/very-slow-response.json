@@ -1,0 +1,17 @@
+{
+  "name": "very-slow-response",
+  "description": "Agent responds very slowly — 10s delay before result. For testing SSE disconnect mid-stream.",
+  "events": [
+    { "type": "system_init" },
+    { "delay": 100, "type": "assistant", "content": [
+      { "type": "thinking", "thinking": "Processing this complex request..." }
+    ]},
+    { "delay": 200, "type": "assistant", "content": [
+      { "type": "text", "text": "Working on it — this will take a while." }
+    ]},
+    { "delay": 10000, "type": "result", "duration_ms": 10500 }
+  ],
+  "on_stdin": {
+    "echo": true
+  }
+}

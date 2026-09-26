@@ -1,0 +1,257 @@
+@import "tailwindcss";
+@import "@xterm/xterm/css/xterm.css";
+@plugin "@tailwindcss/typography";
+@source "../../../node_modules/@liggi/agent-ui-toolkit/dist";
+
+@custom-variant dark (&:is(.dark *));
+
+/* Global styles */
+body {
+    margin: 0;
+    padding: 0;
+    font-family: var(--font-sans);
+    font-size: var(--font-size-base);
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+@theme inline {
+    /* Radii are defined once, in chat/styles/theme.css (6 / 6 / 10 / 14). */
+    --radius-sm: var(--radius-sm);
+    --radius-md: var(--radius-md);
+    --radius-lg: var(--radius-lg);
+    --radius-xl: var(--radius-xl);
+
+    /* Restart palette → utilities: bg-bg, bg-surface, text-fg-2, border-line, text-accent … */
+    --color-bg: var(--color-bg);
+    --color-bg-2: var(--color-bg-2);
+    --color-surface: var(--color-surface);
+    --color-surface-2: var(--color-surface-2);
+    --color-line: var(--color-line);
+    --color-line-2: var(--color-line-2);
+    --color-fg: var(--color-fg);
+    --color-fg-2: var(--color-fg-2);
+    --color-fg-3: var(--color-fg-3);
+    --color-accent-soft: var(--color-accent-soft);
+    --color-background: var(--background);
+    --color-foreground: var(--foreground);
+    --color-card: var(--card);
+    --color-card-foreground: var(--card-foreground);
+    --color-popover: var(--popover);
+    --color-popover-foreground: var(--popover-foreground);
+    --color-primary: var(--primary);
+    --color-primary-foreground: var(--primary-foreground);
+    --color-secondary: var(--secondary);
+    --color-secondary-foreground: var(--secondary-foreground);
+    --color-muted: var(--muted);
+    --color-muted-foreground: var(--muted-foreground);
+    --color-accent: var(--accent);
+    --color-accent-foreground: var(--accent-foreground);
+    --color-destructive: var(--destructive);
+    --color-border: var(--border);
+    --color-input: var(--input);
+    --color-ring: var(--ring);
+    --color-chart-1: var(--chart-1);
+    --color-chart-2: var(--chart-2);
+    --color-chart-3: var(--chart-3);
+    --color-chart-4: var(--chart-4);
+    --color-chart-5: var(--chart-5);
+    --color-sidebar: var(--sidebar);
+    --color-sidebar-foreground: var(--sidebar-foreground);
+    --color-sidebar-primary: var(--sidebar-primary);
+    --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+    --color-sidebar-accent: var(--sidebar-accent);
+    --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+    --color-sidebar-border: var(--sidebar-border);
+    --color-sidebar-ring: var(--sidebar-ring);
+    --font-sans: 'Geist', system-ui, -apple-system, sans-serif;
+    --font-mono: 'Geist Mono', ui-monospace, monospace;
+
+    /* Toolkit Composer color tokens — register with Tailwind so utilities
+       like bg-composer-active/10 get generated.  Actual values come from
+       the :root declarations in theme.css. */
+    --color-composer-active: var(--color-composer-active);
+    --color-composer-ready: var(--color-composer-ready);
+    --color-composer-caution: var(--color-composer-caution);
+    --color-composer-danger: var(--color-composer-danger);
+    --color-composer-muted: var(--color-composer-muted);
+    --color-composer-surface: var(--color-composer-surface);
+    --color-composer-surface-elevated: var(--color-composer-surface-elevated);
+    --color-composer-border: var(--color-composer-border);
+    --color-composer-text: var(--color-composer-text);
+    --color-composer-text-secondary: var(--color-composer-text-secondary);
+    --color-composer-text-faint: var(--color-composer-text-faint);
+    --color-reaction-surface: var(--color-reaction-surface);
+    --color-reaction-surface-hover: var(--color-reaction-surface-hover);
+    --color-reaction-border: var(--color-reaction-border);
+    --color-reaction-border-strong: var(--color-reaction-border-strong);
+    --color-reaction-text: var(--color-reaction-text);
+    --color-reaction-text-secondary: var(--color-reaction-text-secondary);
+    --color-reaction-text-faint: var(--color-reaction-text-faint);
+    --color-reaction-accent: var(--color-reaction-accent);
+    --color-reaction-accent-soft: var(--color-reaction-accent-soft);
+    --color-reaction-page: var(--color-reaction-page);
+}
+
+/*
+ * shadcn variables, mapped onto the restart palette (chat/styles/theme.css) so
+ * the stock primitives under components/ui render in the house style.
+ */
+
+:root {
+    --radius: 6px;
+
+    --background: var(--color-bg);
+    --foreground: var(--color-fg);
+    --card: var(--color-surface);
+    --card-foreground: var(--color-fg);
+    --popover: var(--color-surface);
+    --popover-foreground: var(--color-fg);
+    --primary: var(--color-accent);
+    --primary-foreground: #0c0a09;
+    --secondary: var(--color-surface-2);
+    --secondary-foreground: var(--color-fg);
+    --muted: var(--color-surface-2);
+    --muted-foreground: var(--color-fg-2);
+    --accent: var(--color-accent);
+    --accent-foreground: #0c0a09;
+    --destructive: #fb7185;
+    --border: var(--color-line);
+    --input: var(--color-line-2);
+    --ring: var(--color-accent);
+    --chart-1: #fbbf24;
+    --chart-2: #4ade80;
+    --chart-3: #60a5fa;
+    --chart-4: #f87171;
+    --chart-5: #a78bfa;
+    --sidebar: var(--color-bg-2);
+    --sidebar-foreground: var(--color-fg);
+    --sidebar-primary: var(--color-accent);
+    --sidebar-primary-foreground: #0c0a09;
+    --sidebar-accent: var(--color-surface-2);
+    --sidebar-accent-foreground: var(--color-fg);
+    --sidebar-border: var(--color-line);
+    --sidebar-ring: var(--color-accent);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+    }
+  body {
+    @apply bg-background text-foreground;
+    }
+}
+
+@layer utilities {
+    /* The single Orbitron use in the app. Everything else is Geist. */
+    .wordmark {
+        font-family: 'Orbitron', var(--font-sans);
+        font-weight: 500;
+        text-transform: lowercase;
+        letter-spacing: 0.1em;
+    }
+    .font-pixel {
+        font-family: 'GeistPixelCircle', ui-monospace, monospace;
+        letter-spacing: 0.10em;
+        word-spacing: -0.01em;
+        line-height: 1.30;
+    }
+}
+
+h1, h2, h3, h4, h5, h6 {
+    font-family: 'Geist', system-ui, -apple-system, sans-serif;
+    letter-spacing: -0.02em;
+}
+
+/* Links take the interactive accent (cyan), like every other interactive element */
+a {
+    color: var(--color-accent);
+    text-decoration: underline;
+    text-decoration-color: color-mix(in srgb, var(--color-accent) 35%, transparent);
+    text-underline-offset: 2px;
+    font-weight: inherit;
+}
+
+a:hover {
+    text-decoration-color: var(--color-accent);
+}
+
+/* Code blocks. Scoped to prose so toolkit tool cards, which lay out their own
+   <pre> inside a card, don't get a second box drawn round every one. */
+pre {
+    font-family: var(--font-mono);
+}
+.prose pre {
+    background: var(--color-bg);
+    border: 1px solid var(--color-line);
+    border-radius: var(--radius-md);
+}
+
+/* Typography plugin colours → the palette. The app is dark-only, so the
+   invert set is the one that renders. */
+.prose {
+    --tw-prose-invert-body: var(--color-fg);
+    --tw-prose-invert-headings: var(--color-fg);
+    --tw-prose-invert-lead: var(--color-fg-2);
+    --tw-prose-invert-links: var(--color-accent);
+    --tw-prose-invert-bold: var(--color-fg);
+    --tw-prose-invert-counters: var(--color-fg-3);
+    --tw-prose-invert-bullets: var(--color-fg-3);
+    --tw-prose-invert-hr: var(--color-line);
+    --tw-prose-invert-quotes: var(--color-fg-2);
+    --tw-prose-invert-quote-borders: var(--color-line-2);
+    --tw-prose-invert-captions: var(--color-fg-3);
+    --tw-prose-invert-code: var(--color-fg);
+    --tw-prose-invert-pre-code: var(--color-fg);
+    --tw-prose-invert-pre-bg: var(--color-bg);
+    --tw-prose-invert-th-borders: var(--color-line-2);
+    --tw-prose-invert-td-borders: var(--color-line);
+}
+
+/* Inline code */
+code:not(pre code) {
+    font-family: var(--font-mono);
+    font-size: 0.9em;
+    background: var(--color-surface-2);
+    padding: 0.1em 0.35em;
+    border-radius: 4px;
+    color: var(--color-fg);
+}
+
+/* Kill typography plugin's backtick pseudo-elements on inline code */
+code:not(pre code)::before,
+code:not(pre code)::after {
+    content: none;
+}
+
+/* Code inside pre blocks - no extra styling */
+pre code {
+    background: transparent;
+    padding: 0;
+    font-size: inherit;
+    color: inherit;
+}
+
+::selection {
+    background: rgba(34, 211, 238, 0.25);
+    color: var(--foreground);
+}
+
+/* Prevent text caret from appearing in non-editable elements */
+/* The caret appears when clicking on text due to browser focus behavior */
+/* This hides it globally, then re-enables for actual input elements */
+* {
+    caret-color: transparent !important;
+}
+
+input,
+textarea,
+[contenteditable="true"] {
+    caret-color: var(--foreground) !important;
+}

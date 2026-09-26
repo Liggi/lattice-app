@@ -1,0 +1,19 @@
+{
+  "name": "resume-context",
+  "description": "Tests conversation resume after server restart. Fresh start plays 'events', resumed start plays 'resume_events'. Process exits after each turn so the test can simulate restart between turns.",
+  "events": [
+    { "type": "system_init" },
+    { "delay": 100, "type": "assistant", "content": [
+      { "type": "text", "text": "First turn — fresh session, no prior context." }
+    ]},
+    { "delay": 50, "type": "result", "duration_ms": 500 }
+  ],
+  "resume_events": [
+    { "type": "system_init" },
+    { "delay": 100, "type": "assistant", "content": [
+      { "type": "text", "text": "Resumed — I have context from our previous conversation." }
+    ]},
+    { "delay": 50, "type": "result", "duration_ms": 500 }
+  ],
+  "exit_after_main": true
+}

@@ -1,0 +1,21 @@
+{
+  "name": "fast-turn",
+  "description": "Agent completes a turn almost instantly (simulates /compact or other fast commands). Used to test thinking indicator clearing after rapid turns.",
+  "events": [
+    { "type": "system_init" },
+    { "type": "assistant", "content": [
+      { "type": "text", "text": "Done." }
+    ]},
+    { "type": "result", "duration_ms": 50 }
+  ],
+  "on_stdin": {
+    "responses": [
+      [
+        { "type": "assistant", "content": [
+          { "type": "text", "text": "Done again." }
+        ]},
+        { "type": "result", "duration_ms": 50 }
+      ]
+    ]
+  }
+}

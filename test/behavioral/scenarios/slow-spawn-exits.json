@@ -1,0 +1,23 @@
+{
+  "name": "slow-spawn-exits",
+  "description": "Agent takes 2s to boot (simulates real CLI startup time), responds, then exits. Used to test spawning indicator visibility.",
+  "startup_delay": 2000,
+  "events": [
+    { "type": "system_init" },
+    { "delay": 100, "type": "assistant", "content": [
+      { "type": "text", "text": "Here's my response (after slow boot)." }
+    ]},
+    { "delay": 50, "type": "result", "duration_ms": 500 }
+  ],
+  "exit_after_main": true,
+  "on_stdin": {
+    "responses": [
+      [
+        { "type": "assistant", "content": [
+          { "type": "text", "text": "Respawned and responding to follow-up." }
+        ]},
+        { "delay": 50, "type": "result", "duration_ms": 300 }
+      ]
+    ]
+  }
+}

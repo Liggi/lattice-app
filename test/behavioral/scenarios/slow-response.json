@@ -1,0 +1,24 @@
+{
+  "name": "slow-response",
+  "description": "Agent responds slowly — long delay before result. Used to test timing-sensitive scenarios.",
+  "events": [
+    { "type": "system_init" },
+    { "delay": 100, "type": "assistant", "content": [
+      { "type": "thinking", "thinking": "Processing this request carefully..." }
+    ]},
+    { "delay": 200, "type": "assistant", "content": [
+      { "type": "text", "text": "Working on it — this will take a moment." }
+    ]},
+    { "delay": 3000, "type": "result", "duration_ms": 3500 }
+  ],
+  "on_stdin": {
+    "responses": [
+      [
+        { "type": "assistant", "content": [
+          { "type": "text", "text": "Follow-up acknowledged." }
+        ]},
+        { "delay": 50, "type": "result", "duration_ms": 200 }
+      ]
+    ]
+  }
+}

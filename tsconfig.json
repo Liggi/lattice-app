@@ -1,0 +1,20 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "module": "ES2022",
+    "outDir": "./dist",
+    "rootDir": "./src",
+    "declaration": true,
+    "declarationMap": true,
+    "types": ["node"],
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["src/*"],
+      "@liggi/agent-ui-harness/server": ["node_modules/@liggi/agent-ui-harness/dist/server/index.d.ts"],
+      "@liggi/agent-ui-harness/protocol": ["node_modules/@liggi/agent-ui-harness/dist/protocol/index.d.ts"],
+      "@liggi/agent-ui-harness/client": ["node_modules/@liggi/agent-ui-harness/dist/client/index.d.ts"]
+    }
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist", "tests", "src/web/**/*", "src/components/**/*"]
+}

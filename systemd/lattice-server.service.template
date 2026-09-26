@@ -1,0 +1,20 @@
+[Unit]
+Description=Lattice Web Server
+After=network.target {{DAEMON_UNIT}}.service
+Requires={{DAEMON_UNIT}}.service
+
+[Service]
+Type=simple
+WorkingDirectory={{PROJECT_DIR}}
+ExecStart={{NODE_PATH}} {{PROJECT_DIR}}/dist/server.js
+Restart=always
+RestartSec=3
+StandardOutput=append:{{CONFIG_DIR}}/logs/server.log
+StandardError=append:{{CONFIG_DIR}}/logs/server.log
+
+# Environment
+Environment=NODE_ENV=production
+Environment=LATTICE_CONFIG_DIR={{CONFIG_DIR}}
+
+[Install]
+WantedBy=default.target

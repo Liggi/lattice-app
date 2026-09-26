@@ -1,0 +1,48 @@
+/*
+ * Lattice Composer — the one visual addition on top of the toolkit Composer.
+ *
+ * Colour comes from theme.css (--color-composer-*). Layout and type live in the
+ * toolkit. This file only adds the "working" signal: a thin accent line that
+ * sweeps the top edge while the provider is busy. No glow, no shadow — the
+ * status label says the same thing up close; the sweep is for peripheral
+ * vision.
+ *
+ * The line follows the container's rounded top: the pseudo-element is a
+ * 10px-tall box (the container radius) with a transparent 1px top/side border
+ * and matching upper radii, and a mask that keeps only the border ring. The
+ * gradient sweeps across the border-box, so it runs along the arcs too. Only
+ * the pseudo-element is masked; the container and its menus are untouched.
+ */
+
+.lattice-composer [data-composer-status="active"]::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 10px;
+  border: 1px solid transparent;
+  border-bottom: 0;
+  border-radius: 10px 10px 0 0;
+  pointer-events: none;
+  background:
+    linear-gradient(90deg, transparent, var(--color-accent), transparent) 0 0 / 40% 100% no-repeat border-box;
+  -webkit-mask: linear-gradient(#000 0 0) padding-box, linear-gradient(#000 0 0) border-box;
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) padding-box, linear-gradient(#000 0 0) border-box;
+  mask-composite: exclude;
+  animation: lattice-composer-sweep 2.4s ease-in-out infinite;
+}
+
+@keyframes lattice-composer-sweep {
+  /* With a 40%-wide image, -67% / 167% put it fully off each edge. */
+  0% { background-position: -67% 0; }
+  100% { background-position: 167% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lattice-composer [data-composer-status="active"]::after {
+    animation: none;
+    background: rgb(var(--color-cool-rgb) / 0.5);
+  }
+}

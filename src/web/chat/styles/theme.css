@@ -1,0 +1,87 @@
+/*
+ * Chat-surface tokens. Visual restart, September 2026.
+ *
+ * Kept: the logo mark, the warm stone neutrals, dark only.
+ * Dropped: Orbitron and mono as chrome, uppercase tracked labels, the scanline
+ * grid, glows, offset shadows, per-state accent colours on controls.
+ * One typeface, one accent, three greys. Semantic hues (emerald / amber / rose)
+ * survive only to say succeeded / caution / failed — never as chrome.
+ *
+ * This file holds only tokens something reads: src/web/** or
+ * @liggi/agent-ui-toolkit (which consumes --spacing, --radius-*, --font-mono
+ * and the --color-composer-* set at runtime). Register a Tailwind utility for a
+ * token in src/web/styles/index.css when a class needs it.
+ */
+
+:root {
+  /* Surfaces and text. Three greys carry hierarchy; there is no fourth. */
+  --color-desk: #2a2624;        /* behind the app window (desktop only) */
+  --color-bg: #1c1917;          /* app background */
+  --color-bg-2: #201d1b;        /* sidebar */
+  --color-surface: #262322;     /* cards, bubbles, inputs */
+  --color-surface-2: #2c2927;   /* hover, pressed, emphasised */
+  --color-line: rgba(255, 255, 255, 0.08);
+  --color-line-2: rgba(255, 255, 255, 0.14);
+  --color-fg: #e7e5e4;          /* primary text */
+  --color-fg-2: #a8a29e;        /* secondary text, labels */
+  --color-fg-3: #78716c;        /* tertiary text, meta, placeholders */
+  --color-accent: #22d3ee;      /* the one accent: interactive, live, focus */
+  --color-accent-soft: rgba(34, 211, 238, 0.12);
+
+  /* Older names still read by a few components. Same values; retire on touch. */
+  --color-bg-primary: var(--color-bg);
+  --color-text-primary: var(--color-fg);
+  --color-text-secondary: var(--color-fg-2);
+  --color-border: var(--color-line);
+
+  /* Semantic hues as raw channels, for rgb(... / <alpha>) tints on state only. */
+  --color-cool-rgb: 34 211 238;      /* cyan    — the accent */
+  --color-emerald-rgb: 52 211 153;   /* emerald — succeeded, complete */
+  --color-amber-rgb: 245 158 11;     /* amber   — caution, attention, transient */
+  --color-rose-rgb: 251 113 133;     /* rose    — destructive, failed */
+  --color-violet-rgb: 167 139 250;   /* violet  — a named product concept */
+  --color-blue-rgb: 96 165 250;      /* blue    — informational */
+
+  /* Typography. Geist for everything readable; Geist Mono only for code, paths
+     and IDs. The wordmark is the single Orbitron use (see .wordmark). */
+  --font-sans: 'Geist', system-ui, -apple-system, sans-serif;
+  --font-mono: 'Geist Mono', ui-monospace, monospace;
+  --font-size-base: 14px;
+
+  /* Geometry. Two radii: 6px on controls and inputs, 10px on cards and bubbles. */
+  --radius-sm: 6px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+  --radius-xl: 14px;
+  --spacing: 4px;
+
+  --transition-normal: 150ms ease;
+
+  /* Composer state palette, read by @liggi/agent-ui-toolkit. Registered with
+     Tailwind in src/web/styles/index.css so the bg-composer-* utilities exist.
+     State colours are muted text hues, not chrome. */
+  --color-composer-active: #22d3ee;
+  --color-composer-ready: #34d399;
+  --color-composer-caution: #fbbf24;
+  --color-composer-danger: #fb7185;
+  --color-composer-muted: #78716c;
+
+  --color-composer-surface: #2c2927;          /* a step above a bubble */
+  --color-composer-surface-elevated: #302c2a; /* focused / hovered controls */
+  --color-composer-border: rgba(255, 255, 255, 0.08);
+  --color-composer-text: #e7e5e4;
+  --color-composer-text-secondary: #a8a29e;
+  --color-composer-text-faint: #78716c;
+
+  /* Reactions and the emoji picker, read by @liggi/agent-ui-toolkit. */
+  --color-reaction-surface: var(--color-surface);
+  --color-reaction-surface-hover: var(--color-surface-2);
+  --color-reaction-border: var(--color-line);
+  --color-reaction-border-strong: var(--color-line-2);
+  --color-reaction-text: var(--color-fg);
+  --color-reaction-text-secondary: var(--color-fg-2);
+  --color-reaction-text-faint: var(--color-fg-3);
+  --color-reaction-accent: var(--color-accent);
+  --color-reaction-accent-soft: var(--color-accent-soft);
+  --color-reaction-page: var(--color-bg);
+}

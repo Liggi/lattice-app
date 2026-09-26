@@ -1,0 +1,18 @@
+{
+  "name": "injection-text-only-response",
+  "description": "Agent does tool work, user injects mid-turn, agent responds with text only (no thinking block). Regression test for injected messages rendering after Claude's response instead of before it.",
+  "events": [
+    { "type": "system_init" },
+    { "delay": 100, "type": "assistant", "content": [
+      { "type": "thinking", "thinking": "Let me search for the relevant files in the codebase." }
+    ]},
+    { "delay": 200, "type": "assistant", "content": [
+      { "type": "text", "text": "I'll search for the relevant files." },
+      { "type": "tool_use", "id": "tool_grep_1", "name": "Grep", "input": { "pattern": "api routes", "path": "src/" } }
+    ]},
+    { "delay": 3000, "type": "assistant", "content": [
+      { "type": "text", "text": "Good point — switching to that approach instead. Here are the results from the alternative search." }
+    ]},
+    { "delay": 100, "type": "result", "duration_ms": 4000 }
+  ]
+}

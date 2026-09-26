@@ -1,0 +1,30 @@
+{
+  "name": "tool-use-with-result",
+  "description": "Agent thinks, uses a tool, gets a tool_result (emitted as a 'user' event), then responds with text. Includes the full tool-use round-trip that real Claude CLI produces.",
+  "events": [
+    { "type": "system_init" },
+    { "delay": 100, "type": "assistant", "content": [
+      { "type": "thinking", "thinking": "I need to read a file to answer this question." }
+    ]},
+    { "delay": 200, "type": "assistant", "content": [
+      { "type": "tool_use", "id": "tool_stub_1", "name": "Read", "input": { "file_path": "/tmp/test.txt" } }
+    ]},
+    { "delay": 300, "type": "raw", "event": {
+      "type": "user",
+      "message": {
+        "role": "user",
+        "content": [{ "type": "tool_result", "tool_use_id": "tool_stub_1", "content": "File contents: hello world" }]
+      }
+    }},
+    { "delay": 200, "type": "assistant", "content": [
+      { "type": "thinking", "thinking": "Got the file contents. Let me summarize." }
+    ]},
+    { "delay": 300, "type": "assistant", "content": [
+      { "type": "text", "text": "Based on the file, it contains: hello world" }
+    ]},
+    { "delay": 50, "type": "result", "duration_ms": 2000 }
+  ],
+  "on_stdin": {
+    "echo": true
+  }
+}

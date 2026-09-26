@@ -1,0 +1,19 @@
+[Unit]
+Description=Lattice Process Daemon
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory={{PROJECT_DIR}}
+ExecStart={{NODE_PATH}} {{PROJECT_DIR}}/dist/process-daemon/index.js
+Restart=always
+RestartSec=3
+StandardOutput=append:{{CONFIG_DIR}}/logs/daemon.log
+StandardError=append:{{CONFIG_DIR}}/logs/daemon.log
+
+# Environment
+Environment=NODE_ENV=production
+Environment=LATTICE_CONFIG_DIR={{CONFIG_DIR}}
+
+[Install]
+WantedBy=default.target

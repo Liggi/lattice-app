@@ -1,0 +1,21 @@
+{
+  "name": "inject-while-streaming",
+  "description": "Agent streams a long response. Stdin injection arrives mid-stream. Agent acknowledges it after finishing current turn.",
+  "events": [
+    { "type": "system_init" },
+    { "delay": 100, "type": "assistant", "content": [
+      { "type": "thinking", "thinking": "This is a complex question that requires a detailed response." }
+    ]},
+    { "delay": 1000, "type": "assistant", "content": [
+      { "type": "text", "text": "Let me walk you through this step by step." },
+      { "type": "tool_use", "id": "tool_stub_1", "name": "Bash", "input": { "command": "echo 'testing'" } }
+    ]},
+    { "delay": 1500, "type": "assistant", "content": [
+      { "type": "text", "text": "The command output confirms the expected behavior. Here's a detailed explanation of what's happening..." }
+    ]},
+    { "delay": 200, "type": "result", "duration_ms": 4000 }
+  ],
+  "on_stdin": {
+    "echo": true
+  }
+}

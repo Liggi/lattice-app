@@ -1,0 +1,77 @@
+{
+  "name": "non-adjacent-content-same-messageid",
+  "description": "Two text 'content' events share one message.id but are non-adjacent — a collapsed tool group (two Read round-trips, each its own tool-only content event) renders between them, exactly as the SDK adapter interleaves. Old adjacency-only coalescing rendered the two text fragments as two duplicate assistant messages; the fix coalesces by messageId across the whole list into one message.",
+  "events": [
+    { "type": "system_init" },
+    { "delay": 100, "type": "raw", "event": {
+      "type": "assistant",
+      "message": {
+        "id": "msg_shared",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-4-5-20250929",
+        "content": [
+          { "type": "text", "text": "FRAGMENT_ALPHA before the tools." }
+        ],
+        "stop_reason": "end_turn"
+      }
+    }},
+    { "delay": 100, "type": "raw", "event": {
+      "type": "assistant",
+      "message": {
+        "id": "msg_tool_1",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-4-5-20250929",
+        "content": [
+          { "type": "tool_use", "id": "tool_stub_1", "name": "Read", "input": { "file_path": "/tmp/a.txt" } }
+        ],
+        "stop_reason": "tool_use"
+      }
+    }},
+    { "delay": 100, "type": "raw", "event": {
+      "type": "user",
+      "message": {
+        "role": "user",
+        "content": [{ "type": "tool_result", "tool_use_id": "tool_stub_1", "content": "contents of a" }]
+      }
+    }},
+    { "delay": 100, "type": "raw", "event": {
+      "type": "assistant",
+      "message": {
+        "id": "msg_tool_2",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-4-5-20250929",
+        "content": [
+          { "type": "tool_use", "id": "tool_stub_2", "name": "Read", "input": { "file_path": "/tmp/b.txt" } }
+        ],
+        "stop_reason": "tool_use"
+      }
+    }},
+    { "delay": 100, "type": "raw", "event": {
+      "type": "user",
+      "message": {
+        "role": "user",
+        "content": [{ "type": "tool_result", "tool_use_id": "tool_stub_2", "content": "contents of b" }]
+      }
+    }},
+    { "delay": 200, "type": "raw", "event": {
+      "type": "assistant",
+      "message": {
+        "id": "msg_shared",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-4-5-20250929",
+        "content": [
+          { "type": "text", "text": "FRAGMENT_BRAVO after the tools." }
+        ],
+        "stop_reason": "end_turn"
+      }
+    }},
+    { "delay": 50, "type": "result", "duration_ms": 2000 }
+  ],
+  "on_stdin": {
+    "echo": true
+  }
+}

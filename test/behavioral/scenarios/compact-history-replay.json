@@ -1,0 +1,52 @@
+{
+  "name": "compact-history-replay",
+  "description": "Multi-turn session followed by Claude's compacting, compact_boundary, and compact_result lifecycle. Produces two consecutive turn:end events (compact_boundary + result) that cause SSE replay scoping to clip all pre-compact messages on page refresh.",
+  "events": [
+    { "type": "system_init" },
+    { "delay": 50, "type": "assistant", "content": [
+      { "type": "text", "text": "Here is the analysis you requested. The codebase has three main modules." }
+    ]},
+    { "delay": 50, "type": "result", "duration_ms": 500 }
+  ],
+  "on_stdin": {
+    "responses": [
+      [
+        { "type": "assistant", "content": [
+          { "type": "text", "text": "Changes applied successfully. All tests pass." }
+        ]},
+        { "delay": 50, "type": "result", "duration_ms": 300 }
+      ],
+      [
+        { "type": "raw", "event": {
+          "type": "system",
+          "subtype": "status",
+          "status": "compacting"
+        }},
+        { "type": "raw", "event": {
+          "type": "system",
+          "subtype": "compact_boundary",
+          "compact_metadata": {
+            "trigger": "manual",
+            "pre_tokens": 42000,
+            "post_tokens": 12500,
+            "duration_ms": 1500
+          }
+        }},
+        { "delay": 50, "type": "raw", "event": {
+          "type": "system",
+          "subtype": "status",
+          "status": null,
+          "compact_result": "success"
+        }},
+        { "delay": 50, "type": "system_init" },
+        { "delay": 50, "type": "result", "duration_ms": 50 }
+      ],
+      [
+        { "type": "assistant", "content": [
+          { "type": "text", "text": "Post-compact response. Context has been compacted." }
+        ]},
+        { "delay": 50, "type": "result", "duration_ms": 200 }
+      ]
+    ]
+  }
+}

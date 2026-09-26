@@ -1,0 +1,9 @@
+{
+  "name": "error-immediate-exit",
+  "description": "Agent emits system init then immediately exits with error code. Simulates early CLI failure (bad config, auth error, etc).",
+  "events": [
+    { "type": "system_init" }
+  ],
+  "exit_after_main": true,
+  "exit_code": 1
+}

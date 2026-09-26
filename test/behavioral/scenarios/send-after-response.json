@@ -1,0 +1,27 @@
+{
+  "name": "send-after-response",
+  "description": "Agent responds to initial prompt with thinking + text, then the result event arrives after a delay. Used to test that a follow-up message sent during the delay between the last content block and the result event appears in the correct position (after the response, not interleaved).",
+  "events": [
+    { "type": "system_init" },
+    { "delay": 100, "type": "assistant", "content": [
+      { "type": "thinking", "thinking": "Let me think about the user's question carefully." }
+    ]},
+    { "delay": 200, "type": "assistant", "content": [
+      { "type": "text", "text": "Here is my first response. This covers the initial question." }
+    ]},
+    { "delay": 500, "type": "result", "duration_ms": 1200 }
+  ],
+  "on_stdin": {
+    "responses": [
+      [
+        { "delay": 100, "type": "assistant", "content": [
+          { "type": "thinking", "thinking": "The user has a follow-up. Let me address it." }
+        ]},
+        { "delay": 200, "type": "assistant", "content": [
+          { "type": "text", "text": "Here is my second response to the follow-up question." }
+        ]},
+        { "delay": 50, "type": "result", "duration_ms": 800 }
+      ]
+    ]
+  }
+}

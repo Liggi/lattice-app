@@ -1,0 +1,38 @@
+{
+  "$schema": "https://unpkg.com/knip@latest/schema.json",
+  "entry": [
+    "src/server.ts",
+    "src/web/main.tsx"
+  ],
+  "project": [
+    "src/**/*.{ts,tsx}",
+    "!src/**/*.d.ts"
+  ],
+  "exclude": [
+    "duplicates",
+    "binaries"
+  ],
+  "ignoreDependencies": [
+    "@anthropic-ai/claude-code",
+    "@tailwindcss/typography",
+    "@elevenlabs/react",
+    "@isoflow/isopacks",
+    "codehike",
+    "isoflow",
+    "react-ascii-text",
+    "@liggi/agent-ui-harness",
+    "ws",
+    "@types/ws",
+    "tailwindcss"
+  ],
+  "ignoreExportsUsedInFile": true,
+  "includeEntryExports": true,
+  "vite": {
+    "config": [
+      "vite.config.mts"
+    ],
+    "entry": [
+      "src/web/index.html"
+    ]
+  }
+}

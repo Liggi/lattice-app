@@ -1,0 +1,139 @@
+/**
+ * TypeSafe's Jev: a criterion judge. One yes/no question against a state,
+ * answered as a probability. Called direct (`api.typesafe.ai`) rather than
+ * through a gateway: the Vercel gateway was returning 503s on 2026-09-19
+ * while the direct endpoint answered in ~340ms median.
+ *
+ * The key is resolved on every call (config, env, or a file named in
+ * config) and is never logged or included in an error; a response that
+ * echoes it is refused rather than returned.
+ */
+
+import { readFileSync } from 'node:fs';
+import { parseJson } from '../../utils/json.js';
+import { ConfigService } from './config-service.js';
+import { createLogger } from './logger.js';
+
+const logger = createLogger('TypeSafeClient');
+
+export const TYPESAFE_ENDPOINT = 'https://api.typesafe.ai/v1/systemone';
+export const JEV_MODEL = 'jev-latest';
+
+export interface NoulQuestion {
+  instructions: string;
+  criteria?: { true: string; false: string };
+}
+
+export interface NoulAnswer {
+  /** Probability the criterion holds, 0..1. */
+  noul: number;
+  /** Model the service resolved `jev-latest` to. */
+  model: string;
+  ms: number;
+}
+
+export class TypeSafeUnavailableError extends Error {
+  constructor(message: string, readonly status?: number) {
+    super(message);
+    this.name = 'TypeSafeUnavailableError';
+  }
+}
+
+/** The key, or null when nothing is configured. Never logged. */
+export function resolveTypeSafeKey(): string | null {
+  let config: ReturnType<ConfigService['getConfig']> | null = null;
+  try {
+    config = ConfigService.getInstance().getConfig();
+  } catch {
+    config = null;
+  }
+  const direct = config?.typesafe?.apiKey?.trim() || process.env.TYPESAFE_API_KEY?.trim();
+  if (direct) return direct;
+  const file = config?.typesafe?.apiKeyFile?.trim();
+  if (!file) return null;
+  try {
+    const key = readFileSync(file, 'utf8').trim();
+    return key || null;
+  } catch (err) {
+    logger.warn('TypeSafe key file unreadable', { error: err instanceof Error ? err.message : String(err) });
+    return null;
+  }
+}
+
+export function isTypeSafeConfigured(): boolean {
+  return resolveTypeSafeKey() !== null;
+}
+
+/**
+ * Ask Jev one noul question. Throws `TypeSafeUnavailableError` when the key
+ * is missing, the call times out, or the service answers anything but 200
+ * after one retry on 429/529; the caller treats every failure the same way
+ * (no route), so the distinctions only matter for the log.
+ */
+export async function judgeNoul(
+  state: string,
+  question: NoulQuestion,
+  options: { timeoutMs: number; fetchImpl?: typeof fetch } = { timeoutMs: 3000 },
+): Promise<NoulAnswer> {
+  const answer = await judgeNouls(state, { q: question }, options);
+  return { noul: answer.nouls.q, model: answer.model, ms: answer.ms };
+}
+
+/** Several noul questions against one state in a single call, keyed as asked. Fails as `judgeNoul` does. */
+export async function judgeNouls<K extends string>(
+  state: string,
+  questions: Record<K, NoulQuestion>,
+  options: { timeoutMs: number; fetchImpl?: typeof fetch } = { timeoutMs: 3000 },
+): Promise<{ nouls: Record<K, number>; model: string; ms: number }> {
+  const key = resolveTypeSafeKey();
+  if (!key) throw new TypeSafeUnavailableError('TypeSafe key not configured');
+  const doFetch = options.fetchImpl ?? fetch;
+  const keys = Object.keys(questions) as K[];
+  const body = JSON.stringify({
+    model: JEV_MODEL,
+    state,
+    questions: Object.fromEntries(keys.map((k) => [k, { type: 'noul', ...questions[k] }])),
+  });
+  const started = Date.now();
+  const deadline = started + options.timeoutMs;
+
+  for (let attempt = 0; ; attempt++) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) throw new TypeSafeUnavailableError('TypeSafe call timed out');
+    let res: Response;
+    try {
+      res = await doFetch(TYPESAFE_ENDPOINT, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+        body,
+        signal: AbortSignal.timeout(remaining),
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      throw new TypeSafeUnavailableError(`TypeSafe call failed: ${message}`);
+    }
+    const text = await res.text();
+    if (text.includes(key)) throw new TypeSafeUnavailableError('TypeSafe response echoed the credential; refused');
+    if ((res.status === 429 || res.status === 529) && attempt === 0) {
+      await new Promise((resolve) => setTimeout(resolve, Math.min(300, Math.max(0, deadline - Date.now()))));
+      continue;
+    }
+    if (!res.ok) throw new TypeSafeUnavailableError(`TypeSafe answered ${res.status}`, res.status);
+    let parsed: unknown;
+    try {
+      parsed = parseJson(text);
+    } catch {
+      throw new TypeSafeUnavailableError('TypeSafe answered with malformed JSON');
+    }
+    const answer = (parsed ?? {}) as { model?: unknown; answers?: Record<string, { noul?: unknown } | undefined> };
+    const nouls = {} as Record<K, number>;
+    for (const k of keys) {
+      const noul = answer.answers?.[k]?.noul;
+      if (typeof noul !== 'number' || !Number.isFinite(noul) || noul < 0 || noul > 1) {
+        throw new TypeSafeUnavailableError('TypeSafe answer had no noul score');
+      }
+      nouls[k] = noul;
+    }
+    return { nouls, model: typeof answer.model === 'string' ? answer.model : JEV_MODEL, ms: Date.now() - started };
+  }
+}

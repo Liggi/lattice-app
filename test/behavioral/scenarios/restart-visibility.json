@@ -1,0 +1,19 @@
+{
+  "name": "restart-visibility",
+  "description": "Tests that all messages survive a server restart. First turn has a distinctive response. Process exits after turn so the test can inject padding + destroy before the follow-up.",
+  "events": [
+    { "type": "system_init" },
+    { "delay": 100, "type": "assistant", "content": [
+      { "type": "text", "text": "Alpha response — this is the first turn." }
+    ]},
+    { "delay": 50, "type": "result", "duration_ms": 500 }
+  ],
+  "resume_events": [
+    { "type": "system_init" },
+    { "delay": 100, "type": "assistant", "content": [
+      { "type": "text", "text": "Beta response — this is after the restart." }
+    ]},
+    { "delay": 50, "type": "result", "duration_ms": 500 }
+  ],
+  "exit_after_main": true
+}

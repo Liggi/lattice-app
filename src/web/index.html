@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, minimum-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta name="description" content="Web interface for Claude CLI tool with real-time streaming" />
+    <meta name="theme-color" content="#1c1917" id="theme-color-meta" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Lattice" />
+    
+    <!-- Enhanced PWA Meta Tags -->
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="application-name" content="Lattice" />
+    <meta name="msapplication-TileColor" content="#1c1917" />
+    <meta name="msapplication-tap-highlight" content="no" />
+    <meta name="format-detection" content="telephone=no" />
+    
+    <!-- Apple Touch Icons -->
+    <link rel="apple-touch-icon" href="/icon-192x192.png" />
+    <link rel="apple-touch-icon" sizes="192x192" href="/icon-192x192.png" />
+    <link rel="apple-touch-icon" sizes="512x512" href="/icon-512x512.png" />
+    <link rel="icon" type="image/png" href="/favicon.png" id="app-favicon" />
+    <link rel="manifest" href="/manifest.json" />
+    <title>Lattice</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <!--
+      Four faces, and only four. Geist is the reading face and the default for
+      body copy; Geist Mono carries code, paths, IDs and counters; Orbitron is
+      the display face behind `font-display`, reserved for identity chrome;
+      GeistPixelCircle is a rare brand texture behind `.font-pixel`.
+
+      Anything else was an exploration and has been removed — Recursive, Inter,
+      Space Grotesk, Figtree, IBM Plex Sans, DM Sans, Satoshi, General Sans,
+      Switzer, Mona Sans and Hubot Sans were all render-blocking and referenced
+      by nothing. Don't add a face here to try one out; do it behind a flag on
+      the visual-language page instead.
+    -->
+    <!-- Reading + data: Geist Sans, Geist Mono -->
+    <link href="https://cdn.jsdelivr.net/npm/geist@1.3.1/dist/fonts/geist-sans/style.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/geist@1.3.1/dist/fonts/geist-mono/style.min.css" rel="stylesheet">
+    <!-- Display chrome: Orbitron (`font-display`) -->
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Brand texture: GeistPixelCircle (`.font-pixel`) -->
+    <style>
+      @font-face {
+        font-family: 'GeistPixelCircle';
+        src: url('https://cdn.jsdelivr.net/npm/geist@1.7.0/dist/fonts/geist-pixel/GeistPixel-Circle.woff2') format('woff2');
+        font-weight: 400;
+        font-style: normal;
+        font-display: swap;
+      }
+    </style>
+    <script src="https://unpkg.com/@alenaksu/json-viewer@2.1.0/dist/json-viewer.bundle.js"></script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/main.tsx"></script>
+  </body>
+</html>

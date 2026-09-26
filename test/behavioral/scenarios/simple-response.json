@@ -1,0 +1,27 @@
+{
+  "name": "simple-response",
+  "description": "Agent receives a message, thinks briefly, responds with text, then goes idle.",
+  "events": [
+    { "type": "system_init" },
+    { "delay": 100, "type": "assistant", "content": [
+      { "type": "thinking", "thinking": "The user is asking a simple question. Let me respond." }
+    ]},
+    { "delay": 200, "type": "assistant", "content": [
+      { "type": "text", "text": "Hello! I can help you with that. Here's what I found." }
+    ]},
+    { "delay": 50, "type": "result", "duration_ms": 1200 }
+  ],
+  "on_stdin": {
+    "responses": [
+      [
+        { "type": "assistant", "content": [
+          { "type": "thinking", "thinking": "Follow-up question. Let me address it." }
+        ]},
+        { "delay": 150, "type": "assistant", "content": [
+          { "type": "text", "text": "Great follow-up! Here's more detail on that." }
+        ]},
+        { "delay": 50, "type": "result", "duration_ms": 800 }
+      ]
+    ]
+  }
+}

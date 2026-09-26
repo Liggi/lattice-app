@@ -1,0 +1,22 @@
+{
+  "name": "compact-reinit",
+  "description": "Simulates the event sequence that /compact produces: compact_boundary (→ turn:end) followed by a new system init (→ run:ready). The run:ready after turn:end creates a false 'streaming' status.",
+  "events": [
+    { "type": "system_init" },
+    { "delay": 50, "type": "assistant", "content": [
+      { "type": "text", "text": "Context compacted." }
+    ]},
+    { "delay": 50, "type": "result", "duration_ms": 100 },
+    { "delay": 100, "type": "system_init" }
+  ],
+  "on_stdin": {
+    "responses": [
+      [
+        { "type": "assistant", "content": [
+          { "type": "text", "text": "Ready after compact." }
+        ]},
+        { "delay": 50, "type": "result", "duration_ms": 200 }
+      ]
+    ]
+  }
+}

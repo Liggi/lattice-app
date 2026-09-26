@@ -1,0 +1,22 @@
+{
+  "name": "exits-after-turn",
+  "description": "Agent completes a turn then exits (simulates idle timeout / process death). Used to test respawn behavior when sending to a dead session.",
+  "events": [
+    { "type": "system_init" },
+    { "delay": 100, "type": "assistant", "content": [
+      { "type": "text", "text": "Here's my response to your question." }
+    ]},
+    { "delay": 50, "type": "result", "duration_ms": 500 }
+  ],
+  "exit_after_main": true,
+  "on_stdin": {
+    "responses": [
+      [
+        { "type": "assistant", "content": [
+          { "type": "text", "text": "Back from the dead — follow-up handled." }
+        ]},
+        { "delay": 50, "type": "result", "duration_ms": 300 }
+      ]
+    ]
+  }
+}

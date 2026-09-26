@@ -1,0 +1,32 @@
+{
+  "name": "response-with-tool",
+  "description": "Agent thinks, uses a tool (Read), gets result, then responds with text.",
+  "events": [
+    { "type": "system_init" },
+    { "delay": 100, "type": "assistant", "content": [
+      { "type": "thinking", "thinking": "I need to read a file to answer this question." }
+    ]},
+    { "delay": 300, "type": "assistant", "content": [
+      { "type": "text", "text": "Let me check that file." },
+      { "type": "tool_use", "id": "tool_stub_1", "name": "Read", "input": { "file_path": "/tmp/test-file.txt" } }
+    ]},
+    { "delay": 500, "type": "assistant", "content": [
+      { "type": "text", "text": "Based on the file contents, here's what I found:\n\nThe file contains test data that shows the expected behavior." }
+    ]},
+    { "delay": 50, "type": "result", "duration_ms": 2500 }
+  ],
+  "on_stdin": {
+    "responses": [
+      [
+        { "type": "assistant", "content": [
+          { "type": "text", "text": "Sure, I can look at another file." },
+          { "type": "tool_use", "id": "tool_stub_2", "name": "Read", "input": { "file_path": "/tmp/test-file-2.txt" } }
+        ]},
+        { "delay": 300, "type": "assistant", "content": [
+          { "type": "text", "text": "Here's what the second file contains." }
+        ]},
+        { "delay": 50, "type": "result", "duration_ms": 1500 }
+      ]
+    ]
+  }
+}

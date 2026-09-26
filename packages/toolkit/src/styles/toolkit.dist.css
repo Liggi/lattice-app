@@ -1,0 +1,117 @@
+/*
+ * Build entry for the precompiled stylesheet shipped as
+ * `@liggi/agent-ui-toolkit/styles.css` (compiled to dist/styles/toolkit.css).
+ *
+ * This file is NOT for Tailwind-native consumers — they should keep pointing
+ * their own `@source` at this package (see README) and use src/styles/toolkit.css
+ * as the reference for the tokens they need to register. This entry exists to
+ * produce a self-contained stylesheet that works in a plain React app with no
+ * Tailwind installed.
+ *
+ * ── Why no preflight ────────────────────────────────────────────────────────
+ * A precompiled stylesheet is imported into someone else's application. Tailwind's
+ * preflight is a global reset — it zeroes margins on every element, strips list
+ * styles from every ul/ol, and sets `display: block` on every img. Shipping that
+ * inside a component library would stomp the host app's own styling on elements
+ * this toolkit never renders. So we import the `theme` and `utilities` layers and
+ * deliberately skip `preflight.css` (the third layer that `@import "tailwindcss"`
+ * would otherwise pull in).
+ *
+ * Border widths still render correctly without preflight: Tailwind v4 registers
+ * `--tw-border-style` via `@property` with an initial value of `solid`, so the
+ * `border` utility does not depend on preflight's `border: 0 solid` reset.
+ */
+
+@layer theme, base, components, utilities;
+
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+
+@plugin "@tailwindcss/typography";
+
+/*
+ * Dark mode is driven by a `.dark` class on an ancestor, matching the contract
+ * documented in CLAUDE.md and tokens.ts ("Consumer sets class='dark' on a
+ * parent"). Tailwind v4's stock `dark:` variant is `prefers-color-scheme`, which
+ * would make the shipped stylesheet follow the OS setting and ignore the host
+ * app's own theme toggle entirely.
+ */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* Scan the component tree so every utility the components reference is emitted. */
+@source "../**/*.{ts,tsx}";
+
+@theme {
+  /*
+   * Sundial "Parchment" palette — the light-mode neutrals referenced throughout
+   * tokens.ts. Tailwind-native consumers register these themselves; the
+   * precompiled build has to carry them or every light-mode surface, border and
+   * text colour compiles to nothing.
+   *
+   * These stay overridable: the emitted utilities reference
+   * `var(--color-parchment-600)` etc., so redefining them on `:root` in the host
+   * app re-themes the toolkit without a rebuild.
+   */
+  --color-parchment-50: #F6F3ED;
+  --color-parchment-100: #EBE7DE;
+  --color-parchment-200: #DDDAD1;
+  --color-parchment-300: #CFCBC4;
+  --color-parchment-400: #A2A09A;
+  --color-parchment-500: #807E7A;
+  --color-parchment-600: #63615D;
+  --color-parchment-700: #464543;
+  --color-parchment-800: #272725;
+  --color-parchment-900: #1A1918;
+  --color-parchment-950: #10100F;
+
+  /*
+   * Composer status colors — consumers override these CSS custom properties
+   * to re-theme the Composer (e.g., Lattice sets --color-composer-active to cyan).
+   *
+   * Defined as @theme colors so Tailwind opacity modifiers work:
+   *   bg-composer-active/10, text-composer-ready, border-composer-caution/30
+   */
+  --color-composer-active: #60a5fa;   /* blue-400  — "Working" */
+  --color-composer-ready: #34d399;    /* emerald-400 — "Ready" */
+  --color-composer-caution: #fbbf24;  /* amber-400 — "Starting" / "Stopping" */
+  --color-composer-danger: #fb7185;   /* rose-400 — "Stop" */
+  --color-composer-muted: #a1a1aa;    /* zinc-400 — "Off" / inactive */
+
+  --color-composer-surface: #ffffff;
+  --color-composer-surface-elevated: #f4f4f5;
+  --color-composer-border: #e4e4e7;
+  --color-composer-text: #18181b;
+  --color-composer-text-secondary: #71717a;
+  --color-composer-text-faint: #a1a1aa;
+
+  /* Reactions and the emoji picker. */
+  --color-reaction-surface: #ffffff;              /* popover, sheet */
+  --color-reaction-surface-hover: #f4f4f5;        /* chip backing, hovered cell */
+  --color-reaction-border: #e4e4e7;
+  --color-reaction-border-strong: #d4d4d8;        /* dividers, search box, hovered chip */
+  --color-reaction-text: #18181b;
+  --color-reaction-text-secondary: #71717a;
+  --color-reaction-text-faint: #a1a1aa;
+  --color-reaction-accent: #0891b2;               /* focus, the viewer's own count */
+  --color-reaction-accent-soft: rgba(8, 145, 178, 0.12); /* the viewer's own reactions */
+  --color-reaction-page: #fafafa;                 /* page behind chips: rings, search box */
+}
+
+.dark {
+  --color-composer-surface: #09090b;
+  --color-composer-surface-elevated: #18181b;
+  --color-composer-border: #27272a;
+  --color-composer-text: #fafafa;
+  --color-composer-text-secondary: #a1a1aa;
+  --color-composer-text-faint: #52525b;
+  --color-reaction-surface: #18181b;
+  --color-reaction-surface-hover: #27272a;
+  --color-reaction-border: rgba(255, 255, 255, 0.08);
+  --color-reaction-border-strong: rgba(255, 255, 255, 0.14);
+  --color-reaction-text: #fafafa;
+  --color-reaction-text-secondary: #a1a1aa;
+  --color-reaction-text-faint: #71717a;
+  --color-reaction-accent: #22d3ee;
+  --color-reaction-accent-soft: rgba(34, 211, 238, 0.12);
+  --color-reaction-page: #09090b;
+}
