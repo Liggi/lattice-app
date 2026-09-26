@@ -109,7 +109,7 @@
     "@radix-ui/react-tooltip": "^1.2.7",
     "@tanstack/react-query": "^5.90.16",
     "@xyflow/react": "^12.11.5",
-    "better-sqlite3": "^12.5.0",
+    "better-sqlite3": "^13.0.3",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "codehike": "^1.0.7",
