@@ -242,7 +242,7 @@ export function registerUnifiedConversationLifecycleRoutes(
     // Default to server-configured permission mode when not provided.
     // Agents often omit this or pass 'default' — the server config is the source of truth.
     const serverConfig = ConfigService.getInstance().getConfig().server;
-    const workerDefault = parentConversation && !body.coordinator ? serverConfig.workerPermissionMode : undefined;
+    const workerDefault = parentConversation && !body.coordinator ? serverConfig.workerPermissionMode ?? 'auto' : undefined;
     const permissionMode = provider === 'codex'
       ? CODEX_PERMISSION_MODE
       : provider === 'opencode'

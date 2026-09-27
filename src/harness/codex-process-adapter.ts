@@ -5,7 +5,9 @@ import type {
   SteerOutcome,
   SteerRequest,
 } from '@liggi/agent-ui-harness/server';
+import { randomUUID } from 'node:crypto';
 import { LatticeError } from '../types/index.js';
+import { DECISION_ASKED_EVENT, type DecisionAskedData } from '../types/decisions.js';
 import { createLogger } from '../services/infrastructure/logger.js';
 import { parseJson } from '../utils/json.js';
 import { DEFAULT_CODEX_MODEL_ID } from '../constants/codex-models.js';
@@ -33,7 +35,7 @@ import type {
 
 export interface CodexHarnessLifecycleEvent {
   sessionId: string;
-  type: 'goal:updated' | 'goal:cleared' | 'context:compaction' | 'codex:rateLimits' | 'codex:threadStatus' | 'codex:mcpStatus';
+  type: 'goal:updated' | 'goal:cleared' | 'context:compaction' | 'codex:rateLimits' | 'codex:threadStatus' | 'codex:mcpStatus' | typeof DECISION_ASKED_EVENT;
   data: unknown;
 }
 
@@ -199,6 +201,27 @@ function numberField(record: Record<string, unknown>, key: string): number | und
 function stringArrayField(record: Record<string, unknown>, key: string): string[] {
   const value = record[key];
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
+}
+
+/**
+ * A question Codex asked with `request_user_input_async`, as a decision card.
+ * The tool returns at once and Codex keeps its turn open, waiting for the
+ * reply to arrive as input steered into that turn, which is how the card's
+ * answer is delivered. The question arrives as an `agentMessage` with
+ * `delivery: "async"` and `questions: [{ title, options }]`, and nothing else
+ * marks the thread as waiting on the user. A thread holds one open decision,
+ * so a bundle of several questions stays a plain message, answered by typing.
+ */
+function asyncQuestionDecision(record: Record<string, unknown>): DecisionAskedData | null {
+  if (record.delivery !== 'async' || !Array.isArray(record.questions) || record.questions.length !== 1) return null;
+  const asked = record.questions[0] as { title?: unknown; options?: unknown };
+  if (typeof asked?.title !== 'string' || !asked.title.trim()) return null;
+  const labels = Array.isArray(asked.options) ? asked.options.filter((o): o is string => typeof o === 'string' && o.trim() !== '') : [];
+  return {
+    id: randomUUID(),
+    question: asked.title.trim(),
+    options: [...new Set(labels.map((label) => label.trim()))].map((label) => ({ label, consequence: '' })),
+  };
 }
 
 /**
@@ -1015,6 +1038,12 @@ class CodexProcessHandle implements ProcessHandle {
     }
 
     if (item.type === 'agentMessage') {
+      const decision = asyncQuestionDecision(record);
+      if (decision) {
+        // The message is Codex's own rendering of the question; the card replaces it.
+        this.options.onLifecycleEvent({ sessionId: this.sessionId, type: DECISION_ASKED_EVENT, data: decision });
+        return;
+      }
       const text = stringField(record, 'text');
       if (!this.deltaItems.has(id) && text) {
         this.enqueueAssistantText(text, `codex-${id}`);

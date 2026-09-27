@@ -48,10 +48,13 @@ import { INPUT_DELIVERED_EVENT, type InputDeliveredData } from './immediate-deli
  * coordinator's workers, as one attributed line in place of a report (see
  * `worker-report-delivery.ts`). `worker-permission`: a worker's permission
  * prompt for the coordinator to decide (see `worker-permission-delivery.ts`).
+ * `decision`: the user's answer to the session's own question (`lattice ask`,
+ * see `decisions.ts`), as one attributed line. The thread shows the answer as
+ * the user's message from its `decision:answered` event, not from this item.
  * Logs from before 2026-09-26 may also hold `quick-answer` items from a
  * removed feature; the thread skips them like any source it does not show.
  */
-export type InboxSource = 'user' | 'agent' | 'worker-report' | 'worker-question' | 'coordination-review' | 'reaction' | 'worker-stopped' | 'worker-permission';
+export type InboxSource = 'user' | 'agent' | 'worker-report' | 'worker-question' | 'coordination-review' | 'reaction' | 'worker-stopped' | 'worker-permission' | 'decision';
 
 export const INBOX_QUEUED_EVENT = 'input:queued';
 export const INBOX_READ_EVENT = 'input:read';

@@ -16,13 +16,14 @@ afterEach(() => {
 });
 
 describe('pending question restart semantics', () => {
-  it('expires live Codex requests on boot but preserves resumable Claude questions', async () => {
+  it('expires live Codex and Claude requests on boot but keeps rows no live request backs', async () => {
     const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lattice-pending-questions-'));
     try {
       const beforeRestart = new PendingQuestionService(configDir);
       await beforeRestart.initialize();
       beforeRestart.addQuestion('codex-question-live', 'conv-codex', 'codex-thread', 'tool-1', QUESTION);
-      beforeRestart.addQuestion('claude-question-resumable', 'conv-claude', 'claude-stream', 'tool-2', QUESTION);
+      beforeRestart.addQuestion('claude-question-live', 'conv-claude', 'claude-stream', 'tool-2', QUESTION);
+      beforeRestart.addQuestion('legacy-question', 'conv-claude', 'claude-stream', 'tool-3', QUESTION);
       beforeRestart.stopCleanup();
       DatabaseProvider.resetInstance();
 
@@ -30,7 +31,8 @@ describe('pending question restart semantics', () => {
       await afterRestart.initialize();
 
       expect(afterRestart.getQuestion('codex-question-live')?.status).toBe('expired');
-      expect(afterRestart.getQuestion('claude-question-resumable')?.status).toBe('pending');
+      expect(afterRestart.getQuestion('claude-question-live')?.status).toBe('expired');
+      expect(afterRestart.getQuestion('legacy-question')?.status).toBe('pending');
       afterRestart.stopCleanup();
     } finally {
       DatabaseProvider.resetInstance();

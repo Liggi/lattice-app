@@ -605,6 +605,7 @@ function renderItem(row: InboxRow, cli: string, batched: boolean): string {
     case 'reaction':
     case 'worker-stopped':
     case 'worker-permission':
+    case 'decision':
       return batched ? `${row.text} · ${clock(row.created_at)}` : row.text;
     case 'user':
     default:

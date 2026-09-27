@@ -1,6 +1,6 @@
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import { asyncHandler } from '@/middleware/error-handler.js';
-import { requireTrustedOrigin } from '@/middleware/trusted-origin.js';
+import { isFromLatticePage, requireTrustedOrigin } from '@/middleware/trusted-origin.js';
 import type { ConfigService } from '@/services/infrastructure/config-service.js';
 import { ConversationService } from '@/services/sessions/conversation-service.js';
 import { collectorOriginOf, FeedbackError, FeedbackService } from '@/services/feedback/feedback-service.js';
@@ -36,25 +36,6 @@ function postProposalCard(draft: FeedbackDraftView): void {
   const data: FeedbackProposedData = { draftId: draft.id, from, workerTitle };
   if (!appendCustomHarnessEvent(manager, coordinator ?? from, FEEDBACK_PROPOSED_EVENT, data)) {
     logger.warn('Feedback proposal card not written; it is still listed in Settings', { draftId: draft.id, from });
-  }
-}
-
-/**
- * Sending and registering use the install key, which lets anything holding it
- * submit without a person. So those two answer a page this server served and
- * nothing else. Browsers mark that request same-origin; over plain http on a
- * host other than localhost (Lattice over Tailscale) they omit Sec-Fetch-Site,
- * but still send an Origin naming this host on a POST. The CLI, curl and an
- * agent's scripts send neither.
- */
-function isFromLatticePage(headers: Request['headers']): boolean {
-  const fetchSite = headers['sec-fetch-site'];
-  if (typeof fetchSite === 'string') return fetchSite === 'same-origin';
-  if (typeof headers.origin !== 'string' || !headers.host) return false;
-  try {
-    return new URL(headers.origin).host === headers.host;
-  } catch {
-    return false;
   }
 }
 

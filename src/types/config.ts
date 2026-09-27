@@ -51,8 +51,8 @@ export interface ServerConfig {
   defaultPermissionMode?: PermissionMode;
   /**
    * Permission mode for a new Claude worker (a session started with
-   * `pickedUpFrom`) that names none. Unset: workers follow
-   * `defaultPermissionMode` like any other session. Coordinators never use it.
+   * `pickedUpFrom`) that names none. Unset: 'auto'. Coordinators and
+   * sessions started from the New screen never use it.
    */
   workerPermissionMode?: PermissionMode;
 }

@@ -15,6 +15,8 @@ import { TaskTool } from './tools/TaskTool.js';
 import { TaskOutputTool } from './tools/TaskOutputTool.js';
 import { PlanTool } from './tools/PlanTool.js';
 import { AskUserQuestionTool } from './tools/AskUserQuestionTool.js';
+import { DecisionCard } from './DecisionCard.js';
+import type { QuestionDefinition } from '../types.js';
 import { FallbackTool } from './tools/FallbackTool.js';
 import { ChromeDevToolsTool } from './tools/ChromeDevToolsTool.js';
 import { MonitorTool } from './tools/MonitorTool.js';
@@ -90,7 +92,10 @@ export function ToolContent({
     if (toolName === 'TaskOutput') {
       return <TaskOutputTool input={toolInput as { task_id?: string; block?: boolean; timeout?: number }} result={resultContent} isPending />;
     }
-    if (toolName === 'AskUserQuestion' && !questionId) return null;
+    // A question is answerable while its tool call waits, so it renders as the card, not as a running tool.
+    if (toolName === 'AskUserQuestion') {
+      return questionId ? <AskUserQuestionTool input={toolInput} result="" questionId={questionId} onAnswer={onAnswerQuestion} /> : null;
+    }
     if (toolName === 'Bash') {
       return <BashTool input={toolInput} result={resultContent} workingDirectory={workingDirectory} isPending fetchBackgroundOutput={fetchBackgroundOutput} backgroundState={toolUseId ? backgroundTaskStates?.[toolUseId] : undefined} />;
     }
@@ -145,7 +150,11 @@ export function ToolContent({
   }
 
   // ── Error handling ──
-  if (isError && (toolName === 'AskUserQuestion' || toolName === 'EnterPlanMode' || resultContent?.toLowerCase().includes('answer questions?'))) {
+  // A question that expired or was dismissed stays in the thread as a closed card, so it does not vanish unexplained.
+  if (isError && toolName === 'AskUserQuestion') {
+    return <DecisionCard questions={(toolInput as { questions?: QuestionDefinition[] }).questions ?? []} closed="No longer waiting for an answer" />;
+  }
+  if (isError && (toolName === 'EnterPlanMode' || resultContent?.toLowerCase().includes('answer questions?'))) {
     return null;
   }
 
@@ -175,7 +184,7 @@ export function ToolContent({
     case 'TaskCreate': case 'TaskUpdate': return <TaskManagementTool input={toolInput} result={resultContent} isUpdate={toolName === 'TaskUpdate'} />;
     case 'EnterPlanMode': return null;
     case 'exit_plan_mode': case 'ExitPlanMode': return <PlanTool input={toolInput} result={resultContent} onApprove={onPlanApprove} onReject={onPlanReject} />;
-    case 'AskUserQuestion': return <AskUserQuestionTool input={toolInput} result={resultContent} questionId={questionId} onAnswer={onAnswerQuestion} isPending={isPending} />;
+    case 'AskUserQuestion': return <AskUserQuestionTool input={toolInput} result={resultContent} questionId={questionId} onAnswer={onAnswerQuestion} />;
     case 'TeamCreate': return <TeamCreateTool input={toolInput as { team_name?: string; description?: string }} result={resultContent} isPending={isPending} isStreaming={isStreaming} />;
     case 'SendMessage': return <SendMessageTool input={toolInput as { type?: 'message' | 'broadcast' | 'shutdown_request' | 'shutdown_response' | 'plan_approval_response'; recipient?: string; content?: string; summary?: string; approve?: boolean }} result={resultContent} isPending={isPending} isStreaming={isStreaming} />;
     case 'TeamDelete': return <TeamDeleteTool result={resultContent} isPending={isPending} isStreaming={isStreaming} />;

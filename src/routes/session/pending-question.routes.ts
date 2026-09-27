@@ -7,6 +7,8 @@ import { ClaudeHistoryReader } from '@/services/sessions/claude-history-reader.j
 import { ConversationService } from '@/services/sessions/conversation-service.js';
 import { createLogger } from '@/services/infrastructure/logger.js';
 import type { CodexRequestCoordinator } from '@/services/process/codex-request-coordinator.js';
+import type { ClaudeQuestionCoordinator } from '@/services/process/claude-question-coordinator.js';
+import { CLAUDE_QUESTION_ID_PREFIX } from '@/types/decisions.js';
 
 export interface AnswerPendingQuestionRequest {
   answers: Record<string, string>;
@@ -43,6 +45,7 @@ export function createPendingQuestionRoutes(
   pendingQuestionService: PendingQuestionService,
   _historyReader: ClaudeHistoryReader,
   codexRequestCoordinator?: CodexRequestCoordinator,
+  claudeQuestionCoordinator?: ClaudeQuestionCoordinator,
 ): Router {
   const router = Router();
   const logger = createLogger('PendingQuestionRoutes');
@@ -136,18 +139,17 @@ export function createPendingQuestionRoutes(
       throw new LatticeError('ALREADY_ANSWERED', 'Question has already been answered', 400);
     }
 
-    // A live Codex request must receive its JSON-RPC response before the row is
-    // hidden. Legacy Claude questions have no live responder and keep the
-    // existing persistence-only behavior.
-    const isCodexQuestion = questionId.startsWith('codex-question-');
-    const answeredLiveCodexRequest = codexRequestCoordinator
-      ?.answerPendingQuestion(questionId, answers) ?? false;
-    if (isCodexQuestion && !answeredLiveCodexRequest) {
-      throw new LatticeError(
-        'CODEX_REQUEST_NOT_ACTIVE',
-        'This Codex question is no longer attached to a live request',
-        409,
-      );
+    // A live request (Codex's JSON-RPC one, Claude's held permission request)
+    // must receive its answer before the row is hidden. Rows from before
+    // either existed have no live responder and are only marked answered.
+    if (questionId.startsWith('codex-question-')) {
+      if (!codexRequestCoordinator?.answerPendingQuestion(questionId, answers)) {
+        throw new LatticeError('CODEX_REQUEST_NOT_ACTIVE', 'This Codex question is no longer attached to a live request', 409);
+      }
+    } else if (questionId.startsWith(CLAUDE_QUESTION_ID_PREFIX)) {
+      if (!await claudeQuestionCoordinator?.answer(questionId, answers)) {
+        throw new LatticeError('CLAUDE_REQUEST_NOT_ACTIVE', 'Claude is no longer waiting on this question', 409);
+      }
     }
 
     pendingQuestionService.markAnswered(questionId, answers);
@@ -168,15 +170,13 @@ export function createPendingQuestionRoutes(
   router.post('/:questionId/expire', asyncHandler(async (req: RequestWithRequestId, res) => {
     const { questionId } = req.params;
 
-    const isCodexQuestion = questionId.startsWith('codex-question-');
-    const dismissedLiveCodexRequest = codexRequestCoordinator
-      ?.dismissPendingQuestion(questionId) ?? false;
-    if (isCodexQuestion && !dismissedLiveCodexRequest) {
-      throw new LatticeError(
-        'CODEX_REQUEST_NOT_ACTIVE',
-        'This Codex question is no longer attached to a live request',
-        409,
-      );
+    if (questionId.startsWith('codex-question-')) {
+      if (!codexRequestCoordinator?.dismissPendingQuestion(questionId)) {
+        throw new LatticeError('CODEX_REQUEST_NOT_ACTIVE', 'This Codex question is no longer attached to a live request', 409);
+      }
+    } else if (questionId.startsWith(CLAUDE_QUESTION_ID_PREFIX)) {
+      // Dismissing a question Claude has stopped waiting on only clears the row.
+      await claudeQuestionCoordinator?.dismiss(questionId);
     }
     const success = pendingQuestionService.markExpired(questionId);
     if (!success) {

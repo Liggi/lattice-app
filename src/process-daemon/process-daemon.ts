@@ -1612,9 +1612,13 @@ export class ProcessDaemon extends EventEmitter {
       const stderrSuffix = stderr && stderr.trim().length > 0
         ? `: ${stderr.trim().slice(-500)}`
         : '';
+      // Claude Code before 2.1.71 has no auto mode, which new workers start in.
+      const updateHint = /argument 'auto' is invalid/.test(stderr ?? '')
+        ? '. Auto mode needs Claude Code 2.1.71 or later: run `claude update`'
+        : '';
       pending.reject(new LatticeError(
         'CLAUDE_PROCESS_EXITED_EARLY',
-        `Claude CLI process exited before sending system init (code=${code})${stderrSuffix}`,
+        `Claude CLI process exited before sending system init (code=${code})${stderrSuffix}${updateHint}`,
         500,
       ));
     }

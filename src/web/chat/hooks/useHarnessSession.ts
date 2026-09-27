@@ -27,6 +27,7 @@ import type { Provider } from '@/types/unified-messages';
 import type { CodexThreadGoal } from '@/services/process/codex-app-server-types';
 import { PROJECT_NOTED_EVENT } from '@/types/project-state';
 import { FEEDBACK_PROPOSED_EVENT, type FeedbackProposedData } from '@/types/feedback';
+import { DECISION_ANSWERED_EVENT, DECISION_ASKED_EVENT, foldDecisions, placeDecisionsAtTurnEnd, withdrawnDecisionAnswers, type DecisionAnsweredData, type DecisionAskedData, type ThreadDecisions } from '@/types/decisions';
 import {
   isWorkerEventType,
   isWorkerInput,
@@ -117,6 +118,8 @@ export interface UseHarnessSessionReturn {
   reactions: ReadonlyMap<string, readonly string[]>;
   /** The agent's own reactions on the user's messages, by message id. */
   agentReactions: ReadonlyMap<string, readonly string[]>;
+  /** The agent's questions to the user (`lattice ask`) with their answers, and answers taken back unread. */
+  decisions: ThreadDecisions;
   /** Mid-turn injected messages waiting for consumption (floating above composer). */
   pendingMessages: PendingInput[];
   /** Send user input. `extra` is spread into the POST body by the harness client
@@ -158,12 +161,15 @@ export function useHarnessSession(
     return byMessage;
   }, [events]);
   const agentReactions = useMemo<ReadonlyMap<string, readonly string[]>>(() => foldAgentReactions(events), [events]);
+  const decisions = useMemo<ThreadDecisions>(() => ({ byId: foldDecisions(events), withdrawnAnswers: withdrawnDecisionAnswers(events) }), [events]);
   const { pending: pendingMessages, consumed: consumedMessages } = useMemo(() => placeWaitingMessages(events, inbox), [events, inbox]);
 
   const eventContext = useMemo(() => deriveEventContext(events), [events]);
 
   // Transform harness events → ChatMessage[] (for data derivation)
-  const messages = useMemo(() => eventsToMessages(events, eventContext.providerBySeq), [events, eventContext.providerBySeq]);
+  // What the thread shows, in the order it shows it: a question sits below the message it closes.
+  const threadEvents = useMemo(() => placeDecisionsAtTurnEnd(events), [events]);
+  const messages = useMemo(() => eventsToMessages(threadEvents, eventContext.providerBySeq), [threadEvents, eventContext.providerBySeq]);
 
   // Group events → render items + subagent children (for rendering).
   // `isStreaming` feeds CollapsedToolGroup.isActive — gate on hydrationPhase
@@ -172,8 +178,8 @@ export function useHarnessSession(
   // historical tool cards flashing their active spinner.
   const isStreaming = status === 'streaming' && hydrationPhase === 'ready';
   const { renderItems, childrenMessages } = useMemo(
-    () => eventsToRenderItems(events, isStreaming, eventContext.providerBySeq, pendingMessages, consumedMessages, inbox.hiddenInputSeqs),
-    [events, isStreaming, eventContext.providerBySeq, pendingMessages, consumedMessages, inbox.hiddenInputSeqs],
+    () => eventsToRenderItems(threadEvents, isStreaming, eventContext.providerBySeq, pendingMessages, consumedMessages, inbox.hiddenInputSeqs),
+    [threadEvents, isStreaming, eventContext.providerBySeq, pendingMessages, consumedMessages, inbox.hiddenInputSeqs],
   );
 
   // Map harness status → Lattice status.
@@ -323,6 +329,7 @@ export function useHarnessSession(
     lastWorkerEventSeq,
     reactions,
     agentReactions,
+    decisions,
     send,
     compact,
     stop,
@@ -844,6 +851,32 @@ function eventToMessage(
     default: {
       // An agent's feedback proposal, written by the server into the chat the
       // user reads (a worker's goes to its coordinator's). A card to act on.
+      // An agent's question to the user, and the user's answer to it, which
+      // the thread shows as their own message (see types/decisions.ts).
+      if ((event.type as string) === DECISION_ASKED_EVENT) {
+        return {
+          id: `h-${event.seq}`,
+          messageId: `h-${event.seq}`,
+          type: 'system',
+          content: '',
+          timestamp: new Date(event.timestamp).toISOString(),
+          provider,
+          systemSubtype: 'decision',
+          decision: event.data as DecisionAskedData,
+        };
+      }
+      if ((event.type as string) === DECISION_ANSWERED_EVENT) {
+        const data = event.data as DecisionAnsweredData;
+        return {
+          id: `h-${event.seq}`,
+          messageId: `h-${event.seq}`,
+          type: 'user',
+          content: data.answer,
+          timestamp: new Date(event.timestamp).toISOString(),
+          provider,
+          decisionAnswer: { decisionId: data.id, inboxId: data.inboxId },
+        };
+      }
       if ((event.type as string) === FEEDBACK_PROPOSED_EVENT) {
         return {
           id: `h-${event.seq}`,

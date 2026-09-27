@@ -8,6 +8,7 @@ import { CompactionDivider } from './CompactionDivider';
 import { SkillConversationContext } from './SkillHeading';
 import { WorkerEventBlock } from '../WorkerEvents/WorkerEventBlock';
 import { FeedbackProposalCard } from '../Feedback/FeedbackProposalCard';
+import { DecisionAskCard, useWithdrawnAnswers } from '../Decision/DecisionAskCard';
 import { BLOCK_BUDGET_BASE, BLOCK_BUDGET_STEP } from './message-list-constants';
 import { useMessageAnimation } from './use-message-animation';
 import { useScrollManagement } from './use-scroll-management';
@@ -165,6 +166,7 @@ export const MessageList: React.FC<MessageListProps> = ({
   hydrationPhase,
 }) => {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const withdrawnAnswers = useWithdrawnAnswers();
   const topSentinelRef = useRef<HTMLDivElement>(null);
   const { hasShownContent, newMessageIds } = useMessageAnimation({
     sessionId,
@@ -450,6 +452,8 @@ export const MessageList: React.FC<MessageListProps> = ({
     const isCompactionMessage = isCompactionBoundaryMessage(item.message);
     const isWorkerMessage = isWorkerEventMessage(item.message);
     const feedbackProposal = item.message.type === 'system' && item.message.systemSubtype === 'feedback' ? item.message.feedbackProposal : undefined;
+    const decision = item.message.type === 'system' && item.message.systemSubtype === 'decision' ? item.message.decision : undefined;
+    if (item.message.decisionAnswer && withdrawnAnswers.has(item.message.decisionAnswer.inboxId)) return null;
     const isStreamingMessage = isStreaming && isAssistant;
 
     return (
@@ -468,6 +472,10 @@ export const MessageList: React.FC<MessageListProps> = ({
               durationMs={item.message.compactMetadata?.durationMs}
               costUsd={item.message.compactMetadata?.costUsd}
             />
+          ) : decision ? (
+            <ErrorBoundary name="Decision">
+              <DecisionAskCard decision={decision} />
+            </ErrorBoundary>
           ) : feedbackProposal ? (
             <ErrorBoundary name="FeedbackProposal">
               <FeedbackProposalCard proposal={feedbackProposal} timestamp={item.message.timestamp} onNavigateToSession={onNavigateToSession} />
@@ -519,7 +527,7 @@ export const MessageList: React.FC<MessageListProps> = ({
         </div>
       </div>
     );
-  }, [renderBody, toolResults, childrenMessages, expandedTasks, onToggleTaskExpanded, isStreaming, currentQuestionRequest, onAnswerQuestion, branchPointMessageId, branchLineage, onNavigateToSession, newMessageIds, onPlanApprove, onPlanReject, planOutcomes, backgroundTaskStates]);
+  }, [renderBody, toolResults, childrenMessages, expandedTasks, onToggleTaskExpanded, isStreaming, currentQuestionRequest, onAnswerQuestion, branchPointMessageId, branchLineage, onNavigateToSession, newMessageIds, onPlanApprove, onPlanReject, planOutcomes, backgroundTaskStates, withdrawnAnswers]);
 
   if (displayMessages.length === 0 && !isLoading) {
     return (
@@ -577,7 +585,6 @@ export const MessageList: React.FC<MessageListProps> = ({
                   questionId={pendingQuestion.id}
                   onAnswer={onAnswerPendingQuestion}
                   onDismiss={onDismissPendingQuestion}
-                  isRecovered={true}
                 />
               </ErrorBoundary>
             </div>

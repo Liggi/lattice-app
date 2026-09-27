@@ -24,6 +24,8 @@ import { createLogger } from '../services/infrastructure/logger.js';
 import type { ActiveConversationRegistry } from '../services/process/active-conversation-registry.js';
 import type { PendingQuestionService } from '../services/pending-question-service.js';
 import { CodexRequestCoordinator } from '../services/process/codex-request-coordinator.js';
+import { recordCodexQuestion } from '../services/sessions/decisions.js';
+import { DECISION_ASKED_EVENT, type DecisionAskedData } from '../types/decisions.js';
 
 const logger = createLogger('HarnessSetup');
 
@@ -76,6 +78,12 @@ export function setupHarness(deps: HarnessSetupDeps): HarnessRuntime {
       logger.warn('Dropped Codex lifecycle event before harness manager was ready', {
         sessionId: event.sessionId,
         type: event.type,
+      });
+      return;
+    }
+    if (event.type === DECISION_ASKED_EVENT) {
+      recordCodexQuestion(event.sessionId, event.data as DecisionAskedData).catch((err) => {
+        logger.error('Failed to record a Codex question', err instanceof Error ? err : new Error(String(err)), { sessionId: event.sessionId });
       });
       return;
     }

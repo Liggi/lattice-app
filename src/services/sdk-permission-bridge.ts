@@ -28,6 +28,7 @@ import { isToolAllowed } from '@/routes/session/permission.routes.js';
 import { getPermissionEventLog } from '@/services/permission-event-log.js';
 import { createLogger } from '@/services/infrastructure/logger.js';
 import { addRoutedPermissionRequest } from '@/services/sessions/worker-permission-delivery.js';
+import type { ClaudeQuestionCoordinator } from '@/services/process/claude-question-coordinator.js';
 
 interface PermissionUpdateEvent {
   id: string;
@@ -94,6 +95,7 @@ function waitForDecision(
 export function setupSdkPermissionBridge(
   client: ProcessManagerClient,
   tracker: PermissionTracker,
+  questions?: ClaudeQuestionCoordinator,
 ): () => void {
   const logger = createLogger('SdkPermissionBridge');
 
@@ -129,6 +131,10 @@ export function setupSdkPermissionBridge(
       toolName: event.toolName,
       decisionReasonType: event.decisionReasonType,
     });
+
+    // AskUserQuestion is not a permission: the reply carries the user's
+    // answers. It waits on its own card until they answer it.
+    if (event.toolName === 'AskUserQuestion' && questions?.hold(event)) return;
 
     // Fast path: tool already allowed by user/session pattern. Auto-approve
     // without surfacing a banner. Mirrors `/api/permissions/notify` (see

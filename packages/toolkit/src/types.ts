@@ -32,6 +32,10 @@ export interface ChatMessage {
 
 export interface QuestionOption {
   label: string;
+  /** What choosing it sets in motion, shown under the label. */
+  description?: string;
+  /** The asker's suggestion. Claude marks it instead with a "(Recommended)" suffix on the label. */
+  recommended?: boolean;
 }
 
 export interface QuestionDefinition {

@@ -1,5 +1,8 @@
 /* oxlint-disable react-doctor/no-cascading-set-state, react-doctor/no-giant-component, react-doctor/prefer-useReducer, react-doctor/no-render-in-render, react-doctor/no-effect-event-handler */
 import React, { useState, useEffect, useCallback, useRef, useMemo, Profiler } from 'react';
+import { DecisionsProvider } from '../Decision/DecisionAskCard';
+import { CLAUDE_QUESTION_ID_PREFIX } from '@/types/decisions';
+import type { QuestionRequest } from '../../types';
 import { QueuedMessages } from './QueuedMessages';
 import { SenderNamesProvider } from '../shared/sender-names';
 import { useParams, useLocation, useNavigate } from 'react-router-dom';
@@ -172,6 +175,7 @@ export function ConversationView({ sidebarOpen, onToggleSidebar }: ConversationV
     lastWorkerEventSeq,
     reactions: harnessReactions,
     agentReactions: harnessAgentReactions,
+    decisions: harnessDecisions,
   } = useHarnessSession(conversationId ?? null);
   // A message from another session arrives on the harness stream, which carries
   // no worker event and need not change our status — so nothing else here would
@@ -657,6 +661,19 @@ export function ConversationView({ sidebarOpen, onToggleSidebar }: ConversationV
     reconnectToStream: harnessReconnect,
   });
 
+  // Claude's question is answered on its own tool card in the thread; the
+  // rest (Codex's) have no card there and are shown below the messages.
+  const inlineQuestion = pendingQuestions.find((q) => q.id.startsWith(CLAUDE_QUESTION_ID_PREFIX));
+  const bannerQuestion = pendingQuestions.find((q) => !q.id.startsWith(CLAUDE_QUESTION_ID_PREFIX)) ?? null;
+  const currentQuestionRequest = useMemo<QuestionRequest | null>(() => inlineQuestion ? {
+    id: inlineQuestion.id,
+    streamingId: inlineQuestion.streamingId,
+    toolUseId: inlineQuestion.toolUseId,
+    questions: inlineQuestion.questions,
+    timestamp: inlineQuestion.createdAt,
+    status: 'pending',
+  } : null, [inlineQuestion]);
+
   // Compute sync state for insights panel
   const syncState = useMemo((): SyncState | undefined => {
     if (!insights) return undefined;
@@ -1136,6 +1153,7 @@ export function ConversationView({ sidebarOpen, onToggleSidebar }: ConversationV
       <TeamColorProvider teamName={conversationSummary?.teamName ?? null}>
       <SenderNamesProvider senders={senders}>
       <ReactionsProvider key={conversationId} sessionId={conversationId ?? undefined} reactions={harnessReactions} agentReactions={harnessAgentReactions}>
+      <DecisionsProvider sessionId={conversationId ?? undefined} decisions={harnessDecisions}>
       <ToolkitBridge>
       <div className="h-full w-full flex flex-col bg-background relative overflow-hidden" role="main" aria-label="Conversation view">
       <ConversationHeader
@@ -1186,7 +1204,9 @@ export function ConversationView({ sidebarOpen, onToggleSidebar }: ConversationV
               isLoading={isLoading}
               isStreaming={isStreaming}
               streamingProvider={activeProvider}
-              pendingQuestion={pendingQuestions.length > 0 ? pendingQuestions[0] : null}
+              pendingQuestion={bannerQuestion}
+              currentQuestionRequest={currentQuestionRequest}
+              onAnswerQuestion={handleAnswerPendingQuestion}
               onAnswerPendingQuestion={handleAnswerPendingQuestion}
               onDismissPendingQuestion={handleDismissPendingQuestion}
               hasMore={hasMoreMessages}
@@ -1376,6 +1396,7 @@ export function ConversationView({ sidebarOpen, onToggleSidebar }: ConversationV
 
       </div>
       </ToolkitBridge>
+      </DecisionsProvider>
       </ReactionsProvider>
       </SenderNamesProvider>
       </TeamColorProvider>

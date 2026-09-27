@@ -46,3 +46,23 @@ export function requireTrustedOrigin(req: Request, res: Response, next: NextFunc
   logger.warn('Refused cross-site request', { path: req.path, reason: verdict.reason });
   res.status(403).json({ error: 'This action is only available from the Lattice page itself', code: 'CROSS_ORIGIN_REFUSED' });
 }
+
+/**
+ * Whether a request came from a page this server served, and nothing else:
+ * stricter than `isTrustedOrigin`, which lets through callers that are not
+ * browsers at all. For actions only the user may take (sending feedback,
+ * answering a question an agent asked). Browsers mark that request
+ * same-origin; over plain http on a host other than localhost (Lattice over
+ * Tailscale) they omit Sec-Fetch-Site, but still send an Origin naming this
+ * host on a POST. The CLI, curl and an agent's scripts send neither.
+ */
+export function isFromLatticePage(headers: Request['headers']): boolean {
+  const fetchSite = headers['sec-fetch-site'];
+  if (typeof fetchSite === 'string') return fetchSite === 'same-origin';
+  if (typeof headers.origin !== 'string' || !headers.host) return false;
+  try {
+    return new URL(headers.origin).host === headers.host;
+  } catch {
+    return false;
+  }
+}

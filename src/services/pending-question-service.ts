@@ -46,11 +46,10 @@ type PendingQuestionRow = {
 /**
  * Service to persist AskUserQuestion requests across browser disconnects and server restarts.
  *
- * Flow:
- * 1. Claude calls AskUserQuestion → we detect tool_use and save here
- * 2. TUI times out (~6 sec) → session ends
- * 3. User returns (even after browser close) → we show pending question
- * 4. User answers → we --resume the session with the answer as context
+ * A row is added while a provider waits on the user: Codex's
+ * request_user_input (`codex-request-coordinator.ts`) and Claude's
+ * AskUserQuestion (`claude-question-coordinator.ts`). Answering it hands the
+ * answers to the waiting request.
  *
  * Emits `'changed'` with `{ sessionId: string | null }` on every mutation, so
  * the activity stream can push question state to clients instead of them
@@ -144,8 +143,9 @@ export class PendingQuestionService extends EventEmitter {
       this.isInitialized = true;
 
       // Codex request_user_input rows are backed by a live JSON-RPC responder
-      // held in memory. A server restart necessarily kills that responder, so
-      // leaving these rows pending would show a question that can only 409.
+      // held in memory, and Claude AskUserQuestion rows by a held permission
+      // request. A server restart loses both, so leaving these rows pending
+      // would show a question that can only 409.
       const expiredLiveCodex = this.expireOrphanedLiveCodexStmt.run().changes;
       if (expiredLiveCodex > 0) {
         this.logger.info('Expired orphaned live Codex questions on boot', {
@@ -215,7 +215,7 @@ export class PendingQuestionService extends EventEmitter {
     );
 
     this.expireOrphanedLiveCodexStmt = this.db.prepare(
-      "UPDATE pending_questions SET status = 'expired' WHERE status = 'pending' AND id LIKE 'codex-question-%'"
+      "UPDATE pending_questions SET status = 'expired' WHERE status = 'pending' AND (id LIKE 'codex-question-%' OR id LIKE 'claude-question-%')"
     );
   }
 

@@ -720,12 +720,11 @@ export function MessageItem({
             const toolName = resolveToolName((block as { name?: unknown }).name, toolInput);
             const toolResult = mergedToolResults[toolUseId];
 
-            // AskUserQuestion with error result: don't render anything here
-            // The recovered question UI is shown via pendingQuestion banner in MessageList
-            // Also filter any tool with an error containing "Answer questions?" (CLI timeout message)
+            // An old CLI's "Answer questions?" timeout error is not shown. An
+            // AskUserQuestion that expired renders as a closed question card.
             if (toolResult?.is_error) {
               const resultText = typeof toolResult.result === 'string' ? toolResult.result : '';
-              if (toolName === 'AskUserQuestion' || resultText.toLowerCase().includes('answer questions?')) {
+              if (toolName !== 'AskUserQuestion' && resultText.toLowerCase().includes('answer questions?')) {
                 return;
               }
             }

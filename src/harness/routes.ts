@@ -47,6 +47,8 @@ import {
   type ImmediateDeliveryResult,
 } from '../services/sessions/immediate-delivery.js';
 import { agentReact, reactToMessage } from '../services/sessions/message-reactions.js';
+import { answerDecision, askDecision, DecisionError } from '../services/sessions/decisions.js';
+import { isFromLatticePage } from '../middleware/trusted-origin.js';
 import { isSingleEmoji } from '../types/message-reactions.js';
 import { INBOX_READ_EVENT, INBOX_UNDELIVERABLE_EVENT, type InboxReadData, type InboxUndeliverableData } from '../types/inbox.js';
 import { persistCoordinatorImages } from '../services/sessions/coordinator-attachments.js';
@@ -925,6 +927,42 @@ export function createHarnessRoutes(sessionManager: SessionManager, resolvers: H
     }
     const outcome = agentReact({ threadId: sessionId, emoji, action, messageId });
     res.status(outcome.status === 'no-message' ? 404 : 200).json(outcome);
+  }));
+
+  // An agent's question to the user, as a card in its own thread (`lattice ask`).
+  router.post('/:sessionId/decisions', asyncHandler(async (req, res) => {
+    const { sessionId } = req.params;
+    const body = (req.body ?? {}) as { question?: unknown; options?: unknown };
+    const raw: unknown[] = Array.isArray(body.options) ? body.options : [];
+    const options = raw.map((o) => (o ?? {}) as { label?: unknown; consequence?: unknown; recommended?: unknown });
+    if (typeof body.question !== 'string' || options.some((o) => typeof o.label !== 'string' || typeof o.consequence !== 'string')) {
+      res.status(400).json({ error: 'a decision needs a question and options, each with a label and a consequence' });
+      return;
+    }
+    try {
+      const asked = askDecision(sessionId, body.question, options.map((o) => ({ label: o.label as string, consequence: o.consequence as string, recommended: o.recommended === true })));
+      res.json(asked);
+    } catch (err) {
+      if (!(err instanceof DecisionError)) throw err;
+      res.status(err.status).json({ error: err.message });
+    }
+  }));
+
+  // The user's answer to one of those questions, from the page only: an agent
+  // must not be able to answer its own question.
+  router.post('/:sessionId/decisions/:decisionId/answer', asyncHandler(async (req, res) => {
+    if (!isFromLatticePage(req.headers)) {
+      res.status(403).json({ error: 'Questions are answered from the Lattice page, by the user.' });
+      return;
+    }
+    const { sessionId, decisionId } = req.params;
+    const { answer } = (req.body ?? {}) as { answer?: unknown };
+    try {
+      res.json(await answerDecision(sessionId, decisionId, typeof answer === 'string' ? answer : ''));
+    } catch (err) {
+      if (!(err instanceof DecisionError)) throw err;
+      res.status(err.status).json({ error: err.message });
+    }
   }));
 
   // Compact provider context through the harness's semantic action. Claude's

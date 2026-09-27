@@ -36,7 +36,7 @@ There is no hosted service. Lattice is pre-release software.
 - macOS or Linux
 - Node.js 22 or newer (tested on 24 and 26)
 - At least one of these agent CLIs, installed on the same machine:
-  - [Claude Code](https://code.claude.com/docs/en/setup) (`claude`)
+  - [Claude Code](https://code.claude.com/docs/en/setup) (`claude`) 2.1.71 or newer
   - [Codex](https://learn.chatgpt.com/docs/codex/cli) (`codex`)
 
 You sign each CLI in with your own account. Lattice never sees a password; it runs the CLIs you already have.
@@ -67,7 +67,7 @@ The coordinator is the conversation you talk to. It agrees the goal with you, st
 To run a single agent without a coordinator, click **New session** and choose **Claude** or **Codex**.
 
 > [!WARNING]
-> Agents run with permission prompts off by default (Claude's `bypassPermissions` mode; Codex runs with full access). They can run any command your user account can, in any folder. Point them only at work you're happy for an agent to do unattended.
+> Claude workers run in Claude's `auto` mode by default: a classifier reviews each action and blocks risky ones. Coordinators and sessions you start yourself run with permission prompts off (Claude's `bypassPermissions` mode), and Codex runs with full access. They can run any command your user account can, in any folder. Point them only at work you're happy for an agent to do unattended.
 
 ## Use it from your phone with Tailscale
 
@@ -100,7 +100,8 @@ Anyone on your tailnet who can open that address can run agents as you, so check
 | `server.port` | Port to listen on (default `3001`; `--port` overrides it) |
 | `server.defaultWorkingDirectory` | Folder new sessions start in until you pick one |
 | `server.defaultModel` | Claude model for new Claude sessions |
-| `server.defaultPermissionMode` | Claude permission mode: `default` (ask), `acceptEdits`, `bypassPermissions`, `plan` |
+| `server.defaultPermissionMode` | Claude permission mode: `default` (ask), `acceptEdits`, `bypassPermissions`, `plan`, `auto` |
+| `server.workerPermissionMode` | Permission mode for Claude workers a coordinator starts (default `auto`) |
 | `coordinator.provider` | `claude` or `codex`: which one the Coordinator choice starts on |
 | `feedback.enabled` | Whether you can send feedback about Lattice (default on; the switch in Settings → General) |
 | `feedback.collectorUrl` | Where feedback goes; a fork running its own feedback collector points this at it |

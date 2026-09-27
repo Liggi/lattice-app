@@ -64,6 +64,7 @@ export { TaskManagementTool } from './components/tools/TaskManagementTool.js';
 export { TodoTool } from './components/tools/TodoTool.js';
 export { PlanTool } from './components/tools/PlanTool.js';
 export { AskUserQuestionTool } from './components/tools/AskUserQuestionTool.js';
+export { DecisionCard, parseAnsweredResult, type DecisionCardProps } from './components/DecisionCard.js';
 export { FallbackTool } from './components/tools/FallbackTool.js';
 export { ChromeDevToolsTool } from './components/tools/ChromeDevToolsTool.js';
 export { MonitorTool } from './components/tools/MonitorTool.js';

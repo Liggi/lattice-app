@@ -16,6 +16,7 @@ const HARNESS_JSON_BODY_LIMIT = '150mb';
 import { ClaudeHistoryReader } from './services/sessions/claude-history-reader.js';
 import { PermissionTracker } from './services/permission-tracker.js';
 import { setupSdkPermissionBridge } from './services/sdk-permission-bridge.js';
+import { ClaudeQuestionCoordinator } from './services/process/claude-question-coordinator.js';
 import { PendingQuestionService } from './services/pending-question-service.js';
 import { FileSystemService } from './services/infrastructure/file-system-service.js';
 import { ConfigService } from './services/infrastructure/config-service.js';
@@ -66,6 +67,7 @@ export class LatticeServer {
   private historyReader: ClaudeHistoryReader;
   private permissionTracker: PermissionTracker;
   private pendingQuestionService: PendingQuestionService;
+  private claudeQuestionCoordinator?: ClaudeQuestionCoordinator;
   private fileSystemService: FileSystemService;
   private configService: ConfigService;
   private claudeSettingsService: ClaudeSettingsService;
@@ -336,7 +338,8 @@ export class LatticeServer {
     // existing PermissionTracker / banner / allowlist machinery instead
     // of being silently auto-denied. See services/sdk-permission-bridge.ts
     // for the rationale.
-    setupSdkPermissionBridge(client, this.permissionTracker);
+    this.claudeQuestionCoordinator = new ClaudeQuestionCoordinator(client, this.pendingQuestionService, this.permissionTracker);
+    setupSdkPermissionBridge(client, this.permissionTracker, this.claudeQuestionCoordinator);
 
     const conversationService = ConversationService.getInstance();
     this.harnessRuntime = setupHarness({
@@ -861,6 +864,7 @@ export class LatticeServer {
       permissionTracker: this.permissionTracker,
       pendingQuestionService: this.pendingQuestionService,
       codexRequestCoordinator: this.harnessRuntime?.codexRequestCoordinator,
+      claudeQuestionCoordinator: this.claudeQuestionCoordinator,
       fileSystemService: this.fileSystemService,
       configService: this.configService,
       sessionInfoService: this.sessionInfoService,

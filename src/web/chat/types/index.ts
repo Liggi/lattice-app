@@ -1,4 +1,5 @@
 import type { FeedbackProposedData } from '@/types/feedback';
+import type { DecisionAskedData } from '@/types/decisions';
 import type { Provider } from '@/types/unified-messages';
 import type { WorkerStartedData, WorkerReassignedData, WorkerAnsweredData, WorkerReportedData, WorkerReportSummaryData, WorkerMovedData } from '@/types/worker-events';
 // Re-export necessary types from backend
@@ -133,7 +134,7 @@ export interface ConversationChatMessage {
   workingDirectory?: string; // Working directory when the message was created
   parentToolUseId?: string; // For nested messages from Task tool use
   provider?: Provider; // Which AI provider this message is from/to
-  systemSubtype?: 'compact_boundary' | 'compact_starting' | 'worker' | 'feedback';
+  systemSubtype?: 'compact_boundary' | 'compact_starting' | 'worker' | 'feedback' | 'decision';
   /** Heading for an error message; 'Error' when absent. */
   errorTitle?: string;
   /** Present when another agent sent this message; absent on the user's own. */
@@ -150,6 +151,10 @@ export interface ConversationChatMessage {
   };
   /** Set when systemSubtype is 'feedback': an agent's feedback proposal, shown as a card to send. */
   feedbackProposal?: FeedbackProposedData;
+  /** Set when systemSubtype is 'decision': an agent's question to the user (`lattice ask`), shown as a card to answer. */
+  decision?: DecisionAskedData;
+  /** Set on the user's message that is their answer to one of those questions. */
+  decisionAnswer?: { decisionId: string; inboxId: string };
   compactMetadata?: {
     trigger?: string;
     preTokens?: number;

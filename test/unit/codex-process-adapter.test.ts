@@ -415,6 +415,46 @@ describe('CodexProcessAdapter', () => {
     handle.signal('SIGTERM');
   });
 
+  it('turns a request_user_input_async question into a decision card instead of a message', async () => {
+    const client = new FakeCodexClient();
+    const lifecycleEvents: Array<{ type: string; data: unknown }> = [];
+    const adapter = new CodexProcessAdapter((event) => lifecycleEvents.push({ type: event.type, data: event.data }), () => client);
+    const handle = await adapter.spawn({ prompt: '', cwd: '/tmp/codex-test', extra: { provider: 'codex', sessionId: 'conv-test' } });
+    const stdout = handle.stdout[Symbol.asyncIterator]();
+    await readJsonLine(stdout); // system init
+
+    // As codex-cli 0.155.1 sent it on 2026-09-27 (gpt-6-astra).
+    const options = ['Tabs — Use tab characters for each indentation level.', 'Spaces — Use space characters for each indentation level.'];
+    client.emitNotification({
+      method: 'item/completed',
+      params: {
+        threadId: 'thread-test-1', turnId: 'turn-1', completedAtMs: 1,
+        item: {
+          type: 'agentMessage', id: 'call_IO1Mq2k0X3ggAVkCWDEQeUpo',
+          text: `Which indentation should this new repo use?\n- ${options[0]}\n- ${options[1]}`,
+          phase: 'final_answer', delivery: 'async',
+          questions: [{ title: 'Which indentation should this new repo use?', options }],
+        },
+      },
+    } as CodexServerNotification);
+    client.emitNotification({
+      method: 'item/completed',
+      params: { threadId: 'thread-test-1', turnId: 'turn-1', completedAtMs: 2, item: { type: 'agentMessage', id: 'item-2', text: 'After.' } },
+    } as CodexServerNotification);
+
+    const next = await readJsonLine<{ message: { content: Array<{ text: string }> } }>(stdout);
+    expect(next.message.content[0].text).toBe('After.');
+    expect(lifecycleEvents).toEqual([{
+      type: 'decision:asked',
+      data: {
+        id: expect.any(String),
+        question: 'Which indentation should this new repo use?',
+        options: options.map((label) => ({ label, consequence: '' })),
+      },
+    }]);
+    handle.signal('SIGTERM');
+  });
+
   it('uses native compaction, projects its lifecycle, and queues normal input behind it', async () => {
     const client = new FakeCodexClient();
     const lifecycleEvents: Array<{ type: string; data: unknown }> = [];

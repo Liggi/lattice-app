@@ -40,6 +40,7 @@ import type { ConversationService } from '@/services/sessions/conversation-servi
 import type { WorkingDirectoriesService } from '@/services/working-directories-service.js';
 import type { Logger } from '@/services/infrastructure/logger.js';
 import type { CodexRequestCoordinator } from '@/services/process/codex-request-coordinator.js';
+import type { ClaudeQuestionCoordinator } from '@/services/process/claude-question-coordinator.js';
 import { servesViteDevClient } from './vite-dev-client.js';
 
 export interface RegisterAppRoutesDeps {
@@ -53,6 +54,7 @@ export interface RegisterAppRoutesDeps {
   permissionTracker: PermissionTracker;
   pendingQuestionService: PendingQuestionService;
   codexRequestCoordinator?: CodexRequestCoordinator;
+  claudeQuestionCoordinator?: ClaudeQuestionCoordinator;
   fileSystemService: FileSystemService;
   configService: ConfigService;
   sessionInfoService: SessionInfoService;
@@ -85,6 +87,7 @@ export function registerAppRoutes(deps: RegisterAppRoutesDeps): void {
     deps.pendingQuestionService,
     deps.historyReader,
     deps.codexRequestCoordinator,
+    deps.claudeQuestionCoordinator,
   ));
 
   // Debug
