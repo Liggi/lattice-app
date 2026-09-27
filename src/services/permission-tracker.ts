@@ -4,7 +4,8 @@ import { PermissionRequest, asClaudeSessionId, asStreamingId } from '@/types/ind
 import { logger } from '@/services/infrastructure/logger.js';
 import { NotificationService } from './notification-service.js';
 import type { ActiveConversationRegistry } from './process/active-conversation-registry.js';
-import { ClaudeHistoryReader } from './sessions/claude-history-reader.js';
+import { ConversationService } from './sessions/conversation-service.js';
+import { SessionInfoService } from './sessions/session-info-service.js';
 
 /**
  * Service to track permission requests from Claude CLI via MCP
@@ -22,7 +23,6 @@ export class PermissionTracker extends EventEmitter {
   private resolvedAt: Map<string, number> = new Map();
   private notificationService?: NotificationService;
   private activeConversationRegistry?: ActiveConversationRegistry;
-  private historyReader?: ClaudeHistoryReader;
   private expiryInterval: NodeJS.Timeout | null = null;
 
   /** Claude Code PreToolUse hook timeout is 600s. Add 5s buffer. */
@@ -124,13 +124,6 @@ export class PermissionTracker extends EventEmitter {
   }
 
   /**
-   * Set the history reader
-   */
-  setHistoryReader(reader: ClaudeHistoryReader): void {
-    this.historyReader = reader;
-  }
-
-  /**
    * Resolve the active streaming ID for a Claude session ID.
    */
   resolveStreamingIdForSession(sessionId: string): string | undefined {
@@ -205,28 +198,17 @@ export class PermissionTracker extends EventEmitter {
   }
 
   private notify(request: PermissionRequest): void {
-    if (!this.notificationService || !this.historyReader) return;
+    if (!this.notificationService) return;
     const sessionId = request.sessionId;
     if (sessionId) {
-      // Try to get conversation summary
-      this.historyReader.fetchConversationDirect(sessionId)
-        .then(({ metadata }) => {
-          if (this.notificationService) {
-            return this.notificationService.sendPermissionNotification(
-              request,
-              sessionId,
-              metadata?.summary
-            );
-          }
-        })
-        .catch(error => {
-          logger.error('Failed to fetch conversation metadata for notification', error);
-          // Fall back to sending without summary
-          if (this.notificationService) {
-            this.notificationService.sendPermissionNotification(request, sessionId)
-              .catch(err => logger.error('Failed to send permission notification', err));
-          }
-        });
+      let summary: string | undefined;
+      try {
+        summary = this.notificationSummary(sessionId);
+      } catch (error) {
+        logger.error('Failed to look up conversation for notification', error);
+      }
+      this.notificationService.sendPermissionNotification(request, sessionId, summary)
+        .catch(err => logger.error('Failed to send permission notification', err));
     } else {
       // No session ID available, send without session info
       this.notificationService.sendPermissionNotification(request)
@@ -234,6 +216,24 @@ export class PermissionTracker extends EventEmitter {
           logger.error('Failed to send permission notification', error);
         });
     }
+  }
+
+  /**
+   * What the notification calls the session: the conversation's name, else its
+   * first prompt cut to 100 characters, as the transcript-derived summary was.
+   * Read from the database; the transcript can run past a gigabyte.
+   */
+  private notificationSummary(sessionId: string): string | undefined {
+    const conversations = ConversationService.getInstance();
+    const conversation = conversations.getConversation(sessionId)
+      ?? conversations.getConversationByProviderSession(sessionId)?.conversation;
+    if (!conversation) return undefined;
+
+    const name = SessionInfoService.getInstance().getSessionInfoSync(conversation.conversationId)?.custom_name?.trim();
+    if (name) return name;
+    const prompt = conversation.initialPrompt?.trim();
+    if (!prompt) return undefined;
+    return prompt.length > 100 ? prompt.substring(0, 100) + '...' : prompt;
   }
 
   /**

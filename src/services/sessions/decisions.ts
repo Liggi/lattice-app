@@ -13,13 +13,13 @@ import { randomUUID } from 'node:crypto';
 import { getHarnessSessionManager } from '../../harness/setup.js';
 import { appendCustomHarnessEvent } from '../../harness/harness-custom-events.js';
 import { getEvents } from '../../session-history/repository.js';
-import { INBOX_READ_EVENT, INBOX_WITHDRAWN_EVENT } from '../../types/inbox.js';
 import {
   DECISION_ANSWERED_EVENT,
   DECISION_ASKED_EVENT,
   DECISION_MAX_OPTIONS,
   DECISION_MIN_OPTIONS,
-  foldDecisions,
+  DECISION_SETTLED_EVENT,
+  isOpenDecision,
   type DecisionAnsweredData,
   type DecisionAskedData,
   type DecisionOptionData,
@@ -30,6 +30,9 @@ import { enqueueInboxItem, withdrawInboxItem } from './session-inbox.js';
 import { handOverNow } from './immediate-delivery.js';
 import { UserName } from '../user-profile.js';
 import { noteUserSent } from './project-needs-you.js';
+import { decisionsIn, openDecision } from './open-decision.js';
+import { readProjectState } from './project-state.js';
+import type { SessionManager } from '@liggi/agent-ui-harness/server';
 
 export class DecisionError extends Error {
   constructor(message: string, readonly status: number) {
@@ -61,14 +64,17 @@ function checkQuestion(question: string, options: DecisionOptionData[]): void {
 }
 
 /** Puts the card in the agent's thread. A question still unanswered there is replaced by it. */
-export function askDecision(threadId: string, question: string, options: DecisionOptionData[]): { id: string; replaced: string | null } {
+export function askDecision(threadId: string, question: string, options: DecisionOptionData[], projectThread?: number): { id: string; replaced: string | null } {
   const manager = getHarnessSessionManager();
   if (!manager) throw new Error('No harness session manager');
   if (!ConversationService.getInstance().getConversation(threadId)) throw new DecisionError(`No conversation ${threadId}`, 404);
   if (isWorker(threadId)) throw new DecisionError(WORKER_ASK_REFUSAL, 409);
   checkQuestion(question, options);
+  if (projectThread !== undefined && !readProjectState(threadId).open.some((thread) => thread.seq === projectThread && !thread.parked)) {
+    throw new DecisionError(`--thread names one of this project's open threads; ${projectThread} is not one.`, 400);
+  }
 
-  const open = [...decisionsIn(threadId).values()].find((decision) => decision.latest && decision.answer === null);
+  const open = [...decisionsIn(threadId).values()].find(isOpenDecision);
   const data: DecisionAskedData = {
     id: randomUUID(),
     question: question.trim(),
@@ -77,6 +83,7 @@ export function askDecision(threadId: string, question: string, options: Decisio
       consequence: option.consequence.trim(),
       ...(option.recommended ? { recommended: true } : {}),
     })),
+    ...(projectThread !== undefined ? { thread: projectThread } : {}),
   };
   if (!appendCustomHarnessEvent(manager, threadId, DECISION_ASKED_EVENT, data)) {
     throw new Error(`The question could not be written to ${threadId}`);
@@ -101,11 +108,6 @@ export async function recordCodexQuestion(threadId: string, data: DecisionAskedD
   await handOverNow(threadId, inboxId);
 }
 
-function decisionsIn(threadId: string) {
-  const events = getEvents(threadId, { types: [DECISION_ASKED_EVENT, DECISION_ANSWERED_EVENT, INBOX_READ_EVENT, INBOX_WITHDRAWN_EVENT] });
-  return foldDecisions(events);
-}
-
 /** The line the agent reads. */
 function answerLine(question: string, answer: string, ownWords: boolean, correction: boolean): string {
   if (correction) return `${UserName()} changed their answer to your question "${question}". It is now: ${answer}`;
@@ -127,6 +129,7 @@ export async function answerDecision(threadId: string, decisionId: string, rawAn
   const decision = decisionsIn(threadId).get(decisionId);
   if (!decision) throw new DecisionError('That question is not in this thread.', 404);
   if (decision.replaced) throw new DecisionError('A later question replaced this one.', 409);
+  if (decision.settled) throw new DecisionError('This question was answered in the chat.', 409);
   if (decision.answer !== null && !decision.latest) throw new DecisionError('Only the latest question can have its answer changed.', 409);
   if (decision.answer === answer) return { delivered: 'answer' };
 
@@ -148,4 +151,14 @@ export async function answerDecision(threadId: string, decisionId: string, rawAn
   noteUserSent(manager, threadId);
   await handOverNow(threadId, inboxId);
   return { delivered: correction ? 'correction' : replacement ? 'replacement' : 'answer' };
+}
+
+/**
+ * The user wrote to the thread while its card was open: their message is the
+ * answer, so the card closes as answered and no tap is expected. Called on a
+ * composer send, before the message is written, so the card sits above it.
+ */
+export function settleOpenDecision(manager: SessionManager, threadId: string): void {
+  const open = openDecision(threadId);
+  if (open) appendCustomHarnessEvent(manager, threadId, DECISION_SETTLED_EVENT, { id: open.asked.id });
 }

@@ -35,6 +35,16 @@ import { parseJson } from '../utils/json.js';
 /** Spawn + system init can take up to 180s; this is the request ceiling. */
 const REQUEST_TIMEOUT_MS = 185_000;
 
+const RECONNECT_BASE_DELAY_MS = 2_000;
+const RECONNECT_MAX_DELAY_MS = 60_000;
+/** A connection that lasted this long resets the backoff; a daemon dying sooner is a crash loop. */
+const RECONNECT_STABLE_MS = 60_000;
+
+export interface ProcessManagerClientOptions {
+  /** Starts a daemon if none answers on the socket; run before each reconnect attempt. */
+  revive?: () => Promise<void>;
+}
+
 /**
  * Client that talks to the process daemon via Unix socket.
  * Implements the same interface as ClaudeProcessManager.
@@ -47,6 +57,9 @@ export class ProcessManagerClient extends EventEmitter {
   private reconnecting = false;
   private shuttingDown = false;  // Prevents reconnection during shutdown
   private reconnectTimer: NodeJS.Timeout | null = null;
+  private reconnectAttempts = 0;
+  private connectedAt = 0;
+  private readonly revive?: () => Promise<void>;
   private requestId = 0;
   private pendingRequests: Map<number, {
     resolve: (result: unknown) => void;
@@ -55,9 +68,10 @@ export class ProcessManagerClient extends EventEmitter {
   }> = new Map();
   private buffer = '';
 
-  constructor(socketPath: string = DEFAULT_SOCKET_PATH) {
+  constructor(socketPath: string = DEFAULT_SOCKET_PATH, options: ProcessManagerClientOptions = {}) {
     super();
     this.socketPath = socketPath;
+    this.revive = options.revive;
     this.logger = createLogger('ProcessManagerClient');
   }
 
@@ -73,6 +87,7 @@ export class ProcessManagerClient extends EventEmitter {
     return new Promise((resolve, reject) => {
       this.socket = net.createConnection(this.socketPath, () => {
         this.connected = true;
+        this.connectedAt = Date.now();
         this.logger.info('Connected to process daemon', { socketPath: this.socketPath });
         resolve();
       });
@@ -82,8 +97,14 @@ export class ProcessManagerClient extends EventEmitter {
       });
 
       this.socket.on('close', () => {
+        const wasConnected = this.connected;
         this.connected = false;
-        this.logger.warn('Disconnected from process daemon');
+        // A failed reconnect attempt closes a socket that never connected;
+        // the retry path already reports it.
+        if (!wasConnected) return;
+        const uptimeMs = Date.now() - this.connectedAt;
+        if (uptimeMs >= RECONNECT_STABLE_MS) this.reconnectAttempts = 0;
+        this.logger.warn('Disconnected from process daemon', { uptimeMs, reconnectAttempts: this.reconnectAttempts });
 
         // Reject all pending requests
         for (const [id, { reject }] of this.pendingRequests) {
@@ -110,13 +131,17 @@ export class ProcessManagerClient extends EventEmitter {
   }
 
   /**
-   * Schedule a reconnection attempt
+   * Schedule a reconnection attempt, starting a new daemon first when a
+   * `revive` was given. The delay doubles with each attempt since the last
+   * stable connection, so a daemon that keeps dying is not restarted in a loop.
    */
   private scheduleReconnect(): void {
     if (this.reconnecting || this.shuttingDown) return;
 
     this.reconnecting = true;
-    this.logger.info('Scheduling reconnection in 2 seconds...');
+    const attempt = ++this.reconnectAttempts;
+    const delayMs = Math.min(RECONNECT_BASE_DELAY_MS * 2 ** (attempt - 1), RECONNECT_MAX_DELAY_MS);
+    this.logger.info('Scheduling daemon reconnection', { attempt, delayMs, revive: Boolean(this.revive) });
 
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
@@ -127,20 +152,21 @@ export class ProcessManagerClient extends EventEmitter {
         return;
       }
 
-      this.connect()
+      (this.revive ? this.revive() : Promise.resolve())
+        .then(() => this.connect())
         .then(() => {
           this.reconnecting = false;
-          this.logger.info('Reconnected to process daemon');
+          this.logger.info('Reconnected to process daemon', { attempt });
           this.emit('daemon-reconnected');
         })
         .catch((error) => {
           this.reconnecting = false;
           if (!this.shuttingDown) {
-            this.logger.error('Reconnection failed', error);
+            this.logger.error('Daemon reconnection failed; every Claude session is down until it succeeds', error, { attempt });
             this.scheduleReconnect();
           }
         });
-    }, 2000);
+    }, delayMs);
   }
 
   /**

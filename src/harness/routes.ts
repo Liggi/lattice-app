@@ -47,7 +47,7 @@ import {
   type ImmediateDeliveryResult,
 } from '../services/sessions/immediate-delivery.js';
 import { agentReact, reactToMessage } from '../services/sessions/message-reactions.js';
-import { answerDecision, askDecision, DecisionError } from '../services/sessions/decisions.js';
+import { answerDecision, askDecision, DecisionError, settleOpenDecision } from '../services/sessions/decisions.js';
 import { isFromLatticePage } from '../middleware/trusted-origin.js';
 import { isSingleEmoji } from '../types/message-reactions.js';
 import { INBOX_READ_EVENT, INBOX_UNDELIVERABLE_EVENT, type InboxReadData, type InboxUndeliverableData } from '../types/inbox.js';
@@ -516,7 +516,11 @@ export function createHarnessRoutes(sessionManager: SessionManager, resolvers: H
     // A composer send is the user writing to this session. On a project it
     // answers every ask waiting on them from before now (project-needs-you.ts).
     // A drain's inbox batch is not a new send: its rows were counted when sent.
-    if (!fromAgent && !inboxIds) noteUserSent(sessionManager, sessionId);
+    // It also answers an open question card in the thread (decisions.ts).
+    if (!fromAgent && !inboxIds) {
+      settleOpenDecision(sessionManager, sessionId);
+      noteUserSent(sessionManager, sessionId);
+    }
 
     const admissionToken = typeof body.admission === 'string' ? body.admission : undefined;
     const heldByCaller = admissionToken !== undefined && isAdmissionToken(sessionId, admissionToken);
@@ -932,15 +936,19 @@ export function createHarnessRoutes(sessionManager: SessionManager, resolvers: H
   // An agent's question to the user, as a card in its own thread (`lattice ask`).
   router.post('/:sessionId/decisions', asyncHandler(async (req, res) => {
     const { sessionId } = req.params;
-    const body = (req.body ?? {}) as { question?: unknown; options?: unknown };
+    const body = (req.body ?? {}) as { question?: unknown; options?: unknown; thread?: unknown };
     const raw: unknown[] = Array.isArray(body.options) ? body.options : [];
     const options = raw.map((o) => (o ?? {}) as { label?: unknown; consequence?: unknown; recommended?: unknown });
     if (typeof body.question !== 'string' || options.some((o) => typeof o.label !== 'string' || typeof o.consequence !== 'string')) {
       res.status(400).json({ error: 'a decision needs a question and options, each with a label and a consequence' });
       return;
     }
+    if (body.thread !== undefined && !Number.isInteger(body.thread)) {
+      res.status(400).json({ error: 'thread is the id of the project thread the question is about' });
+      return;
+    }
     try {
-      const asked = askDecision(sessionId, body.question, options.map((o) => ({ label: o.label as string, consequence: o.consequence as string, recommended: o.recommended === true })));
+      const asked = askDecision(sessionId, body.question, options.map((o) => ({ label: o.label as string, consequence: o.consequence as string, recommended: o.recommended === true })), body.thread as number | undefined);
       res.json(asked);
     } catch (err) {
       if (!(err instanceof DecisionError)) throw err;

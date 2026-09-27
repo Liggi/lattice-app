@@ -7,6 +7,7 @@ import {
   Plus,
   ChevronDown, ChevronRight,
   Inbox,
+  Moon,
 } from 'lucide-react';
 import { useFeedbackInboxUnread, useFeedbackStatus } from '../../hooks/useFeedback';
 import { SessionCard } from '../shared/SessionCard';
@@ -21,7 +22,7 @@ import { useAmbientReads } from '../../hooks/useAmbientReads';
 import { usePreferencesContext } from '../../contexts/PreferencesContext';
 import { useUserSendMarks } from '../shared/user-send-marks';
 import { api } from '../../services/api';
-import { sidebarLists } from '../../utils/sidebar-ordering';
+import { useSidebarLists } from '../../hooks/useSidebarLists';
 import type { UnifiedConversationSummary } from '../../types';
 import { parseJson } from '../../../../utils/json.js';
 
@@ -84,6 +85,32 @@ function CollapsibleGroup({
   );
 }
 
+// A list's Sleeping rows, folded under one quiet row at the end of the list.
+// It sits in the list like a row: a moon in the cards' icon column and the
+// label in their title column, lighter and dimmer than the section title, with
+// the chevron after the label. It gets extra space when an awake row is above.
+function SleepingGroup({
+  isCollapsed, onToggle, testId, children,
+}: {
+  isCollapsed: boolean; onToggle: () => void; testId: string; children: React.ReactNode;
+}) {
+  const Chevron = isCollapsed ? ChevronRight : ChevronDown;
+  return (
+    <div data-testid={testId} className="flex flex-col gap-px not-first:mt-2">
+      <button
+        onClick={onToggle}
+        aria-expanded={!isCollapsed}
+        className="flex w-full items-center gap-2.5 px-2 py-1 rounded-sm text-[11.5px] text-fg-3/70 hover:text-fg-2 hover:bg-surface-2 cursor-pointer"
+      >
+        <span className="flex w-7 shrink-0 justify-center"><Moon size={13} strokeWidth={1.75} /></span>
+        <span>Sleeping</span>
+        <Chevron size={11} className="-ml-1.5 opacity-60" />
+      </button>
+      {!isCollapsed && children}
+    </div>
+  );
+}
+
 // ============================================================================
 // MAIN SIDEBAR COMPONENT
 // ============================================================================
@@ -107,7 +134,7 @@ export function CrossSessionSidebar({
   const feedbackInbox = useFeedbackStatus()?.inbox === true;
   const feedbackUnread = useFeedbackInboxUnread(feedbackInbox);
   const queryClient = useQueryClient();
-  const { conversations, loading, recentActions, invalidateConversations, recentlyCompletedSessions } = useConversations();
+  const { loading, recentActions, invalidateConversations, recentlyCompletedSessions } = useConversations();
 
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>(loadCollapsed);
   const [sessionNameActions, setSessionNameActions] = useState<Record<string, SessionNameAction | undefined>>({});
@@ -124,15 +151,16 @@ export function CrossSessionSidebar({
   // A project is a coordinator conversation: opening it lands in the
   // coordinator's thread, and its name is the conversation's custom name.
   // Projects, pinned sessions and sessions each keep a fixed order, newest
-  // created first; see sidebarLists.
-  const { projects, pinned: pinnedSessions, sessions: unpinnedSessions } = useMemo(
-    () => sidebarLists(conversations),
-    [conversations]
-  );
+  // created first, and sleeping ones drop into a Sleeping group; see sidebarLists.
+  const {
+    projects, sleepingProjects, pinned: pinnedSessions, sessions: unpinnedSessions, sleepingSessions,
+  } = useSidebarLists();
   const activeSessions = useMemo(
-    () => [...pinnedSessions, ...unpinnedSessions],
-    [pinnedSessions, unpinnedSessions]
+    () => [...pinnedSessions, ...unpinnedSessions, ...sleepingSessions],
+    [pinnedSessions, unpinnedSessions, sleepingSessions]
   );
+  const sleepingProjectsCollapsed = collapsed.sleepingProjects ?? true;
+  const sleepingSessionsCollapsed = collapsed.sleepingSessions ?? true;
   const archivedCollapsed = collapsed.archived ?? true;
   const { archivedSessions, isLoading: archivedLoading } = useArchivedSidebarSessions({
     enabled: isOpen && !archivedCollapsed,
@@ -162,7 +190,7 @@ export function CrossSessionSidebar({
       return;
     }
     if (conversationId !== currentSessionId) {
-      navigate(`/c/${conversationId}`);
+      void navigate(`/c/${conversationId}`);
       // Auto-close sidebar on narrow screens after selecting a session
       if (window.innerWidth < 768) {
         onClose();
@@ -207,6 +235,22 @@ export function CrossSessionSidebar({
     }
   }, [invalidateConversations, queryClient]);
 
+  const renderCard = (conversation: UnifiedConversationSummary, withTeamStatus: boolean) => (
+    <SessionCard
+      key={conversation.conversationId}
+      conversation={conversation}
+      ambientRead={ambientReads.get(conversation.conversationId) ?? null}
+      userSentAt={userSendMarks[conversation.conversationId] ?? null}
+      teamStatus={withTeamStatus ? getTeamStatusForSession(conversation.teamName) : undefined}
+      isCurrent={conversation.conversationId === currentSessionId}
+      onClick={() => handleSessionClick(conversation.conversationId)}
+      recentActions={recentActions[conversation.conversationId]}
+      recentlyCompleted={recentlyCompletedSessions.has(conversation.conversationId)}
+      onRenameSessionName={handleRenameSessionName}
+      isRenamingSessionName={sessionNameActions[conversation.conversationId] === 'rename'}
+    />
+  );
+
   // Don't render anything when sidebar is closed - header has the toggle button
   if (!isOpen) {
     return null;
@@ -243,7 +287,7 @@ export function CrossSessionSidebar({
         {feedbackInbox && (
           <button
             onClick={() => {
-              navigate('/feedback');
+              void navigate('/feedback');
               if (window.innerWidth < 768) onClose();
             }}
             data-testid="sidebar-feedback-inbox"
@@ -251,8 +295,9 @@ export function CrossSessionSidebar({
               onFeedbackPage ? 'bg-surface-2 text-fg' : 'text-fg-2 hover:text-fg hover:bg-surface'
             }`}
           >
+            {/* The icon sits in the cards' 28px icon column, so it and the label line up with the rows below. */}
             <span className="flex items-center gap-2.5">
-              <Inbox size={16} className="text-fg-3" />
+              <span className="flex w-7 shrink-0 justify-center"><Inbox size={16} className="text-fg-3" /></span>
               <span>Feedback</span>
             </span>
             {feedbackUnread ? <span className="font-mono text-[11px] text-accent">{feedbackUnread} unread</span> : null}
@@ -266,7 +311,7 @@ export function CrossSessionSidebar({
               <TooltipTrigger asChild>
                 <button
                   onClick={() => {
-                    navigate('/new?coordinator=1&mode=bypassPermissions');
+                    void navigate('/new?coordinator=1&mode=bypassPermissions');
                     if (window.innerWidth < 768) onClose();
                   }}
                   className="p-0.5 rounded-[4px] text-fg-3 hover:text-fg hover:bg-surface-2 cursor-pointer"
@@ -278,25 +323,20 @@ export function CrossSessionSidebar({
               <TooltipContent>New project</TooltipContent>
             </Tooltip>
           </div>
-          {!loading && projects.length === 0 && (
+          {!loading && projects.length === 0 && sleepingProjects.length === 0 && (
             <div className="px-2 py-1.5 text-xs text-fg-3">No projects yet</div>
           )}
-          {projects.length > 0 && (
+          {(projects.length > 0 || sleepingProjects.length > 0) && (
             <div className="flex flex-col gap-px">
-              {projects.map(project => (
-                <SessionCard
-                  key={project.conversationId}
-                  conversation={project}
-                  ambientRead={ambientReads.get(project.conversationId) ?? null}
-                  userSentAt={userSendMarks[project.conversationId] ?? null}
-                  isCurrent={project.conversationId === currentSessionId}
-                  onClick={() => handleSessionClick(project.conversationId)}
-                  recentActions={recentActions[project.conversationId]}
-                  recentlyCompleted={recentlyCompletedSessions.has(project.conversationId)}
-                  onRenameSessionName={handleRenameSessionName}
-                  isRenamingSessionName={sessionNameActions[project.conversationId] === 'rename'}
-                />
-              ))}
+              {projects.map(project => renderCard(project, false))}
+              {sleepingProjects.length > 0 && (
+                <SleepingGroup
+                  testId="sleeping-projects"
+                  isCollapsed={sleepingProjectsCollapsed} onToggle={() => toggleCollapse('sleepingProjects', true)}
+                >
+                  {sleepingProjects.map(project => renderCard(project, false))}
+                </SleepingGroup>
+              )}
             </div>
           )}
         </div>
@@ -308,7 +348,7 @@ export function CrossSessionSidebar({
               <TooltipTrigger asChild>
                 <button
                   onClick={() => {
-                    navigate('/new?provider=claude&mode=bypassPermissions');
+                    void navigate('/new?provider=claude&mode=bypassPermissions');
                     if (window.innerWidth < 768) onClose();
                   }}
                   className="p-0.5 rounded-[4px] text-fg-3 hover:text-fg hover:bg-surface-2 cursor-pointer"
@@ -346,41 +386,21 @@ export function CrossSessionSidebar({
                   title="Pinned" count={pinnedSessions.length}
                   isCollapsed={collapsed.pinned} onToggle={() => toggleCollapse('pinned')}
                 >
-                  {pinnedSessions.map(session => (
-                    <SessionCard
-                      key={session.conversationId}
-                      conversation={session}
-                      ambientRead={ambientReads.get(session.conversationId) ?? null}
-                      userSentAt={userSendMarks[session.conversationId] ?? null}
-                      teamStatus={getTeamStatusForSession(session.teamName)}
-                      isCurrent={session.conversationId === currentSessionId}
-                      onClick={() => handleSessionClick(session.conversationId)}
-                      recentActions={recentActions[session.conversationId]}
-                      recentlyCompleted={recentlyCompletedSessions.has(session.conversationId)}
-                      onRenameSessionName={handleRenameSessionName}
-                      isRenamingSessionName={sessionNameActions[session.conversationId] === 'rename'}
-                    />
-                  ))}
+                  {pinnedSessions.map(session => renderCard(session, true))}
                 </CollapsibleGroup>
               )}
 
-              {unpinnedSessions.length > 0 && (
+              {(unpinnedSessions.length > 0 || sleepingSessions.length > 0) && (
                 <div className="flex flex-col gap-px">
-                  {unpinnedSessions.map(session => (
-                    <SessionCard
-                      key={session.conversationId}
-                      conversation={session}
-                      ambientRead={ambientReads.get(session.conversationId) ?? null}
-                      userSentAt={userSendMarks[session.conversationId] ?? null}
-                      teamStatus={getTeamStatusForSession(session.teamName)}
-                      isCurrent={session.conversationId === currentSessionId}
-                      onClick={() => handleSessionClick(session.conversationId)}
-                      recentActions={recentActions[session.conversationId]}
-                      recentlyCompleted={recentlyCompletedSessions.has(session.conversationId)}
-                      onRenameSessionName={handleRenameSessionName}
-                      isRenamingSessionName={sessionNameActions[session.conversationId] === 'rename'}
-                    />
-                  ))}
+                  {unpinnedSessions.map(session => renderCard(session, true))}
+                  {sleepingSessions.length > 0 && (
+                    <SleepingGroup
+                      testId="sleeping-sessions"
+                      isCollapsed={sleepingSessionsCollapsed} onToggle={() => toggleCollapse('sleepingSessions', true)}
+                    >
+                      {sleepingSessions.map(session => renderCard(session, true))}
+                    </SleepingGroup>
+                  )}
                 </div>
               )}
             </div>

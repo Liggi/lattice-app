@@ -361,7 +361,7 @@ export function NewSessionView({ sidebarOpen, onToggleSidebar }: NewSessionViewP
 
       // Navigate to the new conversation
       reportMilestone(response.conversationId, 'client.navigate_to_conversation');
-      navigate(`/c/${response.conversationId}`);
+      void navigate(`/c/${response.conversationId}`);
 
       // Refresh sidebar in background
       void invalidateConversations();

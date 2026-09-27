@@ -65,6 +65,11 @@ export interface ComposerRuntimeConfig {
    */
   hasBackgroundTasks?: boolean;
   /**
+   * The turn is running but held on the user's answer to a question it
+   * asked. The status reads as waiting on the user rather than Working.
+   */
+  awaitingAnswer?: boolean;
+  /**
    * What to call that work in the status bar. Hosts that can tell the kinds
    * apart pass their own wording ("Waiting for subagent"); the default suits a
    * host that only tracks bash tasks.

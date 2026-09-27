@@ -14,9 +14,8 @@ export class WorkingDirectoriesService {
 
   async getWorkingDirectories(): Promise<WorkingDirectoriesResponse> {
     try {
-      // Get all conversations from history
-      const { conversations } = await this.historyReader.listConversations();
-      
+      const conversations = await this.historyReader.listSessionDirectories();
+
       // Build directory map with metadata
       const directoryMap = new Map<string, {
         lastDate: Date;

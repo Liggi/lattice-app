@@ -2,13 +2,22 @@
  * A decision an agent puts to the user (`lattice ask`), shown as a card in the
  * agent's own thread and answered with a tap.
  *
- * Two events in that thread's log:
+ * Three events in that thread's log:
  *
  *   `decision:asked    { id, question, options }`   the card
  *   `decision:answered { id, answer, inboxId }`      the user's answer, shown
  *                                                    as the user's message and
  *                                                    delivered to the agent as
  *                                                    one attributed line
+ *   `decision:settled  { id }`                       the user wrote to the
+ *                                                    thread instead of tapping;
+ *                                                    their message is the answer
+ *   `decision:dismissed { id }`                      the user dismissed the
+ *                                                    project thread the card
+ *                                                    was about, from the panel
+ *
+ * A coordinator's card may name the project thread it is about
+ * (`lattice ask --thread`), which is what lets that dismissal close it.
  *
  * A thread has at most one open question: asking again replaces an unanswered
  * one. An answer the agent has not read yet can be taken back and replaced; one
@@ -22,6 +31,8 @@ import { INBOX_READ_EVENT, INBOX_WITHDRAWN_EVENT } from './inbox.js';
 
 export const DECISION_ASKED_EVENT = 'decision:asked';
 export const DECISION_ANSWERED_EVENT = 'decision:answered';
+export const DECISION_SETTLED_EVENT = 'decision:settled';
+export const DECISION_DISMISSED_EVENT = 'decision:dismissed';
 
 export const DECISION_MIN_OPTIONS = 2;
 export const DECISION_MAX_OPTIONS = 4;
@@ -40,6 +51,8 @@ export interface DecisionAskedData {
   id: string;
   question: string;
   options: DecisionOptionData[];
+  /** The coordinator's project thread this question is about, when it named one. */
+  thread?: number;
 }
 
 export interface DecisionAnsweredData {
@@ -58,8 +71,12 @@ export interface DecisionState {
   read: boolean;
   /** A later question replaced this one before it was answered. */
   replaced: boolean;
+  /** The user wrote to the thread while it was open: their message answers it, not a tap. */
+  settled: boolean;
   /** The thread's most recent question: the only one whose answer can still change. */
   latest: boolean;
+  /** The user dismissed the project thread it was about, so it is no longer asked. */
+  dismissed: boolean;
 }
 
 /** A log event as both the server's store and the page's stream give it. */
@@ -75,6 +92,11 @@ export interface ThreadDecisions {
   withdrawnAnswers: ReadonlySet<string>;
 }
 
+/** Still waiting on the user: the thread's latest question, with no answer, not replaced and not settled by a message. */
+export function isOpenDecision(decision: DecisionState): boolean {
+  return decision.latest && decision.answer === null && !decision.replaced && !decision.settled && !decision.dismissed;
+}
+
 /** Every question in a thread's log with its current answer, by decision id. */
 export function foldDecisions(events: readonly DecisionEventLike[]): Map<string, DecisionState> {
   const decisions = new Map<string, DecisionState>();
@@ -88,9 +110,9 @@ export function foldDecisions(events: readonly DecisionEventLike[]): Map<string,
       case DECISION_ASKED_EVENT: {
         const data = event.data as DecisionAskedData;
         if (!data?.id) break;
-        if (latest && latest.answer === null) latest.replaced = true;
+        if (latest && isOpenDecision(latest)) latest.replaced = true;
         if (latest) latest.latest = false;
-        latest = { asked: data, answer: null, read: false, replaced: false, latest: true };
+        latest = { asked: data, answer: null, read: false, replaced: false, settled: false, latest: true, dismissed: false };
         decisions.set(data.id, latest);
         break;
       }
@@ -101,6 +123,16 @@ export function foldDecisions(events: readonly DecisionEventLike[]): Map<string,
         decision.answer = data.answer;
         decision.read = false;
         answerInbox.set(data.inboxId, data.id);
+        break;
+      }
+      case DECISION_SETTLED_EVENT: {
+        const decision = decisions.get((event.data as { id?: string })?.id ?? '');
+        if (decision && isOpenDecision(decision)) decision.settled = true;
+        break;
+      }
+      case DECISION_DISMISSED_EVENT: {
+        const decision = decisions.get((event.data as { id?: string })?.id ?? '');
+        if (decision && isOpenDecision(decision)) decision.dismissed = true;
         break;
       }
       case INBOX_READ_EVENT: {
@@ -141,7 +173,8 @@ export function withdrawnDecisionAnswers(events: readonly DecisionEventLike[]): 
  * after, so in log order the card would sit above the message that leads up
  * to it. It goes after the turn's `turn:end` (or `run:end`), or last while
  * that turn is still running. A Codex question is answered while its turn is
- * still running, so an answer also places the card, just above itself.
+ * still running, so an answer, or a message that settles it, also places the
+ * card, just above itself.
  */
 export function placeDecisionsAtTurnEnd<E extends { type: string }>(events: readonly E[]): readonly E[] {
   if (!events.some((event) => event.type === DECISION_ASKED_EVENT)) return events;
@@ -152,7 +185,7 @@ export function placeDecisionsAtTurnEnd<E extends { type: string }>(events: read
       held.push(event);
       continue;
     }
-    if (held.length > 0 && event.type === DECISION_ANSWERED_EVENT) {
+    if (held.length > 0 && (event.type === DECISION_ANSWERED_EVENT || event.type === DECISION_SETTLED_EVENT)) {
       placed.push(...held);
       held = [];
     }

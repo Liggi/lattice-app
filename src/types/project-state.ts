@@ -59,7 +59,7 @@ export const PROJECT_FOLD_EVENT_TYPES = [
 ] as const;
 
 export const PROJECT_NOTE_KINDS = [
-  'outcome', 'decision', 'open', 'update', 'close', 'now', 'accounting', 'reconcile', 'priority', 'retire', 'park', 'unpark',
+  'outcome', 'decision', 'open', 'update', 'close', 'now', 'accounting', 'reconcile', 'priority', 'retire', 'park', 'unpark', 'rank',
 ] as const;
 
 /**
@@ -126,6 +126,15 @@ export interface ProjectNotedData {
    * which of two contradictory decisions still binds.
    */
   supersedes?: number[];
+  /**
+   * For `open` and `update`: the thread's next step in a few words, as the
+   * user's panel lists it ("Publish 0.4.1?"). For a `park` or `unpark` the
+   * user made from the panel, the name the thread had there, so the line in
+   * the thread says what was dismissed.
+   */
+  label?: string;
+  /** For `rank`: open thread ids in the user's order of priority, most important first. */
+  order?: number[];
   /** For `open` and `update`: where the evidence for this thread is, added to what it already has. */
   evidence?: string[];
   /** For `open`: the thread this one was moved from, in another project (`session move-thread`). */
@@ -190,6 +199,8 @@ export interface ProjectOpenThread {
   summary: string | null;
   /** Where to look for what established the summary: a branch, a commit, a report seq. */
   evidence: string[];
+  /** The next step in a few words for the user's panel; null until the coordinator writes one. */
+  label: string | null;
   /** null when the thread has never been reconciled — prose from before ownership was recorded. */
   owner: ThreadOwner | null;
   nextAction: string | null;
@@ -210,7 +221,7 @@ export interface ProjectOpenThread {
    * Set while the thread is parked: kept, not being worked, and out of the
    * user's remaining-work list and the stale list until it is unparked.
    */
-  parked?: { at: number; reason: string };
+  parked?: { at: number; reason: string; by: 'coordinator' | 'user' };
   /** Set on a closed thread. */
   closedAt?: number;
   resolution?: string;
@@ -250,6 +261,11 @@ export interface ProjectState {
   retired: RetiredDecision[];
   /** The remaining work this project is on now, or null when none has been named. */
   priority: ProjectPriority | null;
+  /**
+   * Open thread ids in the user's order of priority, as the last `rank` note
+   * set it. Threads it does not name come after, in the order they opened.
+   */
+  rank: number[];
   open: ProjectOpenThread[];
   closed: ProjectOpenThread[];
 
@@ -292,7 +308,7 @@ export interface ProjectEventLike {
 
 export function emptyProjectState(): ProjectState {
   return {
-    outcome: null, decisions: [], retired: [], priority: null, open: [], closed: [],
+    outcome: null, decisions: [], retired: [], priority: null, rank: [], open: [], closed: [],
     attention: [], historical: [], accountingFrom: null, now: null, nudges: 0, revision: 0,
   };
 }
@@ -336,6 +352,7 @@ function applyThreadFields(thread: ProjectOpenThread, data: Partial<ProjectNoted
     if (owner) thread.owner = owner;
   }
   if (typeof data.nextAction === 'string' && data.nextAction.trim()) thread.nextAction = data.nextAction.trim();
+  if (typeof data.label === 'string' && data.label.trim()) thread.label = data.label.trim();
   if ('waitingOn' in data) thread.waitingOn = data.waitingOn === null ? null : normalizeWait(data.waitingOn) ?? thread.waitingOn;
   if (JSON.stringify([thread.owner, thread.waitingOn]) !== waitBefore) thread.waitingSince = at;
   if (Array.isArray(data.workers)) {
@@ -518,6 +535,7 @@ export function foldProjectState(events: readonly ProjectEventLike[]): ProjectSt
           text: data.text,
           summary: null,
           evidence: [],
+          label: null,
           owner: null,
           nextAction: null,
           waitingOn: null,
@@ -597,11 +615,17 @@ export function foldProjectState(events: readonly ProjectEventLike[]): ProjectSt
           delete thread.parked;
           break;
         }
-        thread.parked = { at: event.timestamp, reason: data.text };
+        thread.parked = { at: event.timestamp, reason: data.text, by: data.by === 'user' ? 'user' : 'coordinator' };
         // Parked work is not the work the project is on.
         if (state.priority?.thread === thread.seq) state.priority = null;
         break;
       }
+
+      case 'rank':
+        // The whole order, each time: the user restates priorities as a list,
+        // and a partial reorder would leave the rest in an order nobody chose.
+        if (Array.isArray(data.order)) state.rank = data.order.filter((seq): seq is number => typeof seq === 'number');
+        break;
 
       case 'accounting':
         // One boundary per coordinator: the first one is the record, and a
@@ -639,6 +663,8 @@ export function foldProjectState(events: readonly ProjectEventLike[]): ProjectSt
   for (const thread of threads.values()) {
     if (thread.closedAt === undefined) state.open.push(thread);
   }
+  // A closed thread has left the list the order ranks.
+  state.rank = state.rank.filter((seq) => threads.get(seq)?.closedAt === undefined);
   state.closed = closedOrder.map((seq) => threads.get(seq)).filter((thread): thread is ProjectOpenThread => Boolean(thread));
   state.attention = [...pending.values()].sort((a, b) => a.seq - b.seq);
   state.historical = [...historical.values()].sort((a, b) => a.seq - b.seq);
@@ -761,6 +787,7 @@ function renderThread(thread: ProjectOpenThread, user: string, now?: number): st
   const evidence = thread.evidence ?? [];
   if (evidence.length > 0) lines.push(`  evidence: ${evidence.join('; ')}`);
 
+  if (thread.label) lines.push(`  label: ${thread.label}`);
   const detail: string[] = [];
   detail.push(thread.owner ? `owner ${renderOwner(thread.owner, user)}` : 'no owner noted');
   if (thread.nextAction) detail.push(`next: ${thread.nextAction}`);
@@ -825,6 +852,7 @@ export function renderProjectState(state: ProjectState, options: RenderProjectSt
     const age = options.now !== undefined ? ` · set ${formatAgo(options.now - state.priority.at)} ago` : '';
     lines.push(`Priority: ${state.priority.text}${where}${age}`);
   }
+  if ((state.rank ?? []).length > 0) lines.push(`Rank (${user}'s order): ${state.rank.map((seq) => `[${seq}]`).join(' ')}`);
   if ((state.decisions ?? []).length > 0) {
     lines.push('Decisions in force:');
     for (const decision of state.decisions) {
@@ -844,7 +872,10 @@ export function renderProjectState(state: ProjectState, options: RenderProjectSt
   // One line each: kept, not being worked, and not asking for anything.
   if (parked.length > 0) {
     lines.push('Parked (`--unpark <id>` brings one back):');
-    for (const thread of parked) lines.push(`- [${thread.seq}] ${thread.text} — ${thread.parked!.reason}`);
+    for (const thread of parked) {
+      const whose = thread.parked!.by === 'user' ? ` (${user}'s call: do not resurface it)` : '';
+      lines.push(`- [${thread.seq}] ${thread.text} — ${thread.parked!.reason}${whose}`);
+    }
   }
   if ((state.attention ?? []).length > 0) {
     lines.push(`Waiting on your disposition (${state.attention.length}):`);

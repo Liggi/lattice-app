@@ -189,6 +189,10 @@ export function registerUnifiedConversationLifecycleRoutes(
       body.workingDirectory ||= parentConversation.workingDirectory;
       body.workspace ||= parentConversation.workspace;
     }
+    // Whatever a hidden fixture dispatches is part of the fixture, so it is
+    // created hidden too; otherwise the fixture's worker lands in the sidebar.
+    const archived = Boolean(body.archived)
+      || (parentConversation !== null && conversationService.wasCreatedHidden(parentConversation.conversationId));
 
     const normalizedWorkingDirectory = normalizeWorkingDirectory(body.workingDirectory);
     const { message, permissionMode: requestedMode, workspace } = body;
@@ -275,7 +279,7 @@ export function registerUnifiedConversationLifecycleRoutes(
         initialPrompt: message,
         pickedUpFrom: parentConversation?.conversationId,
         coordinator: Boolean(body.coordinator),
-        archived: Boolean(body.archived),
+        archived,
       });
 
       // The row is a project in the sidebar from here on. If the session
@@ -301,7 +305,7 @@ export function registerUnifiedConversationLifecycleRoutes(
 
         // Prime conversation metadata
         await sessionInfoService.updateSessionInfo(conversationId, {
-          archived: Boolean(body.archived),
+          archived,
           ...(permissionMode && { permission_mode: permissionMode }),
           workspace: workspace || 'main',
         });

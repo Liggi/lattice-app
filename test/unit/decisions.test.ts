@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { foldDecisions, placeDecisionsAtTurnEnd } from '../../src/types/decisions.js';
+import { foldDecisions, isOpenDecision, placeDecisionsAtTurnEnd } from '../../src/types/decisions.js';
 import { ClaudeQuestionCoordinator } from '../../src/services/process/claude-question-coordinator.js';
 import type { PendingQuestionService } from '../../src/services/pending-question-service.js';
 import type { ProcessManagerClient } from '../../src/process-daemon/process-manager-client.js';
@@ -40,6 +40,38 @@ describe('foldDecisions', () => {
       { type: 'input:read', data: { ids: ['in-2'] } },
     ]);
     expect(decisions.get('a')).toMatchObject({ answer: 'Decision card', read: true });
+  });
+});
+
+describe('a message written while the card is open', () => {
+  const settled = (id: string) => ({ type: 'decision:settled', data: { id } });
+
+  it('settles the card, so it is neither open nor replaced by the next question', () => {
+    const decisions = foldDecisions([asked('a'), settled('a'), asked('b')]);
+    expect(decisions.get('a')).toMatchObject({ answer: null, settled: true, replaced: false, latest: false });
+    expect(isOpenDecision(decisions.get('b')!)).toBe(true);
+  });
+
+  it('closes a card when the user dismisses the thread it was about', () => {
+    const decisions = foldDecisions([asked('a'), { type: 'decision:dismissed', data: { id: 'a' } }]);
+    expect(decisions.get('a')).toMatchObject({ dismissed: true, answer: null });
+    expect(isOpenDecision(decisions.get('a')!)).toBe(false);
+  });
+
+  it('does not settle a card that was already answered with a tap', () => {
+    const decisions = foldDecisions([asked('a'), answered('a', 'Decision card', 'in-1'), settled('a')]);
+    expect(decisions.get('a')).toMatchObject({ answer: 'Decision card', settled: false });
+  });
+
+  it('places a card still in its running turn just above the message that settled it', () => {
+    const events = [
+      { type: 'content', seq: 1 },
+      { type: 'decision:asked', seq: 2 },
+      { type: 'decision:settled', seq: 3 },
+      { type: 'input:sent', seq: 4 },
+      { type: 'turn:end', seq: 5 },
+    ];
+    expect(placeDecisionsAtTurnEnd(events).map((e) => e.seq)).toEqual([1, 2, 3, 4, 5]);
   });
 });
 

@@ -77,7 +77,7 @@ export default defineConfig({
   publicDir: '../../public',
   resolve: {
     alias: {
-      '@': path.resolve(__dirname, './src'),
+      '@': path.resolve(import.meta.dirname, './src'),
       ...(toolkitSrc ? { '@liggi/agent-ui-toolkit': path.resolve(toolkitSrc, 'index.ts') } : {}),
     },
     // One React: the toolkit checkout has its own node_modules.
@@ -89,7 +89,7 @@ export default defineConfig({
     chunkSizeWarningLimit: 1200,
     rollupOptions: {
       input: {
-        main: path.resolve(__dirname, 'src/web/index.html')
+        main: path.resolve(import.meta.dirname, 'src/web/index.html')
       },
       output: {
         manualChunks: getManualChunk,

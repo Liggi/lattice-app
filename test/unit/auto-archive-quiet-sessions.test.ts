@@ -83,6 +83,15 @@ describe('auto-archive candidate selection', () => {
     ])).toEqual(['conv-quiet']);
   });
 
+  // The week counts from falling asleep, which is 30 quiet minutes in.
+  it('archives a week after the session fell asleep, not a week after it went quiet', () => {
+    const MINUTE = 60 * 1000;
+    expect(candidates([
+      { id: 'conv-asleep-6d23h', updatedDaysAgo: 30, lastEventDaysAgo: 7 + 20 * MINUTE / DAY },
+      { id: 'conv-asleep-7d', updatedDaysAgo: 30, lastEventDaysAgo: 7 + 31 * MINUTE / DAY },
+    ])).toEqual(['conv-asleep-7d']);
+  });
+
   // The bug the COALESCE/MAX exists to prevent: updated_at says months, the
   // event log says this morning. The event log wins.
   it('spares a session whose updated_at is stale but whose event log is fresh', () => {

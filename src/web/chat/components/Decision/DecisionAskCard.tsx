@@ -28,7 +28,9 @@ async function postAnswer(sessionId: string, decisionId: string, answer: string)
 
 /**
  * An agent's question to the user (`lattice ask`). Once answered the card
- * keeps only the question: the answer is the user's own message below it.
+ * keeps only the question: the answer is the user's own message below it,
+ * whether they tapped an option or wrote to the thread instead. Only a tapped
+ * answer can be changed from the card.
  */
 export function DecisionAskCard({ decision }: { decision: DecisionAskedData }): JSX.Element {
   const context = useContext(DecisionsContext);
@@ -45,9 +47,9 @@ export function DecisionAskCard({ decision }: { decision: DecisionAskedData }): 
   return (
     <DecisionCard
       questions={questions}
-      answered={state?.answer != null ? {} : undefined}
-      closed={state?.replaced ? 'Replaced by a later question' : undefined}
-      canChange={state?.latest}
+      answered={state?.answer != null || state?.settled ? {} : undefined}
+      closed={state?.replaced ? 'Replaced by a later question' : state?.dismissed ? 'Dismissed from the panel' : undefined}
+      canChange={state?.latest && state.answer != null}
       onAnswer={onAnswer}
     />
   );

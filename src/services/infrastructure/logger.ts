@@ -1,5 +1,7 @@
+import * as fs from 'fs';
 import pino, { Logger as PinoLogger } from 'pino';
 import { PassThrough } from 'stream';
+import { FailSafeLogWriter } from './fail-safe-log-writer.js';
 import { LogFormatter } from './log-formatter.js';
 import {
   ensureLatticeLogDir,
@@ -143,13 +145,36 @@ class LoggerService {
       }
     });
 
+    // Node keeps stdio streams open after a failed write (a pipe whose reader
+    // died, `| tee` exiting on ENOSPC), so every later write fails again and
+    // an unhandled failure is fatal. Stop writing and warn once.
+    const stdioFailed = { stdout: false, stderr: false };
+    for (const name of ['stdout', 'stderr'] as const) {
+      process[name].on('error', (err) => {
+        if (stdioFailed[name]) return;
+        stdioFailed[name] = true;
+        this.baseLogger.warn({ err }, `process.${name} failed; its output is dropped from now on`);
+      });
+    }
+
     // Create multi-stream configuration with formatter. Built via spreads
     // so TypeScript infers the right `pino.StreamEntry` element type rather
     // than narrowing the array element to `{ stream: NodeJS.WritableStream }`
-    // (which doesn't accept pino's SonicBoom return type without a cast).
+    // (which doesn't accept a destination object without a cast).
     const stdoutFormatter = shouldWriteToStdout ? new LogFormatter() : null;
     if (stdoutFormatter) {
-      stdoutFormatter.pipe(process.stdout);
+      // A file-backed stdout (the daemon's daemon.log, a launchd StandardOutPath)
+      // stops for good after its first failed write; this one resumes.
+      if (fs.fstatSync(1).isFile()) {
+        const stdoutFile = new FailSafeLogWriter(1);
+        stdoutFormatter.on('data', (chunk: Buffer) => stdoutFile.write(chunk.toString()));
+      } else {
+        // Not pipe(): once stdout errors, pipe() stops draining the formatter
+        // and pino's writes pile up in it without bound.
+        stdoutFormatter.on('data', (chunk: Buffer) => {
+          if (!stdioFailed.stdout) process.stdout.write(chunk);
+        });
+      }
     }
     const streams = [
       ...(stdoutFormatter
@@ -159,7 +184,9 @@ class LoggerService {
       ...(shouldWriteStructuredFile
         ? [{
             level: logLevel as pino.Level,
-            stream: pino.destination({ dest: structuredLogPath, mkdir: true, sync: false }),
+            // Not pino.destination: sonic-boom crashes the process on ENOSPC
+            // unless handled, and its exit-time flushSync spins forever on it.
+            stream: new FailSafeLogWriter(structuredLogPath),
           }]
         : []),
     ];

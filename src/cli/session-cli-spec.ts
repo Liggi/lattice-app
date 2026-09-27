@@ -116,7 +116,8 @@ export const SESSION_VERBS: VerbSpec[] = [
         '  each of its turn-end messages is delivered into the parent conversation.',
       'A fixture session made to verify something is created with --archived, not\n' +
         '  archived afterwards: a coordinator is a project in the user\'s sidebar from the\n' +
-        '  moment its row exists, so archiving it after the fact still shows it to them.',
+        '  moment its row exists, so archiving it after the fact still shows it to them.\n' +
+        '  A session created with --from a fixture is created hidden in the same way.',
       'Needs the server running, as does send. Read commands use SQLite directly.',
     ],
   },
@@ -296,6 +297,8 @@ export const SESSION_VERBS: VerbSpec[] = [
       { name: 'thread', kind: 'int', value: 'ID', desc: 'Update an existing thread by the id `state` shows, keeping its text and id.' },
       { name: 'summary', kind: 'string', value: 'TEXT', desc: 'With --thread: where that work has actually got to, replacing the last summary.' },
 
+      { name: 'label', kind: 'string', value: 'TEXT', desc: 'With --open/--thread: the next step in a few words, as the user\'s panel lists it ("Publish 0.4.1?").' },
+      { name: 'rank', kind: 'string', value: 'IDS', desc: 'Open thread ids in the user\'s order of priority, most important first; restate the whole order each time.' },
       { name: 'evidence', kind: 'string', value: 'TEXT', desc: 'With --open/--thread: where to look for what established that — a branch, a commit, a report seq.' },
       { name: 'owner', kind: 'string', value: 'WHO', desc: 'With --open/--thread: you | user | a worker conv id | any other name.' },
       { name: 'next', kind: 'string', value: 'TEXT', desc: 'With --open/--thread: what advances this thread now.' },

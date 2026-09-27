@@ -51,10 +51,13 @@ import { INPUT_DELIVERED_EVENT, type InputDeliveredData } from './immediate-deli
  * `decision`: the user's answer to the session's own question (`lattice ask`,
  * see `decisions.ts`), as one attributed line. The thread shows the answer as
  * the user's message from its `decision:answered` event, not from this item.
+ * `dismissal`: the user dismissed one of a coordinator's threads from the
+ * panel, or brought one back (see `thread-dismissal.ts`), as one attributed
+ * line; the thread shows it from the park note, not from this item.
  * Logs from before 2026-09-26 may also hold `quick-answer` items from a
  * removed feature; the thread skips them like any source it does not show.
  */
-export type InboxSource = 'user' | 'agent' | 'worker-report' | 'worker-question' | 'coordination-review' | 'reaction' | 'worker-stopped' | 'worker-permission' | 'decision';
+export type InboxSource = 'user' | 'agent' | 'worker-report' | 'worker-question' | 'coordination-review' | 'reaction' | 'worker-stopped' | 'worker-permission' | 'decision' | 'dismissal';
 
 export const INBOX_QUEUED_EVENT = 'input:queued';
 export const INBOX_READ_EVENT = 'input:read';

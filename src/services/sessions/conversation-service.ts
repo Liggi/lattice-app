@@ -157,6 +157,7 @@ export class ConversationService {
     countConversations: Statement;
     addConversationIdToSession: Statement;
     insertArchivedSessionRow: Statement;
+    getCreatedHidden: Statement;
   };
 
   // Singleton
@@ -411,6 +412,12 @@ export class ConversationService {
         ON CONFLICT(session_id) DO UPDATE SET archived = 1, created_hidden = 1
       `),
 
+      getCreatedHidden: this.db.prepare(`
+        SELECT 1 FROM sessions
+        WHERE (session_id = ? OR conversation_id = ?) AND created_hidden = 1
+        LIMIT 1
+      `),
+
     };
   }
 
@@ -638,6 +645,11 @@ export class ConversationService {
   /**
    * Get a conversation with all its segments.
    */
+  /** Whether the conversation was created hidden: a fixture, never meant to be seen. */
+  wasCreatedHidden(conversationId: string): boolean {
+    return this.stmts.getCreatedHidden.get(conversationId, conversationId) !== undefined;
+  }
+
   getConversation(conversationId: string): Conversation | null {
     const row = this.stmts.getConversation.get(conversationId) as ConversationRow | undefined;
     if (!row) return null;

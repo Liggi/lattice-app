@@ -14,6 +14,7 @@ import type { EventStorageAdapter } from '@liggi/agent-ui-harness/server';
 import type { LostTask, SessionEvent } from '@liggi/agent-ui-harness/protocol';
 import { createLogger } from '../services/infrastructure/logger.js';
 import { parseJson } from '../utils/json.js';
+import { DECISION_ANSWERED_EVENT, DECISION_ASKED_EVENT, DECISION_DISMISSED_EVENT, DECISION_SETTLED_EVENT } from '../types/decisions.js';
 
 const logger = createLogger('SqliteEventStorage');
 
@@ -98,6 +99,9 @@ export const STATUS_BEARING_EVENT_TYPES = [
   'input:incorporated',
 ] as const;
 
+/** What says whether a question card is still open: asked, answered, settled by a message, dismissed. */
+const DECISION_EVENT_TYPES = [DECISION_ASKED_EVENT, DECISION_ANSWERED_EVENT, DECISION_SETTLED_EVENT, DECISION_DISMISSED_EVENT] as const;
+
 export class SqliteEventStorageAdapter implements EventStorageAdapter {
   private stmtWrite: Database.Statement;
   private stmtReadAfter: Database.Statement;
@@ -111,6 +115,7 @@ export class SqliteEventStorageAdapter implements EventStorageAdapter {
   private stmtListUnfinishedTasks: Database.Statement;
   private stmtReadStatusWindow: Database.Statement;
   private stmtReadTail: Database.Statement;
+  private stmtReadDecisions: Database.Statement;
 
   constructor(db: Database.Database) {
     ensureHarnessEventsSchema(db);
@@ -237,6 +242,14 @@ export class SqliteEventStorageAdapter implements EventStorageAdapter {
       LIMIT ?
     `);
 
+    this.stmtReadDecisions = db.prepare(`
+      SELECT * FROM harness_events
+      WHERE session_id = ?
+        AND type IN (${DECISION_EVENT_TYPES.map(() => '?').join(', ')})
+      ORDER BY seq DESC
+      LIMIT ?
+    `);
+
     logger.info('Event storage initialized');
   }
 
@@ -294,6 +307,13 @@ export class SqliteEventStorageAdapter implements EventStorageAdapter {
   maxSeq(sessionId: string): number {
     const row = this.stmtMaxSeq.get(sessionId) as { seq: number } | undefined;
     return row?.seq ?? 0;
+  }
+
+  /** The session's latest question-card events (`types/decisions.ts`), oldest first. */
+  readDecisionEvents(sessionId: string, limit = 50): SessionEvent[] {
+    const rows = this.stmtReadDecisions.all(sessionId, ...DECISION_EVENT_TYPES, limit) as Array<Record<string, unknown>>;
+    rows.reverse();
+    return rows.map(rowToEvent);
   }
 
   readStatusWindow(sessionId: string, limit = 200): SessionEvent[] {

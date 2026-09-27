@@ -8,7 +8,7 @@
 
 import { describe, expect, it } from 'vitest';
 import type { UnifiedConversationSummary } from '@/web/chat/types';
-import { lastUsedAt } from '@/web/chat/utils/sidebar-ordering';
+import { lastUsedAt } from '@/web/chat/utils/session-activity';
 
 const HOUR = 60 * 60 * 1000;
 const ago = (ms: number) => new Date(Date.now() - ms).toISOString();

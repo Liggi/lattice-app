@@ -15,7 +15,7 @@ import { describe, expect, it } from 'vitest';
 import Database from 'better-sqlite3';
 import type { SessionEvent } from '@liggi/agent-ui-harness/protocol';
 import { SqliteEventStorageAdapter } from '../../src/harness/sqlite-event-storage.js';
-import { readSeedActivityMessages } from '../../src/routes/conversation/unified-conversation.transport-routes.js';
+import { readSeedActivityMessages } from '../../src/services/sessions/recent-activity-messages.js';
 
 const SESSION = 'conv-seed';
 

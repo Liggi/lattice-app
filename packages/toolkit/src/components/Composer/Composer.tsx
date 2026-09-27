@@ -108,6 +108,7 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
   const searchEmoji = props.searchEmoji;
 
   const isSessionActive = props.runtimeConfig?.isSessionActive ?? false;
+  const awaitingAnswer = isSessionActive && (props.runtimeConfig?.awaitingAnswer ?? false);
   const isSessionConnected = props.runtimeConfig?.isSessionConnected ?? isSessionActive;
   const isStopRequested = props.runtimeConfig?.isStopRequested ?? false;
   const isInitializing = props.runtimeConfig?.isInitializing ?? false;
@@ -156,6 +157,8 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
       ? 'Stopping'
       : isCompacting
         ? 'Compacting context'
+      : awaitingAnswer
+        ? 'Waiting for your answer'
       : isSessionActive
         ? 'Working'
         : hasBackgroundTasks && isSessionConnected
@@ -859,6 +862,8 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
       ? 'Stopping'
       : isCompacting
         ? 'Compacting context'
+        : awaitingAnswer
+          ? 'Waiting for your answer'
         : isSessionActive
           ? 'Working'
           : hasBackgroundTasks && isSessionConnected
@@ -904,6 +909,7 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
             isInitializing ? 'starting'
             : isStopRequested ? 'stopping'
             : isCompacting ? 'compacting'
+            : awaitingAnswer ? 'awaiting-answer'
             : isSessionActive ? 'active'
             : isSessionConnected ? 'ready'
             : 'off'
@@ -1019,7 +1025,7 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
                       <Loader2 size={12} className="shrink-0 animate-spin text-composer-caution" />
                     )}
                     <span className="text-xs text-composer-text-secondary whitespace-nowrap">{statusLabel}</span>
-                    {isSessionActive && hasSessionStartTime && (
+                    {isSessionActive && !awaitingAnswer && hasSessionStartTime && (
                       <span className="hidden sm:inline text-xs tabular-nums text-composer-text-faint">{elapsedTime}</span>
                     )}
                   </div>

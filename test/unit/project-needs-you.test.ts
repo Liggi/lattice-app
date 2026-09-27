@@ -6,12 +6,14 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ProjectOpenThread } from '../../src/types/project-state.js';
+import type { OpenDecision } from '../../src/services/sessions/open-decision.js';
 
 let open: ProjectOpenThread[] = [];
 let priority: { text: string } | null = null;
 let maxSeq = 1;
 let workerEvents: { type: string; timestamp: number; data: unknown }[] = [];
 let userSent: { timestamp: number }[] = [];
+let card: OpenDecision | null = null;
 const judgeNouls = vi.fn();
 
 vi.mock('../../src/services/sessions/project-state.js', () => ({ readProjectState: () => ({ open, priority, now: null }) }));
@@ -24,6 +26,7 @@ vi.mock('../../src/services/infrastructure/database-provider.js', () => ({
 vi.mock('../../src/services/sessions/session-info-service.js', () => ({
   SessionInfoService: { getInstance: () => ({ getSessionInfoSync: () => ({ custom_name: 'Project' }) }) },
 }));
+vi.mock('../../src/services/sessions/open-decision.js', () => ({ openDecision: () => card }));
 vi.mock('../../src/services/user-profile.js', () => ({ userName: () => 'Alex' }));
 
 const { projectNeedsYou, projectWorkingOn, projectWorkerTasks, __resetNeedsYouForTests } = await import('../../src/services/sessions/project-needs-you.js');
@@ -106,5 +109,26 @@ describe('projectNeedsYou', () => {
     expect(projectNeedsYou('conv-p')?.map(item => item.seq)).toEqual([2]);
     expect(judgeNouls).toHaveBeenCalledTimes(1);
     userSent = [];
+  });
+
+  it("scores the project's open question card like a thread, until the user writes after it", async () => {
+    open = [];
+    card = {
+      asked: { id: 'd1', question: 'Ship it tonight?', options: [{ label: 'Yes', consequence: 'Release goes out' }, { label: 'No', consequence: 'Wait a day' }] },
+      seq: 40,
+      askedAt: 800,
+    };
+    judgeNouls.mockResolvedValue({ nouls: { act: 0.95, parked: 0 } });
+    expect(projectNeedsYou('conv-p')).toEqual([]);
+    await settle();
+    expect(judgeNouls.mock.calls[0][0]).toContain('Ship it tonight?');
+    expect(projectNeedsYou('conv-p')).toEqual([{ seq: 40, text: 'Ship it tonight?', thread: 'Ship it tonight?', since: 800, score: 0.95 }]);
+
+    userSent = [{ timestamp: 900 }];
+    maxSeq = 2;
+    expect(projectNeedsYou('conv-p')).toEqual([]);
+    expect(judgeNouls).toHaveBeenCalledTimes(1);
+    userSent = [];
+    card = null;
   });
 });

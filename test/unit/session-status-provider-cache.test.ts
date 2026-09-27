@@ -92,3 +92,23 @@ describe('GET /api/sessions/status provider inference', () => {
     expect(windowReads).toEqual(['conv-codex', 'conv-late']);
   });
 });
+
+describe('GET /api/sessions/status for a turn held on its question card', () => {
+  const seed = (sessionId: string, seq: number, type: string, data: unknown) => db.prepare(`
+    INSERT INTO harness_events (session_id, seq, run_id, timestamp, type, data, meta)
+    VALUES (?, ?, 'run-1', ?, ?, ?, NULL)
+  `).run(sessionId, seq, 1000 + seq, type, JSON.stringify(data));
+
+  it('reports awaitingAnswer while the running turn waits on the card, and not once it is answered', async () => {
+    seedRunStart('conv-codex', 'codex');
+    seed('conv-codex', 2, 'decision:asked', { id: 'd1', question: 'Tabs or spaces?', options: [] });
+    const app = buildApp(['conv-codex']);
+
+    const waiting = await request(app).get('/api/sessions/status').expect(200);
+    expect(waiting.body.sessions['conv-codex']).toMatchObject({ status: 'ongoing', awaitingAnswer: true });
+
+    seed('conv-codex', 3, 'decision:settled', { id: 'd1' });
+    const settled = await request(app).get('/api/sessions/status').expect(200);
+    expect(settled.body.sessions['conv-codex']).toMatchObject({ status: 'ongoing', awaitingAnswer: false });
+  });
+});

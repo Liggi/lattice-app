@@ -1,20 +1,17 @@
 /**
- * Right panel of a coordinator conversation: Project, then Workers. Project
- * is what the coordinator has noted (`ProjectSection`); Workers is derived
- * from its worker events (`WorkersSection`).
+ * Right panel of a coordinator conversation, in the left sidebar's language:
+ * small muted section labels, no rules between sections, rows lined up on
+ * one icon column. The to-do list leads — Needs you, In progress with the
+ * workers folded in, Next, then the last thing completed and Parked — and
+ * Purpose, which rarely changes, comes last (2026-09-27). The list is derived
+ * from what the coordinator has noted and its worker events together
+ * (`StateOfPlaySection`). Each section renders nothing when it has nothing to
+ * show, and the gap between sections goes with it.
  *
  * The server also folds a History of coordinator moves (`foldWorkerHistory`)
  * and `useWorkers` still returns it, but the panel does not render it: every
- * row restated a task or report already visible on a worker card or in the
- * thread. The turn-insights History the InsightsPanel shows for ordinary
- * sessions is not used here either.
- *
- * Every band is separated by a rule that runs the full width of the panel,
- * drawn here with `divide-y` rather than by a border on any one section: a
- * band renders nothing when it has nothing to show, and a band that renders
- * nothing must not leave a line behind. `ProjectSection` contributes its
- * bands as a fragment, so Purpose, Working on, Still to do and Workers are
- * all padded and divided by the same two rules and none draws its own.
+ * row restated a task or report already visible on a worker row or in the
+ * thread.
  *
  * The narrow overlay's title bar carries only its close button. It used to
  * say "Project" above a panel whose own first line is the project — a
@@ -22,12 +19,12 @@
  * close control keeps its accessible name.
  */
 
-import React from 'react';
+import React, { useState } from 'react';
 import { X } from 'lucide-react';
 import type { WorkerCardState } from '@/types/worker-events';
 import type { ProjectState } from '@/types/project-state';
-import { WorkersSection } from './WorkersSection';
-import { ProjectSection } from './ProjectSection';
+import { StateOfPlaySection } from './StateOfPlaySection';
+import { ProjectPurpose } from './ProjectSection';
 
 interface CoordinatorPanelProps {
   isOpen: boolean;
@@ -36,6 +33,8 @@ interface CoordinatorPanelProps {
   project: ProjectState | null;
   coordinatorRunning: boolean;
   onOpenWorker?: (conversationId: string) => void;
+  /** The coordinator's own id, so a wait naming it reads "the coordinator". */
+  coordinatorId?: string;
 }
 
 const mobileSafeAreaInsetsStyle: React.CSSProperties = {
@@ -45,13 +44,24 @@ const mobileSafeAreaInsetsStyle: React.CSSProperties = {
   paddingLeft: 'env(safe-area-inset-left, 0px)',
 };
 
-export function CoordinatorPanel({ isOpen, onClose, workers, project, coordinatorRunning, onOpenWorker }: CoordinatorPanelProps): JSX.Element | null {
+export function CoordinatorPanel({ isOpen, onClose, workers, project, coordinatorRunning, onOpenWorker, coordinatorId }: CoordinatorPanelProps): JSX.Element | null {
+  // The worker whose name is under the pointer in a wait line, lit in the list.
+  const [pointedWorker, setPointedWorker] = useState<string | null>(null);
   if (!isOpen) return null;
+  const waitContext = { workers, coordinatorId, onPointWorker: setPointedWorker };
 
   const content = (
-    <div className="flex flex-col divide-y divide-line [&>*]:px-5 [&>*]:py-5">
-      {project && <ProjectSection project={project} coordinatorRunning={coordinatorRunning} />}
-      <WorkersSection workers={workers} coordinatorRunning={coordinatorRunning} onOpenWorker={onOpenWorker} />
+    <div className="flex flex-col gap-7 px-3 py-5">
+      <StateOfPlaySection
+        project={project}
+        workers={workers}
+        coordinatorId={coordinatorId}
+        coordinatorRunning={coordinatorRunning}
+        onOpenWorker={onOpenWorker}
+        waitContext={waitContext}
+        pointedWorker={pointedWorker}
+      />
+      {project && <ProjectPurpose project={project} />}
     </div>
   );
 

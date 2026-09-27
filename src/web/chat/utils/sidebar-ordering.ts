@@ -1,46 +1,55 @@
 import type { UnifiedConversationSummary } from '../types';
-
-/**
- * When a conversation was last used. `updatedAt` alone only moves on the legacy
- * /resume route and on segment changes, so it mostly stays at creation time.
- * The sidebar card's age label reads this; the sidebar's order does not.
- */
-export function lastUsedAt(session: UnifiedConversationSummary): number {
-  return new Date(session.lastActivityAt ?? session.updatedAt).getTime();
-}
+import { deriveSessionActivity } from './session-activity';
 
 const newestCreatedFirst = (a: UnifiedConversationSummary, b: UnifiedConversationSummary): number =>
   new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
 
 /**
- * The sidebar's lists, in the order they render: Projects, then Pinned, then
- * Sessions. Each is ordered by creation time, newest first, and nothing else,
- * so a row never moves because its session did something. The request, 2026-09-26:
- * "projects / sessions shouldn't change order in the lattice sidebar". Status
- * is shown on the card, not by moving it between bands.
+ * The sidebar's lists, in the order they render: Projects, Sleeping projects,
+ * Pinned, Sessions, Sleeping sessions. Each is ordered by creation time, newest
+ * first, and nothing else, so a row never moves because its session did
+ * something. The request, 2026-09-26: "projects / sessions shouldn't change
+ * order in the lattice sidebar". Status is shown on the card, not by moving it
+ * between bands.
+ *
+ * The one move is falling asleep: a project or session whose card shows
+ * Sleeping (deriveSessionActivity, so it needs nothing from the user, is not
+ * working and holds no pending work) drops into its list's Sleeping group, and
+ * returns to its place when it wakes. Pinned sessions never move.
  *
  * A worker a coordinator dispatched is not a session the user started, so it is
  * not listed; it lives in the coordinator's right panel. It stays listed when
  * its coordinator is not in the list, so it is never unreachable.
  */
-export function sidebarLists(conversations: UnifiedConversationSummary[]): {
+export function sidebarLists(
+  conversations: UnifiedConversationSummary[],
+  sessionAttention: Record<string, number> = {},
+  now: number = Date.now(),
+): {
   projects: UnifiedConversationSummary[];
+  sleepingProjects: UnifiedConversationSummary[];
   pinned: UnifiedConversationSummary[];
   sessions: UnifiedConversationSummary[];
+  sleepingSessions: UnifiedConversationSummary[];
 } {
   const ids = new Set(conversations.map(c => c.conversationId));
   const live = conversations.filter(c => !c.archived).sort(newestCreatedFirst);
+  const asleep = (c: UnifiedConversationSummary): boolean =>
+    deriveSessionActivity(c, conversations, (sessionAttention[c.conversationId] ?? 0) > 0, now).kind === 'sleeping';
   const projects = live.filter(c => c.coordinator);
   const others = live.filter(c => !c.coordinator && !(c.pickedUpFrom && ids.has(c.pickedUpFrom)));
+  const unpinned = others.filter(c => !c.pinned);
   return {
-    projects,
+    projects: projects.filter(c => !asleep(c)),
+    sleepingProjects: projects.filter(asleep),
     pinned: others.filter(c => c.pinned),
-    sessions: others.filter(c => !c.pinned),
+    sessions: unpinned.filter(c => !asleep(c)),
+    sleepingSessions: unpinned.filter(asleep),
   };
 }
 
 /** Every listed conversation in sidebar order, top to bottom. Ctrl+Tab walks this. */
-export function getSidebarOrderedSessionIds(conversations: UnifiedConversationSummary[]): string[] {
-  const { projects, pinned, sessions } = sidebarLists(conversations);
-  return [...projects, ...pinned, ...sessions].map(c => c.conversationId);
+export function sidebarOrderedIds(lists: ReturnType<typeof sidebarLists>): string[] {
+  const { projects, sleepingProjects, pinned, sessions, sleepingSessions } = lists;
+  return [...projects, ...sleepingProjects, ...pinned, ...sessions, ...sleepingSessions].map(c => c.conversationId);
 }

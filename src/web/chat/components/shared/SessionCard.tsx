@@ -11,11 +11,10 @@ import { Tooltip, TooltipContentPlain, TooltipTrigger } from '../ui/tooltip';
 import { useSessionAttention } from '../../hooks/useAttentionFavicon';
 import type { UnifiedConversationSummary } from '../../types';
 import { useConversations } from '../../contexts/ConversationsContext';
-import { deriveSessionActivity, describeSessionActivity } from '../../utils/session-activity';
+import { deriveSessionActivity, describeSessionActivity, lastUsedAt } from '../../utils/session-activity';
 import { SessionStateIcon } from './session-state-icon/SessionStateIcon';
 import { SessionStateTooltip } from './session-state-icon/SessionStateTooltip';
 import type { TeamRuntimeStatus } from '../../hooks/useTeamStatus';
-import { lastUsedAt } from '../../utils/sidebar-ordering';
 import type { AmbientRead } from '../AmbientPortfolio/ambient-types';
 import { ARROW_PRESENTATION, resolveCardOrientation, resolveCardTitle } from './session-card-orientation';
 
@@ -212,7 +211,9 @@ export function SessionCard({
   const staleOpacity = isCurrent || activity.kind === 'needs-you'
     ? 1
     : Math.max(0.6, 1 - Math.max(0, staleHours - 6) * (0.4 / 42));
-  const staleAgeLabel = staleHours >= 6 ? formatRelativeTime(lastActivityTs) : null;
+  // Every sleeping row carries its age, so rows in a Sleeping group compare; an
+  // awake row shows one only once it has been quiet for 6h (a waiting session).
+  const staleAgeLabel = activity.kind === 'sleeping' || staleHours >= 6 ? formatRelativeTime(lastActivityTs) : null;
   const isCardInteractive = Boolean(!isInlineRenaming && onClick);
   const handleCardKeyDown = React.useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
     if (!isCardInteractive || !onClick) return;

@@ -52,7 +52,7 @@ export function MapIndexPage(): JSX.Element {
       try {
         const { map } = await createMap(trimmed);
         setName('');
-        navigate(`/map/${encodeURIComponent(map.id)}`);
+        void navigate(`/map/${encodeURIComponent(map.id)}`);
       } catch (createError) {
         setError(createError instanceof Error ? createError.message : String(createError));
       } finally {

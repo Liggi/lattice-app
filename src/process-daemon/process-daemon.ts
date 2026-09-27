@@ -656,16 +656,7 @@ export class ProcessDaemon extends EventEmitter {
       // and skips stdin entirely when it's a TTY (node-pty). Pipe mode ensures Claude
       // reads --input-format stream-json from stdin, enabling mid-turn message injection.
       {
-        const childProcess = spawn(this.requireClaudeExecutable(), args, {
-          cwd,
-          env: env as NodeJS.ProcessEnv,
-          stdio: ['pipe', 'pipe', 'pipe'],
-        });
-
-        if (!childProcess.pid) {
-          throw new LatticeError('PROCESS_SPAWN_FAILED', 'Failed to spawn Claude process - no PID assigned', 500);
-        }
-
+        const childProcess = await this.spawnPipedClaude(args, cwd, env as NodeJS.ProcessEnv);
         const pipePid = childProcess.pid;
         managedProcess = {
           type: 'pipe',
@@ -791,6 +782,28 @@ export class ProcessDaemon extends EventEmitter {
   }
 
   /**
+   * Spawns the Claude CLI with piped stdio. A missing working directory or
+   * binary rejects here, for this session only; Node reports a failed spawn
+   * as a later 'error' event, which without a listener stops the daemon.
+   */
+  private async spawnPipedClaude(args: string[], cwd: string, env: NodeJS.ProcessEnv): Promise<ChildProcess & { pid: number }> {
+    if (!fs.statSync(cwd, { throwIfNoEntry: false })?.isDirectory()) {
+      throw new LatticeError('WORKING_DIRECTORY_NOT_FOUND', `Working directory does not exist: ${cwd}`, 400);
+    }
+    const childProcess = spawn(this.requireClaudeExecutable(), args, {
+      cwd,
+      env,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    const spawnError = new Promise<Error>((resolve) => childProcess.once('error', resolve));
+    if (childProcess.pid === undefined) {
+      const error = await spawnError;
+      throw new LatticeError('PROCESS_SPAWN_FAILED', `Failed to spawn Claude process: ${error.message}`, 500);
+    }
+    return childProcess as ChildProcess & { pid: number };
+  }
+
+  /**
    * Optimistic spawn: returns the streamingId immediately after process creation,
    * before waiting for system init. System init completion/failure is broadcast
    * as events so the caller can handle bookkeeping asynchronously.
@@ -848,14 +861,18 @@ export class ProcessDaemon extends EventEmitter {
       INIT_CWD: cwd,
     };
 
-    const childProcess = spawn(this.requireClaudeExecutable(), args, {
-      cwd,
-      env: env as NodeJS.ProcessEnv,
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-
-    if (!childProcess.pid) {
-      throw new LatticeError('PROCESS_SPAWN_FAILED', 'Failed to spawn Claude process - no PID assigned', 500);
+    let childProcess: ChildProcess & { pid: number };
+    try {
+      childProcess = await this.spawnPipedClaude(args, cwd, env as NodeJS.ProcessEnv);
+    } catch (error) {
+      logger.error('Conversation spawn failed (optimistic)', error instanceof Error ? error : new Error(String(error)), {
+        streamingId,
+        isResume,
+        cwd,
+        errorCode: error instanceof LatticeError ? error.code : 'INTERNAL_ERROR',
+      });
+      this.cleanup(streamingId);
+      throw error;
     }
 
     const pipePid = childProcess.pid;
@@ -1473,6 +1490,12 @@ export class ProcessDaemon extends EventEmitter {
 
     childProcess.on('error', (error) => {
       this.handleProcessError(streamingId, error);
+    });
+
+    // Writing to a CLI that has exited fails with EPIPE on stdin; the close
+    // handler reports the exit, and an unhandled stream error would stop the daemon.
+    childProcess.stdin?.on('error', (error) => {
+      logger.warn('Claude CLI stdin error', { streamingId, error: error.message });
     });
   }
 

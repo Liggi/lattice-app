@@ -8,7 +8,7 @@ import { serverAuthHeaders } from './server-auth.js';
 import { readServerAddress } from './session-commands.js';
 import { DECISION_MAX_OPTIONS, DECISION_MIN_OPTIONS, type DecisionOptionData } from '../types/decisions.js';
 
-export const ASK_USAGE = `  lattice ask "<question>" --session <conv-id>
+export const ASK_USAGE = `  lattice ask "<question>" --session <conv-id> [--thread <id>]
         --option "<label>" --because "<what choosing it sets in motion>" [--recommended]
         --option … (${DECISION_MIN_OPTIONS} to ${DECISION_MAX_OPTIONS} options)
       Put a decision that is the user's to make in front of them as a card
@@ -19,7 +19,9 @@ export const ASK_USAGE = `  lattice ask "<question>" --session <conv-id>
       end your turn; the answer arrives as a message from the user.
       --because and --recommended belong to the --option before them. Asking
       again replaces a question still unanswered in the thread. Workers ask
-      their coordinator instead.
+      their coordinator instead. A coordinator names the project thread the
+      question is about with --thread, so the card closes if the user
+      dismisses that thread from their panel.
 `;
 
 function fail(message: string): never {
@@ -29,6 +31,7 @@ function fail(message: string): never {
 
 export async function runAskCommand(args: string[]): Promise<void> {
   let session: string | undefined;
+  let thread: number | undefined;
   const words: string[] = [];
   const options: DecisionOptionData[] = [];
   const last = (flag: string): DecisionOptionData => options.at(-1) ?? fail(`${flag} comes after the --option it belongs to.`);
@@ -40,6 +43,12 @@ export async function runAskCommand(args: string[]): Promise<void> {
     }
     if (arg === '--recommended') {
       last(arg).recommended = true;
+      continue;
+    }
+    if (arg === '--thread') {
+      const value = Number(String(args[++i] ?? '').replace(/^\[|\]$/g, ''));
+      if (!Number.isInteger(value)) fail('--thread takes the thread id `session state` prints in brackets.');
+      thread = value;
       continue;
     }
     if (arg === '--session' || arg === '--option' || arg === '--because') {
@@ -63,7 +72,7 @@ export async function runAskCommand(args: string[]): Promise<void> {
     response = await fetch(`http://${host}:${port}/api/harness/${encodeURIComponent(session)}/decisions`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', ...serverAuthHeaders() },
-      body: JSON.stringify({ question, options }),
+      body: JSON.stringify({ question, options, ...(thread !== undefined ? { thread } : {}) }),
     });
   } catch (error) {
     fail(`could not reach the Lattice server at ${host}:${port}: ${error instanceof Error ? error.message : String(error)}`);

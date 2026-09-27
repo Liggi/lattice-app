@@ -145,7 +145,6 @@ export class LatticeServer {
     // Wire up services that don't depend on processManager
     this.permissionTracker.setNotificationService(this.notificationService);
     this.permissionTracker.setActiveConversationRegistry(this.activeConversationRegistry);
-    this.permissionTracker.setHistoryReader(this.historyReader);
 
     this.logger.debug('Services initialized');
 
@@ -323,7 +322,16 @@ export class LatticeServer {
     this.spawnedDaemonChild = child;
     this.logger.info('Daemon reachable', { socketPath, spawned });
 
-    const client = new ProcessManagerClient(socketPath);
+    // The daemon can die under a running server (2026-09-27: an uncaught
+    // spawn error stopped it); without a new one every session stays down.
+    const client = new ProcessManagerClient(socketPath, {
+      revive: async () => {
+        const revived = await ensureDaemon();
+        if (!revived.spawned) return;
+        this.spawnedDaemonChild = revived.child;
+        this.logger.warn('Process daemon had stopped; started a new one', { socketPath: revived.socketPath, pid: revived.child?.pid });
+      },
+    });
     await client.connect();
     this.processManagerClient = client;
     this.logger.info('Harness daemon client connected');

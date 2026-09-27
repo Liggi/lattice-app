@@ -308,7 +308,7 @@ export function MapCanvas({
   const openArticle = useCallback(
     (articleId: string) => {
       if (onOpenArticle) onOpenArticle(articleId);
-      else navigate(`/map/${encodeURIComponent(mapId)}/article/${encodeURIComponent(articleId)}`);
+      else void navigate(`/map/${encodeURIComponent(mapId)}/article/${encodeURIComponent(articleId)}`);
     },
     [onOpenArticle, navigate, mapId],
   );

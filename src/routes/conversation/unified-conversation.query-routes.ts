@@ -32,6 +32,8 @@ import { appendProjectNote, readProjectState } from '@/services/sessions/project
 import { backfillProjectName } from '@/services/sessions/project-name.js';
 import { normalizeProjectName } from '@/services/insights/anthropic-service.js';
 import { moveThread, moveWorker, ProjectMoveError } from '@/services/sessions/project-move.js';
+import { dismissThread, DismissalError, restoreThread } from '@/services/sessions/thread-dismissal.js';
+import { isFromLatticePage } from '@/middleware/trusted-origin.js';
 import { senderIdentities } from '@/services/sessions/sender-identity.js';
 import {
   PROJECT_NOTE_KINDS,
@@ -531,6 +533,31 @@ export function registerUnifiedConversationQueryRoutes(
     }
   }));
 
+  // The user dismissing a thread from the panel, or bringing one back. From
+  // the page only: these are recorded as the user's call, so an agent must
+  // not be able to make them.
+  for (const action of ['dismiss', 'restore'] as const) {
+    router.post(`/:conversationId/project/threads/:thread/${action}`, asyncHandler(async (req: RequestWithRequestId, res) => {
+      if (!isFromLatticePage(req.headers)) {
+        res.status(403).json({ error: 'Threads are dismissed and brought back from the Lattice page, by the user.' });
+        return;
+      }
+      const { conversationId } = req.params;
+      const thread = Number(req.params.thread);
+      if (!conversationService.getConversation(conversationId)?.coordinator || !Number.isInteger(thread)) {
+        res.status(404).json({ error: 'Not a coordinator thread' });
+        return;
+      }
+      try {
+        const result = action === 'dismiss' ? await dismissThread(conversationId, thread) : (await restoreThread(conversationId, thread), {});
+        res.json({ ok: true, ...result, state: readProjectState(conversationId) });
+      } catch (err) {
+        if (!(err instanceof DismissalError)) throw err;
+        res.status(err.status).json({ error: err.message });
+      }
+    }));
+  }
+
   router.post('/:conversationId/project/note', asyncHandler(async (req: RequestWithRequestId, res) => {
     const { conversationId } = req.params;
     const conversation = conversationService.getConversation(conversationId);
@@ -555,7 +582,7 @@ export function registerUnifiedConversationQueryRoutes(
     const text = typeof body.text === 'string' ? body.text.trim() : '';
     // `close` records how it was resolved and `update` may only change the
     // structured half, so neither needs text; everything else is the note.
-    if (!text && kind !== 'close' && kind !== 'update' && kind !== 'unpark') {
+    if (!text && kind !== 'close' && kind !== 'update' && kind !== 'unpark' && kind !== 'rank') {
       res.status(400).json({ error: 'text is required' });
       return;
     }
@@ -606,6 +633,28 @@ export function registerUnifiedConversationQueryRoutes(
         res.status(400).json({ error: `a priority names an open thread: ${state.open.map((t) => t.seq).join(', ') || 'none open'}` });
         return;
       }
+    }
+
+    // The user's order of priority, restated whole each time: every id is an
+    // open thread, once.
+    if (kind === 'rank') {
+      const order = body.order;
+      const openSeqs = new Set(state.open.map((candidate) => candidate.seq));
+      if (!Array.isArray(order) || order.length === 0 || order.some((seq) => typeof seq !== 'number' || !openSeqs.has(seq))) {
+        res.status(400).json({ error: `order lists open thread ids, most important first: ${state.open.map((t) => t.seq).join(', ') || 'none open'}` });
+        return;
+      }
+      if (new Set(order).size !== order.length) {
+        res.status(400).json({ error: 'order names each thread once' });
+        return;
+      }
+      const seq = appendProjectNote(conversationId, { kind, text, by: 'coordinator', order: order as number[] });
+      if (seq === null) {
+        res.status(503).json({ error: 'Note not recorded' });
+        return;
+      }
+      res.json({ seq, state: readProjectState(conversationId) });
+      return;
     }
 
     // Parking keeps a thread without working it: it leaves the remaining-work
@@ -783,7 +832,7 @@ export function registerUnifiedConversationQueryRoutes(
     }
 
     if (kind === 'update' && !text && owner === undefined && waitingOn === undefined
-      && body.nextAction === undefined && !workers?.length && !addresses?.length
+      && body.nextAction === undefined && body.label === undefined && !workers?.length && !addresses?.length
       && !(Array.isArray(body.evidence) && body.evidence.length > 0)) {
       res.status(400).json({ error: 'an update must change something: a summary, evidence, owner, next action, what it waits on, a worker, or the events it accounts for' });
       return;
@@ -802,6 +851,7 @@ export function registerUnifiedConversationQueryRoutes(
       ...(kind === 'update' || kind === 'close' ? { ref: body.ref } : {}),
       ...(owner ? { owner } : {}),
       ...(typeof body.nextAction === 'string' && body.nextAction.trim() ? { nextAction: body.nextAction.trim() } : {}),
+      ...((kind === 'open' || kind === 'update') && typeof body.label === 'string' && body.label.trim() ? { label: body.label.trim() } : {}),
       ...(waitingOn !== undefined ? { waitingOn } : {}),
       ...(workers?.length ? { workers } : {}),
       ...(addresses?.length ? { addresses } : {}),

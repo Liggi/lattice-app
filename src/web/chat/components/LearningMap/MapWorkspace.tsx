@@ -36,7 +36,7 @@ export function MapWorkspace(): JSX.Element {
   // it. Replace, not push, so Back still leaves the map.
   useEffect(() => {
     if (articleId || !mapId || !remembered.articleId) return;
-    navigate(
+    void navigate(
       `/map/${encodeURIComponent(mapId)}/article/${encodeURIComponent(remembered.articleId)}${suffix}`,
       { replace: true },
     );
@@ -52,7 +52,7 @@ export function MapWorkspace(): JSX.Element {
 
   const openArticle = useCallback(
     (nextArticleId: string) => {
-      navigate(
+      void navigate(
         `/map/${encodeURIComponent(mapId)}/article/${encodeURIComponent(nextArticleId)}${suffix}`,
       );
     },

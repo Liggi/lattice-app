@@ -318,7 +318,7 @@ export function ActionQueueDialog({
   const handleLaunchSession = useCallback(async () => {
     if (launchedSessionId) {
       onClose();
-      navigate(`/c/${launchedSessionId}`);
+      void navigate(`/c/${launchedSessionId}`);
       return;
     }
     if (totalCount === 0 || !onLaunchSession || isLaunchingSession) return;
@@ -623,7 +623,7 @@ export function ActionQueueDialog({
                                   </span>
                                   {rec.sessionId && (
                                     <button
-                                      onClick={() => { onClose(); navigate(`/c/${rec.sessionId}`); }}
+                                      onClick={() => { onClose(); void navigate(`/c/${rec.sessionId}`); }}
                                       className="flex items-center gap-1 text-xs text-fg-3 hover:text-fg transition-colors cursor-pointer"
                                       title={rec.sourceMission || 'View source session'}
                                     >

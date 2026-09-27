@@ -487,7 +487,7 @@ export function registerUnifiedConversationControlRoutes(
       try {
         const analysisService = SessionAnalysisService.getInstance();
         await analysisService.initialize();
-        analysisEligibility = await analysisService.isEligible(providerSessionId);
+        analysisEligibility = await analysisService.isEligible(conversationId);
       } catch (error) {
         logger.debug('[CONV] Failed to check analysis eligibility', {
           conversationId,

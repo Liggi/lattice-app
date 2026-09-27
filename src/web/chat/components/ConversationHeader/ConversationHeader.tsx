@@ -77,7 +77,7 @@ export function ConversationHeader({
             try {
               await api.unifiedUpdateConversation(conversationId, { archived: false });
               await refreshLists();
-              navigate(`/c/${conversationId}`);
+              void navigate(`/c/${conversationId}`);
             } catch (err) {
               console.error('[Archive] Failed to undo archive:', err);
               showToast({ title: 'Could not undo archive', type: 'error' });
@@ -108,7 +108,7 @@ export function ConversationHeader({
       }
 
       await refreshLists();
-      navigate('/', { replace: true });
+      void navigate('/', { replace: true });
       if (!isArchived) offerUndoArchive(sessionId);
     } catch (err) {
       console.error(`[Archive] Failed to ${isArchived ? 'unarchive' : 'archive'} session:`, err);

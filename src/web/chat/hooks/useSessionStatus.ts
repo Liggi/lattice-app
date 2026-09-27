@@ -24,6 +24,8 @@ export interface SessionStatusInfo {
   compacting?: boolean;
   /** The latest turn or run ended in an error (event-log derived). */
   failure?: RunFailure | null;
+  /** The turn is running but held on the user's answer to its question card. */
+  awaitingAnswer?: boolean;
   needsYou?: NeedsYouItem[];
   /** On a project: its Working on line. */
   workingOn?: string | null;

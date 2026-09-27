@@ -11,6 +11,11 @@
  * pushed as changed, so the client refetches it. A score stands until the
  * thread's `updatedAt` changes.
  *
+ * The project's own open question card (`lattice ask`) is a candidate too,
+ * scored the same way: the agent has stopped on a call it says only the user
+ * can make. It stops counting once answered, replaced or settled by a
+ * message (`types/decisions.ts`).
+ *
  * A message from the user to the project answers every ask that was waiting
  * before it, whether or not the coordinator has updated its record yet
  * (2026-09-26: Needs you stayed lit on projects the user had answered and
@@ -32,6 +37,7 @@ import { getEvents } from '../../session-history/repository.js';
 import { WORKER_EVENT_TYPES, foldWorkerStates } from '../../types/worker-events.js';
 import { userName } from '../user-profile.js';
 import { noteStatusChanged } from './session-status-changes.js';
+import { openDecision, type OpenDecision } from './open-decision.js';
 
 const logger = createLogger('ProjectNeedsYou');
 
@@ -119,6 +125,22 @@ function renderState(project: string, thread: ProjectOpenThread, now: number): s
   });
 }
 
+/** The card as the thread-shaped state Jev reads for a thread. */
+function renderCard(project: string, card: OpenDecision, now: number): string {
+  return JSON.stringify({
+    project,
+    thread: {
+      purpose: card.asked.question,
+      where_it_has_got_to: `The agent stopped and put this question to ${userName()} on a card, with these options: ${card.asked.options
+        .map((option) => option.consequence ? `${option.label} (${option.consequence})` : option.label).join('; ')}.`,
+      owner: 'user',
+      waiting_on: { kind: 'decision', text: card.asked.question },
+      next_action: `${userName()} picks an option or answers in their own words.`,
+      days_since_last_update: Math.round(((now - card.askedAt) / DAY_MS) * 10) / 10,
+    },
+  });
+}
+
 function projectName(coordinatorId: string): string {
   const info = SessionInfoService.getInstance().getSessionInfoSync(coordinatorId);
   return info?.custom_name?.trim() || info?.project_name?.trim() || coordinatorId;
@@ -134,8 +156,7 @@ function pump(): void {
   }
 }
 
-function scoreInBackground(coordinatorId: string, thread: ProjectOpenThread): void {
-  const key = `${coordinatorId}:${thread.seq}`;
+function scoreInBackground(coordinatorId: string, key: string, updatedAt: number, seq: number, render: (project: string, now: number) => string): void {
   if (pending.has(key)) return;
   const failed = failedAt.get(key);
   if (failed !== undefined && Date.now() - failed < RETRY_AFTER_FAILURE_MS) return;
@@ -144,19 +165,19 @@ function scoreInBackground(coordinatorId: string, thread: ProjectOpenThread): vo
     try {
       const name = userName();
       const { nouls } = await judgeNouls(
-        renderState(projectName(coordinatorId), thread, Date.now()),
+        render(projectName(coordinatorId), Date.now()),
         { act: actQuestion(name), parked: parkedQuestion(name) },
         { timeoutMs: JEV_TIMEOUT_MS, cost: { operation: 'NEEDS_YOU', sessionId: coordinatorId } },
       );
       const score = nouls.act * (1 - nouls.parked);
-      scores.set(key, { updatedAt: thread.updatedAt, act: nouls.act, parked: nouls.parked, score });
+      scores.set(key, { updatedAt, act: nouls.act, parked: nouls.parked, score });
       failedAt.delete(key);
       noteStatusChanged(coordinatorId);
-      logger.info('Scored a thread waiting on the user', { coordinatorId, seq: thread.seq, act: nouls.act, parked: nouls.parked, score });
+      logger.info('Scored a thread waiting on the user', { coordinatorId, seq, act: nouls.act, parked: nouls.parked, score });
     } catch (err) {
       failedAt.set(key, Date.now());
       const error = err instanceof Error ? err.message : String(err);
-      if (!loggedUnavailable) logger.warn('Needs-you scoring unavailable', { coordinatorId, seq: thread.seq, error });
+      if (!loggedUnavailable) logger.warn('Needs-you scoring unavailable', { coordinatorId, seq, error });
       loggedUnavailable = true;
     } finally {
       pending.delete(key);
@@ -193,6 +214,8 @@ interface ProjectSnapshot {
   workerTasks: Record<string, string>;
   /** When the user last sent the project a message, epoch ms; 0 if never recorded. */
   userSentAt: number;
+  /** The project's own question card, while it waits on the user. */
+  card: OpenDecision | null;
 }
 
 function snapshot(coordinatorId: string): ProjectSnapshot {
@@ -208,6 +231,7 @@ function snapshot(coordinatorId: string): ProjectSnapshot {
     workerTasks: Object.fromEntries(foldWorkerStates(getEvents(coordinatorId, { types: [...WORKER_EVENT_TYPES] }))
       .map(worker => [worker.worker, worker.task])),
     userSentAt: lastUserSentAt(coordinatorId),
+    card: openDecision(coordinatorId),
   };
   snapshots.set(coordinatorId, entry);
   return entry;
@@ -230,12 +254,13 @@ export function projectWorkerTasks(conversationId: string): Record<string, strin
 export function projectNeedsYou(conversationId: string): NeedsYouItem[] | null {
   if (!isCoordinator(conversationId)) return null;
   const items: NeedsYouItem[] = [];
-  const { threads, userSentAt } = snapshot(conversationId);
+  const { threads, userSentAt, card } = snapshot(conversationId);
   for (const thread of threads) {
     if (thread.waitingSince <= userSentAt) continue;
-    const scored = scores.get(`${conversationId}:${thread.seq}`);
+    const key = `${conversationId}:${thread.seq}`;
+    const scored = scores.get(key);
     if (!scored || scored.updatedAt !== thread.updatedAt) {
-      scoreInBackground(conversationId, thread);
+      scoreInBackground(conversationId, key, thread.updatedAt, thread.seq, (project, now) => renderState(project, thread, now));
       continue;
     }
     if (scored.score > NEEDS_YOU_THRESHOLD) {
@@ -244,6 +269,21 @@ export function projectNeedsYou(conversationId: string): NeedsYouItem[] | null {
         text: thread.waitingOn?.text || thread.nextAction || thread.text,
         thread: thread.text,
         since: thread.waitingSince,
+        score: Math.round(scored.score * 100) / 100,
+      });
+    }
+  }
+  if (card && card.askedAt > userSentAt) {
+    const key = `${conversationId}:card:${card.asked.id}`;
+    const scored = scores.get(key);
+    if (!scored) {
+      scoreInBackground(conversationId, key, card.askedAt, card.seq, (project, now) => renderCard(project, card, now));
+    } else if (scored.score > NEEDS_YOU_THRESHOLD) {
+      items.push({
+        seq: card.seq,
+        text: card.asked.question,
+        thread: card.asked.question,
+        since: card.askedAt,
         score: Math.round(scored.score * 100) / 100,
       });
     }

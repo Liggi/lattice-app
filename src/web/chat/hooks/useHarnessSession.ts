@@ -25,7 +25,7 @@ import type { CollapsedGroupData, ToolCallData } from '@liggi/agent-ui-toolkit';
 import { useHydrationTrace } from './useHydrationTrace.js';
 import type { Provider } from '@/types/unified-messages';
 import type { CodexThreadGoal } from '@/services/process/codex-app-server-types';
-import { PROJECT_NOTED_EVENT } from '@/types/project-state';
+import { PROJECT_NOTED_EVENT, type ProjectNotedData } from '@/types/project-state';
 import { FEEDBACK_PROPOSED_EVENT, type FeedbackProposedData } from '@/types/feedback';
 import { DECISION_ANSWERED_EVENT, DECISION_ASKED_EVENT, foldDecisions, placeDecisionsAtTurnEnd, withdrawnDecisionAnswers, type DecisionAnsweredData, type DecisionAskedData, type ThreadDecisions } from '@/types/decisions';
 import {
@@ -875,6 +875,22 @@ function eventToMessage(
           timestamp: new Date(event.timestamp).toISOString(),
           provider,
           decisionAnswer: { decisionId: data.id, inboxId: data.inboxId },
+        };
+      }
+      // The user dismissing a project thread from the panel, or bringing one
+      // back: written as a park note that carries the name the panel showed.
+      if ((event.type as string) === PROJECT_NOTED_EVENT) {
+        const data = event.data as Partial<ProjectNotedData>;
+        if (data.by !== 'user' || (data.kind !== 'park' && data.kind !== 'unpark') || !data.label) return null;
+        return {
+          id: `h-${event.seq}`,
+          messageId: `h-${event.seq}`,
+          type: 'system',
+          content: '',
+          timestamp: new Date(event.timestamp).toISOString(),
+          provider,
+          systemSubtype: 'dismissal',
+          dismissal: { action: data.kind === 'park' ? 'dismissed' : 'restored', label: data.label },
         };
       }
       if ((event.type as string) === FEEDBACK_PROPOSED_EVENT) {

@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { CONFIG_DIR } from '@/utils/constants.js';
+import { writeStderrSafely } from './fail-safe-log-writer.js';
 
 export const LATTICE_LOG_DIR = path.join(CONFIG_DIR, 'logs');
 export const SERVER_JSONL_LOG_PATH = path.join(LATTICE_LOG_DIR, 'server.jsonl');
@@ -61,6 +62,6 @@ export function appendJsonlRecord(filePath: string, record: unknown): void {
   } catch (err) {
     // Best-effort — stderr so it doesn't recurse through pino.
     const message = err instanceof Error ? err.message : String(err);
-    process.stderr.write(`[log-append-error] ${filePath}: ${message}\n`);
+    writeStderrSafely(`[log-append-error] ${filePath}: ${message}\n`);
   }
 }

@@ -134,7 +134,7 @@ export interface ConversationChatMessage {
   workingDirectory?: string; // Working directory when the message was created
   parentToolUseId?: string; // For nested messages from Task tool use
   provider?: Provider; // Which AI provider this message is from/to
-  systemSubtype?: 'compact_boundary' | 'compact_starting' | 'worker' | 'feedback' | 'decision';
+  systemSubtype?: 'compact_boundary' | 'compact_starting' | 'worker' | 'feedback' | 'decision' | 'dismissal';
   /** Heading for an error message; 'Error' when absent. */
   errorTitle?: string;
   /** Present when another agent sent this message; absent on the user's own. */
@@ -149,6 +149,8 @@ export interface ConversationChatMessage {
      */
     reportSummary?: WorkerReportSummaryData;
   };
+  /** Set when systemSubtype is 'dismissal': the user dismissed a project thread from the panel, or brought one back. */
+  dismissal?: { action: 'dismissed' | 'restored'; label: string };
   /** Set when systemSubtype is 'feedback': an agent's feedback proposal, shown as a card to send. */
   feedbackProposal?: FeedbackProposedData;
   /** Set when systemSubtype is 'decision': an agent's question to the user (`lattice ask`), shown as a card to answer. */
@@ -304,6 +306,8 @@ export interface UnifiedConversationSummary {
    * from the status poll client-side; null once new work starts.
    */
   failure?: RunFailure | null;
+  /** The turn is running but held on the user's answer to its question card. Merged from the status poll. */
+  awaitingAnswer?: boolean;
   /**
    * On a project: the threads Jev judges need the user now, highest first.
    * Merged from the status poll; empty when none clear the bar.

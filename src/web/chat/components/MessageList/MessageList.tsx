@@ -7,6 +7,7 @@ import { AskUserQuestionTool } from '@liggi/agent-ui-toolkit';
 import { CompactionDivider } from './CompactionDivider';
 import { SkillConversationContext } from './SkillHeading';
 import { WorkerEventBlock } from '../WorkerEvents/WorkerEventBlock';
+import { DismissalLine } from '../WorkerEvents/DismissalLine';
 import { FeedbackProposalCard } from '../Feedback/FeedbackProposalCard';
 import { DecisionAskCard, useWithdrawnAnswers } from '../Decision/DecisionAskCard';
 import { BLOCK_BUDGET_BASE, BLOCK_BUDGET_STEP } from './message-list-constants';
@@ -480,6 +481,8 @@ export const MessageList: React.FC<MessageListProps> = ({
             <ErrorBoundary name="FeedbackProposal">
               <FeedbackProposalCard proposal={feedbackProposal} timestamp={item.message.timestamp} onNavigateToSession={onNavigateToSession} />
             </ErrorBoundary>
+          ) : item.message.systemSubtype === 'dismissal' ? (
+            <DismissalLine message={item.message} />
           ) : isWorkerMessage ? (
             <ErrorBoundary name="WorkerEvent">
               <WorkerEventBlock message={item.message} onNavigateToSession={onNavigateToSession} />

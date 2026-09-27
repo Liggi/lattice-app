@@ -52,6 +52,11 @@ describe('deriveSessionActivity', () => {
       .toEqual({ kind: 'working', level: 2, busyWorkers: 2 });
   });
 
+  it('shows a running turn held on its question card as needing the user, not working', () => {
+    const session = conv('conv-c', { latestProvider: 'codex', status: 'ongoing', awaitingAnswer: true });
+    expect(deriveSessionActivity(session, [session], false, NOW)).toEqual({ kind: 'needs-you' });
+  });
+
   it('ignores idle and archived workers', () => {
     const project = conv('conv-p', { coordinator: true });
     const list = [project, ...workers(3, 'idle'), conv('conv-a', { pickedUpFrom: 'conv-p', status: 'ongoing', archived: true })];

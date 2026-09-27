@@ -1,7 +1,18 @@
 import type { NeedsYouItem, UnifiedConversationSummary } from '../types';
-import { lastUsedAt } from './sidebar-ordering';
 
-/** Quiet for longer than this, a session is Sleeping rather than Idle. */
+/**
+ * When a conversation was last used. `updatedAt` alone only moves on the legacy
+ * /resume route and on segment changes, so it mostly stays at creation time.
+ * The card's age label and the Idle/Sleeping split read this.
+ */
+export function lastUsedAt(session: UnifiedConversationSummary): number {
+  return new Date(session.lastActivityAt ?? session.updatedAt).getTime();
+}
+
+/**
+ * Quiet for longer than this, a session is Sleeping rather than Idle. The
+ * server's auto-archive (auto-archive-service.ts) archives it a week later.
+ */
 export const SLEEP_AFTER_MS = 30 * 60 * 1000;
 
 /**
@@ -64,7 +75,8 @@ function workerBusy(c: UnifiedConversationSummary): boolean {
 
 /**
  * The one place a sidebar row's state is decided, from what the server already
- * reports: an open permission prompt or question, a last run that ended in an
+ * reports: an open permission prompt or question (including a running turn
+ * held on its question card), a last run that ended in an
  * error, a project ask Jev judges needs the user made within the hour, compaction, whether the
  * session or any of its workers is running, work it armed that will report
  * back, and how long it has been quiet. Working has three levels by busy
@@ -76,7 +88,7 @@ export function deriveSessionActivity(
   needsYou: boolean,
   now: number = Date.now(),
 ): SessionActivity {
-  if (needsYou) return { kind: 'needs-you' };
+  if (needsYou || conversation.awaitingAnswer) return { kind: 'needs-you' };
   if (conversation.failure) return { kind: 'failed', message: conversation.failure.message };
   const asks = freshAsks(conversation, now);
   if (asks.length > 0) return { kind: 'needs-you', asks, strength: Math.max(...asks.map(item => needsYouStrength(item, now))) };

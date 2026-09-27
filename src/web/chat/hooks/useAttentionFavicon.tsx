@@ -126,10 +126,10 @@ export function AttentionFaviconController(): null {
 }
 
 /**
- * Hook to check if a specific session has pending attention items.
- * Reads from the same query cache as the favicon controller (no extra API calls).
+ * Pending attention items per conversation id. Reads from the same query cache
+ * as the favicon controller (no extra API calls).
  */
-export function useSessionAttention(conversationId: string | undefined): boolean {
+export function useSessionAttentionMap(): Record<string, number> {
   const { isConnected } = useActivityStream();
   const { data } = useQuery({
     queryKey: ATTENTION_QUERY_KEY,
@@ -138,7 +138,16 @@ export function useSessionAttention(conversationId: string | undefined): boolean
     refetchInterval: isConnected ? ATTENTION_POLL_STREAMING_MS : ATTENTION_POLL_INTERVAL_MS,
     refetchIntervalInBackground: false,
   });
+  return data?.sessionAttention ?? NO_ATTENTION;
+}
 
-  if (!data || !conversationId) return false;
-  return (data.sessionAttention[conversationId] || 0) > 0;
+const NO_ATTENTION: Record<string, number> = {};
+
+/**
+ * Hook to check if a specific session has pending attention items.
+ */
+export function useSessionAttention(conversationId: string | undefined): boolean {
+  const sessionAttention = useSessionAttentionMap();
+  if (!conversationId) return false;
+  return (sessionAttention[conversationId] || 0) > 0;
 }

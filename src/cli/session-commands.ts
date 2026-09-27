@@ -619,6 +619,17 @@ function parseDecisionSeqs(raw: string, flag: string): number[] {
   return seqs;
 }
 
+/** `--rank 1337,5987,6071`: open thread ids, most important first. */
+function parseThreadIds(raw: string): number[] {
+  const ids = raw.split(',').map((entry) => entry.trim()).filter(Boolean).map((entry) => {
+    const id = Number(entry.replace(/^\[|\]$/g, ''));
+    if (!Number.isInteger(id)) fail(`--rank takes the thread ids \`state\` prints in brackets, got "${entry}"`);
+    return id;
+  });
+  if (ids.length === 0) fail('--rank needs at least one thread id');
+  return ids;
+}
+
 /** `--addresses 412,415` or `--addresses conv-abc`; the server resolves a worker id against the thread being changed. */
 
 function parseAddressesFlag(raw: string): Array<number | string> {
@@ -662,6 +673,7 @@ async function cmdNote(cmd: ParsedCommand): Promise<void> {
   const addresses = str(cmd, 'addresses');
   const summary = str(cmd, 'summary');
   const evidence = str(cmd, 'evidence');
+  const label = str(cmd, 'label');
   if (waitingOn && ready) fail('--waiting-on and --ready contradict each other; pass one');
   // `--with` is the evidence line, and each of these wants its own.
   const usesWith = [
@@ -678,6 +690,7 @@ async function cmdNote(cmd: ParsedCommand): Promise<void> {
     ...(waitingOn ? { waitingOn: parseWaitFlag(waitingOn) } : ready ? { waitingOn: null } : {}),
     ...(worker ? { workers: [worker] } : {}),
     ...(evidence ? { evidence: [evidence] } : {}),
+    ...(label ? { label } : {}),
   };
 
   const open = str(cmd, 'open');
@@ -767,10 +780,13 @@ async function cmdNote(cmd: ParsedCommand): Promise<void> {
     });
   }
 
+  const rank = str(cmd, 'rank');
+  if (rank) notes.push({ kind: 'rank', text: '', by: 'coordinator', order: parseThreadIds(rank) });
+
   const now = str(cmd, 'now');
   if (now) notes.push({ kind: 'now', text: now, by: 'coordinator' });
   if (notes.length === 0) {
-    fail('note needs at least one of --outcome, --priority, --decide, --retire, --open, --thread, --close, --park, --unpark, --now, --reconcile, --account-from-now');
+    fail('note needs at least one of --outcome, --priority, --rank, --decide, --retire, --open, --thread, --close, --park, --unpark, --now, --reconcile, --account-from-now');
   }
 
   if (open && thread !== undefined) fail('--open starts a new thread and --thread updates an existing one; pass one');

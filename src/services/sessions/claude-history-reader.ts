@@ -1,6 +1,7 @@
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
+import { StringDecoder } from 'string_decoder';
 import { ConversationSummary, ConversationMessage, ConversationListQuery, LatticeError, ToolMetrics } from '@/types/index.js';
 
 import { createLogger, type Logger } from '../infrastructure/logger.js';
@@ -24,6 +25,15 @@ interface FetchDirectCacheEntry {
   cachedAt: number;
 }
 
+/**
+ * Largest transcript parsed whole. Parsing holds the text, its lines and the
+ * parsed entries at once: about 3.4 times the file size in heap, measured on a
+ * 182 MB transcript (619 MB). The largest transcripts on the machine this was
+ * measured on were 182 MB, then 1.1 GB; this keeps the first and refuses the
+ * second, which V8 cannot hold as one string anyway.
+ */
+export const MAX_PARSED_TRANSCRIPT_BYTES = 256 * 1024 * 1024;
+
 export class ClaudeHistoryReader {
   private claudeHomePath: string;
   private logger: Logger;
@@ -35,6 +45,13 @@ export class ClaudeHistoryReader {
   // from redundantly reading + parsing the same JSONL file within a small window.
   private fetchDirectCache: Map<string, FetchDirectCacheEntry> = new Map();
   private readonly FETCH_DIRECT_CACHE_TTL_MS = 500;
+
+  // Working directory of each session file, valid while its mtime is unchanged.
+  private sessionDirectoryCache: Map<string, { mtimeMs: number; projectPath: string }> = new Map();
+  // How far into a session file to look for its working directory. It is on
+  // the first entries; a transcript itself can run to gigabytes.
+  private readonly SESSION_HEAD_CHUNK_BYTES = 64 * 1024;
+  private readonly SESSION_HEAD_MAX_BYTES = 1024 * 1024;
 
   constructor(sessionInfoService?: SessionInfoService) {
     this.claudeHomePath = path.join(os.homedir(), '.claude');
@@ -689,21 +706,18 @@ export class ClaudeHistoryReader {
         return null;
       }
 
-      // Read the first entry from the JSONL file to get the actual cwd
+      // Read the first cwd from the head of the JSONL file
       // This is more reliable than decoding the folder name, which is lossy
       // (e.g., "my-org" folder becomes "my/org" when decoded)
-      const entries = await this.parseJsonlFile(filePath);
+      const cwd = await this.readSessionCwd(filePath);
 
-      // Find the first entry with a cwd field
-      const entryWithCwd = entries.find(e => e.cwd);
-
-      if (entryWithCwd?.cwd) {
+      if (cwd) {
         this.logger.debug('Found working directory from JSONL cwd field', {
           sessionId,
-          workingDirectory: entryWithCwd.cwd,
+          workingDirectory: cwd,
           elapsedMs: Date.now() - startTime
         });
-        return entryWithCwd.cwd;
+        return cwd;
       }
 
       // Fallback to folder name decoding if no cwd field found
@@ -724,6 +738,80 @@ export class ClaudeHistoryReader {
       this.logger.error('Error getting working directory for conversation', error, { sessionId });
       return null;
     }
+  }
+
+  /**
+   * Each Claude session's working directory and last activity, without parsing
+   * transcripts: the directory is read from the head of the file and the file's
+   * mtime stands in for its last message. Parsing every transcript to answer
+   * this held all of history in memory and ran the server out of heap.
+   */
+  async listSessionDirectories(): Promise<Array<{ projectPath: string; updatedAt: string }>> {
+    const modTimes = await this.getFileModificationTimes();
+    const sessions: Array<{ projectPath: string; updatedAt: string }> = [];
+
+    for (const [filePath, mtimeMs] of modTimes) {
+      let cached = this.sessionDirectoryCache.get(filePath);
+      if (!cached || cached.mtimeMs !== mtimeMs) {
+        const projectPath = await this.readSessionCwd(filePath)
+          ?? this.decodeProjectPath(this.extractSourceProject(filePath));
+        cached = { mtimeMs, projectPath };
+        this.sessionDirectoryCache.set(filePath, cached);
+      }
+      sessions.push({ projectPath: cached.projectPath, updatedAt: new Date(mtimeMs).toISOString() });
+    }
+
+    for (const filePath of this.sessionDirectoryCache.keys()) {
+      if (!modTimes.has(filePath)) this.sessionDirectoryCache.delete(filePath);
+    }
+    return sessions;
+  }
+
+  /**
+   * The first `cwd` among a session file's complete lines, reading it in chunks
+   * and giving up at SESSION_HEAD_MAX_BYTES.
+   */
+  private async readSessionCwd(filePath: string): Promise<string | null> {
+    let handle: fs.FileHandle | null = null;
+    try {
+      handle = await fs.open(filePath, 'r');
+      const buffer = Buffer.alloc(this.SESSION_HEAD_CHUNK_BYTES);
+      // Holds back a multi-byte character split across two chunks.
+      const decoder = new StringDecoder('utf8');
+      let pending = '';
+      let offset = 0;
+
+      while (offset < this.SESSION_HEAD_MAX_BYTES) {
+        const { bytesRead } = await handle.read(buffer, 0, buffer.length, offset);
+        if (bytesRead === 0) break;
+        offset += bytesRead;
+
+        const lines = (pending + decoder.write(buffer.subarray(0, bytesRead))).split('\n');
+        pending = lines.pop() ?? '';
+        const cwd = this.firstCwd(lines);
+        if (cwd) return cwd;
+      }
+      // A file that ends without a newline still has a complete last line.
+      return offset < this.SESSION_HEAD_MAX_BYTES ? this.firstCwd([pending]) : null;
+    } catch (error) {
+      this.logger.warn('Failed to read session working directory', { filePath, error });
+      return null;
+    } finally {
+      await handle?.close();
+    }
+  }
+
+  private firstCwd(lines: string[]): string | null {
+    for (const line of lines) {
+      if (!line.includes('"cwd"')) continue;
+      try {
+        const cwd = (parseJson(line) as RawJsonEntry).cwd;
+        if (typeof cwd === 'string' && cwd) return cwd;
+      } catch {
+        // Malformed line; keep looking.
+      }
+    }
+    return null;
   }
 
   /**
@@ -886,10 +974,19 @@ export class ClaudeHistoryReader {
   }
   
   /**
-   * Parse a single JSONL file and return all valid entries
+   * Parse a single JSONL file and return all valid entries.
+   * Throws TRANSCRIPT_TOO_LARGE for a file over MAX_PARSED_TRANSCRIPT_BYTES.
    */
   private async parseJsonlFile(filePath: string): Promise<RawJsonEntry[]> {
     try {
+      const { size } = await fs.stat(filePath);
+      if (size > MAX_PARSED_TRANSCRIPT_BYTES) {
+        throw new LatticeError(
+          'TRANSCRIPT_TOO_LARGE',
+          `Transcript is ${size} bytes, over the ${MAX_PARSED_TRANSCRIPT_BYTES}-byte limit for a full read: ${filePath}`,
+          413
+        );
+      }
       const content = await fs.readFile(filePath, 'utf-8');
       const lines = content.split('\n').filter(line => line.trim());
       const entries: RawJsonEntry[] = [];
@@ -909,6 +1006,7 @@ export class ClaudeHistoryReader {
       
       return entries;
     } catch (error) {
+      if (error instanceof LatticeError) throw error;
       this.logger.error('Failed to read JSONL file', error, { filePath });
       return [];
     }

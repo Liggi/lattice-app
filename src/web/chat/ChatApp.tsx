@@ -61,7 +61,7 @@ function ConversationViewWrapper(): JSX.Element {
 
     if (conversationId.startsWith('conv-')) return;
     if (conversationId.startsWith('pending-')) {
-      navigate('/', { replace: true });
+      void navigate('/', { replace: true });
       return;
     }
 
@@ -71,13 +71,13 @@ function ConversationViewWrapper(): JSX.Element {
         const resolved = await api.resolveUnifiedConversationId(conversationId);
         if (cancelled) return;
         if (resolved.conversationId && resolved.conversationId.startsWith('conv-')) {
-          navigate(`/c/${resolved.conversationId}`, { replace: true });
+          void navigate(`/c/${resolved.conversationId}`, { replace: true });
           return;
         }
-        navigate('/', { replace: true });
+        void navigate('/', { replace: true });
       } catch (_error) {
         if (cancelled) return;
-        navigate('/', { replace: true });
+        void navigate('/', { replace: true });
       }
     })();
 
@@ -135,7 +135,7 @@ function HomeRedirect(): JSX.Element {
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
     if (activeSessions.length > 0) {
-      navigate(`/c/${activeSessions[0].conversationId}`, { replace: true });
+      void navigate(`/c/${activeSessions[0].conversationId}`, { replace: true });
     }
   }, [conversations, loading, navigate]);
 

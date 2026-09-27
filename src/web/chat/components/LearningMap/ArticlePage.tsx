@@ -229,7 +229,7 @@ export function ArticlePage({ onOpenArticle }: ArticlePageProps = {}): JSX.Eleme
   // --- Following a question out ------------------------------------------
   const openArticle = useCallback((nextArticleId: string) => {
     if (onOpenArticle) onOpenArticle(nextArticleId);
-    else navigate(`/map/${encodeURIComponent(mapId)}/article/${encodeURIComponent(nextArticleId)}`);
+    else void navigate(`/map/${encodeURIComponent(mapId)}/article/${encodeURIComponent(nextArticleId)}`);
   }, [onOpenArticle, navigate, mapId]);
 
   const writer = useArticleWriter({

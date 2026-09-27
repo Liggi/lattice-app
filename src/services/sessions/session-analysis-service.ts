@@ -6,7 +6,8 @@ import { createLogger, type Logger } from '../infrastructure/logger.js';
 import { DatabaseProvider } from '../infrastructure/database-provider.js';
 import { SessionInfoService } from '../sessions/session-info-service.js';
 import { ClaudeHistoryReader } from '../sessions/claude-history-reader.js';
-import { readMessages } from '../../harness/event-message-reader.js';
+import { getEventStorage, readMessages } from '../../harness/event-message-reader.js';
+import { readSeedActivityMessages } from './recent-activity-messages.js';
 import type { UnifiedMessage } from '@/types/unified-messages.js';
 
 // ============================================================================
@@ -200,23 +201,27 @@ export class SessionAnalysisService {
   // ============================================================================
 
   /**
-   * Check if a session is eligible for analysis.
+   * Check if a conversation is eligible for analysis.
    * Eligible if: ≥10 messages OR ≥5 min duration OR ≥5 tool uses
+   *
+   * Reads a bounded tail of the conversation's harness events, never its
+   * transcript. On a long conversation the message and tool counts cover the
+   * newest messages only, which is enough to clear the thresholds.
    */
-  async isEligible(sessionId: string): Promise<EligibilityResult> {
+  async isEligible(conversationId: string): Promise<EligibilityResult> {
     try {
-      // Quick check: get basic message info from session file
-      const { messages } = await this.historyReader.fetchConversationDirect(sessionId);
+      const storage = getEventStorage();
+      const messages = readSeedActivityMessages(storage, conversationId);
 
       const messageCount = messages.length;
       const toolUseCount = this.countToolUses(messages);
 
-      // Calculate duration from first to last message
+      // Calculate duration from the first to the last event
       let durationMinutes: number | null = null;
-      if (messages.length >= 2) {
-        const firstTs = new Date(messages[0].timestamp).getTime();
-        const lastTs = new Date(messages[messages.length - 1].timestamp).getTime();
-        durationMinutes = Math.round((lastTs - firstTs) / 60000);
+      const first = storage.read(conversationId, { limit: 1 })[0];
+      const last = storage.readTail(conversationId, 1)[0];
+      if (first && last && last.seq > first.seq) {
+        durationMinutes = Math.round((last.timestamp - first.timestamp) / 60000);
       }
 
       const metrics = { messageCount, toolUseCount, durationMinutes };
@@ -238,7 +243,7 @@ export class SessionAnalysisService {
         metrics,
       };
     } catch (error) {
-      this.logger.error('Failed to check eligibility', { sessionId, error });
+      this.logger.error('Failed to check eligibility', { conversationId, error });
       return { eligible: false, reason: 'Failed to read session' };
     }
   }

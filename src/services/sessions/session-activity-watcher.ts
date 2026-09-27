@@ -4,7 +4,10 @@ import * as path from 'path';
 import * as os from 'os';
 import { createLogger } from '../infrastructure/logger.js';
 import { InsightsEngine } from '../insights/insights-engine.js';
-import { ClaudeHistoryReader } from '../sessions/claude-history-reader.js';
+import { getEventStorage } from '../../harness/event-message-reader.js';
+import { ConversationService } from './conversation-service.js';
+import { readSeedActivityMessages } from './recent-activity-messages.js';
+import type { ConversationMessage } from '@/types/index.js';
 
 interface MiniAction {
   tool: string;
@@ -26,13 +29,23 @@ interface InsightsUpdate {
   traceId?: string; // End-to-end trace ID for debugging
 }
 
+interface ActivityWatcherDeps {
+  /** The conv-* ID a provider session UUID belongs to, or null for sessions Lattice did not start. */
+  resolveConversationId: (providerSessionId: string) => string | null;
+  /** Newest messages of a conversation, from its harness event log. */
+  readRecentMessages: (conversationId: string) => ConversationMessage[];
+}
+
 /**
- * Watches Claude session JSONL files for changes and emits activity updates
+ * Watches Claude session JSONL files for changes and emits activity updates.
+ * A file change is only the trigger: the actions are read from the
+ * conversation's harness event log, never from the transcript, which can run
+ * past a gigabyte.
  */
 export class SessionActivityWatcher extends EventEmitter {
   private logger = createLogger('SessionActivityWatcher');
   private insightsEngine: InsightsEngine;
-  private historyReader: ClaudeHistoryReader;
+  private deps: ActivityWatcherDeps;
   private watchers: Map<string, fs.FSWatcher> = new Map();
   private debounceTimers: Map<string, NodeJS.Timeout> = new Map();
   private projectsDir: string;
@@ -41,9 +54,14 @@ export class SessionActivityWatcher extends EventEmitter {
   // Debounce file changes to avoid rapid-fire updates
   private readonly DEBOUNCE_MS = 100;
 
-  constructor() {
+  constructor(deps?: Partial<ActivityWatcherDeps>) {
     super();
-    this.historyReader = new ClaudeHistoryReader();
+    this.deps = {
+      resolveConversationId: (providerSessionId) =>
+        ConversationService.getInstance().getConversationByProviderSession(providerSessionId)?.conversation.conversationId ?? null,
+      readRecentMessages: (conversationId) => readSeedActivityMessages(getEventStorage(), conversationId),
+      ...deps,
+    };
     this.insightsEngine = InsightsEngine.getInstance();
     this.projectsDir = path.join(os.homedir(), '.claude', 'projects');
   }
@@ -192,8 +210,7 @@ export class SessionActivityWatcher extends EventEmitter {
       const watcher = fs.watch(projectPath, { persistent: false }, (eventType, filename) => {
         if (!filename || !filename.endsWith('.jsonl')) return;
 
-        const filePath = path.join(projectPath, filename);
-        this.handleFileChange(filePath, filename);
+        this.handleFileChange(filename);
       });
 
       this.watchers.set(projectPath, watcher);
@@ -203,7 +220,7 @@ export class SessionActivityWatcher extends EventEmitter {
     }
   }
 
-  private handleFileChange(filePath: string, filename: string): void {
+  private handleFileChange(filename: string): void {
     // Extract session ID from filename (e.g., "abc123-def456.jsonl" -> "abc123-def456")
     const sessionId = filename.replace('.jsonl', '');
 
@@ -220,38 +237,46 @@ export class SessionActivityWatcher extends EventEmitter {
 
     this.debounceTimers.set(sessionId, setTimeout(() => {
       this.debounceTimers.delete(sessionId);
-      void this.extractAndEmit(sessionId, filePath);
+      this.extractAndEmit(sessionId);
     }, this.DEBOUNCE_MS));
   }
 
-  private async extractAndEmit(sessionId: string, _filePath: string): Promise<void> {
+  /**
+   * Synchronous, so two changes to one file can never overlap in a read.
+   * Exposed for tests.
+   */
+  extractAndEmit(providerSessionId: string): void {
     try {
-      const { messages } = await this.historyReader.fetchConversationDirect(sessionId);
+      // Sessions Lattice did not start have no conversation and cost nothing.
+      const conversationId = this.deps.resolveConversationId(providerSessionId);
+      if (!conversationId) return;
+
+      const messages = this.deps.readRecentMessages(conversationId);
       const recentActions = this.insightsEngine.extractRecentActions(messages, 10);
 
       // Only emit when we have something to show
       if (recentActions.length === 0) {
         this.logger.debug('Skipping empty activity update', {
-          sessionId: sessionId.slice(0, 8)
+          conversationId: conversationId.slice(0, 12)
         });
         return;
       }
 
       const update: ActivityUpdate = {
-        sessionId,
+        sessionId: conversationId,
         recentActions,
         timestamp: Date.now()
       };
 
       this.logger.debug('Emitting activity update', {
-        sessionId: sessionId.slice(0, 8),
+        conversationId: conversationId.slice(0, 12),
         actionCount: recentActions.length
       });
 
       this.emit('activity', update);
     } catch (error) {
       this.logger.debug('Failed to extract activity', {
-        sessionId: sessionId.slice(0, 8),
+        sessionId: providerSessionId.slice(0, 8),
         error
       });
     }

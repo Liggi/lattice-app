@@ -444,7 +444,7 @@ describe('project routes', () => {
     const empty = await request(server).get(`/api/conv/${coordinator.conversationId}/project`);
     expect(empty.status).toBe(200);
     expect(empty.body).toEqual({
-      outcome: null, decisions: [], retired: [], priority: null, open: [], closed: [],
+      outcome: null, decisions: [], retired: [], priority: null, rank: [], open: [], closed: [],
       attention: [], historical: [], accountingFrom: null, now: null, nudges: 0, revision: 0,
       // Always sent, empty when no worker carrying an open thread has anything queued.
       unread: {},

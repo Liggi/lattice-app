@@ -9,6 +9,7 @@ import type { SqliteEventStorageAdapter } from '@/harness/sqlite-event-storage.j
 import { deriveSessionStatusFromEvents, type RunFailure } from '@/harness/derive-session-status.js';
 import type { PendingWork } from '@/harness/derive-pending-work.js';
 import { deriveScheduledWakeup } from '@liggi/agent-ui-harness/protocol';
+import { foldDecisions, isOpenDecision } from '@/types/decisions.js';
 import { projectNeedsYou, projectWorkerTasks, projectWorkingOn, type NeedsYouItem } from '@/services/sessions/project-needs-you.js';
 
 interface SessionStatusRoutesDeps {
@@ -47,6 +48,12 @@ interface SessionStatusInfo {
   compacting?: boolean;
   /** The latest turn or run ended in an error; null once new work starts. */
   failure?: RunFailure | null;
+  /**
+   * The turn is running but held on the user's answer to its question card,
+   * as a Codex turn is after request_user_input_async. Shown as waiting on
+   * the user, not as working.
+   */
+  awaitingAnswer?: boolean;
   /** On a coordinator: its threads Jev judges need the user now, highest first. */
   needsYou?: NeedsYouItem[];
   /** On a coordinator: the project's Working on line, without thread references. */
@@ -134,6 +141,7 @@ interface CachedEventStatus {
   wakeAt: number | null;
   compacting: boolean;
   failure: RunFailure | null;
+  awaitingAnswer: boolean;
 }
 const eventStatusCache = new Map<string, CachedEventStatus>();
 
@@ -169,6 +177,8 @@ function deriveCached(
     wakeAt: derived.pendingWork === 'scheduled_wakeup' ? deriveScheduledWakeup(events)?.expectedAt ?? null : null,
     compacting: derived.compacting,
     failure: derived.failure,
+    awaitingAnswer: derived.status === 'ongoing'
+      && [...foldDecisions(storage.readDecisionEvents(conversationId)).values()].some(isOpenDecision),
   };
   eventStatusCache.set(conversationId, entry);
   return entry;
@@ -224,6 +234,7 @@ export function createSessionStatusRoutes(deps: SessionStatusRoutesDeps): Router
         wakeAt: derived?.wakeAt ?? null,
         compacting: derived?.compacting ?? false,
         failure: derived?.failure ?? null,
+        awaitingAnswer: derived?.awaitingAnswer ?? false,
         provider: registryEntry?.segment.provider ?? derived?.providerFromEvents ?? null,
         streamingId: registryEntry?.run?.streamingId ?? null,
         startedAt: registryEntry?.run?.startedAt ?? null,

@@ -866,6 +866,7 @@ export function ConversationsProvider({ children }: { children: ReactNode }): JS
         pendingWork: status.pendingWork ?? null,
         compacting: status.compacting ?? false,
         failure: status.failure ?? null,
+        awaitingAnswer: status.awaitingAnswer ?? false,
         projectNeedsYou: status.needsYou ?? [],
         projectWorkingOn: status.workingOn ?? null,
         projectWorkerTasks: status.workerTasks ?? null,

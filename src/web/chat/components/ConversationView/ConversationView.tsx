@@ -1,7 +1,7 @@
 /* oxlint-disable react-doctor/no-cascading-set-state, react-doctor/no-giant-component, react-doctor/prefer-useReducer, react-doctor/no-render-in-render, react-doctor/no-effect-event-handler */
 import React, { useState, useEffect, useCallback, useRef, useMemo, Profiler } from 'react';
 import { DecisionsProvider } from '../Decision/DecisionAskCard';
-import { CLAUDE_QUESTION_ID_PREFIX } from '@/types/decisions';
+import { CLAUDE_QUESTION_ID_PREFIX, isOpenDecision } from '@/types/decisions';
 import type { QuestionRequest } from '../../types';
 import { QueuedMessages } from './QueuedMessages';
 import { SenderNamesProvider } from '../shared/sender-names';
@@ -981,6 +981,8 @@ export function ConversationView({ sidebarOpen, onToggleSidebar }: ConversationV
   // processAlive = keep-alive process connected (from events: turn:end = alive, run:end = dead)
   // isActive/isStreaming = harness status derivation
   const isProviderBusy = isActive;
+  // A turn held on its own question card (a Codex request_user_input_async) waits on the user, not on the agent.
+  const awaitingAnswer = isProviderBusy && [...harnessDecisions.byId.values()].some(isOpenDecision);
 
   const wasIdleRef = useRef(isIdle);
   useEffect(() => {
@@ -1327,6 +1329,7 @@ export function ConversationView({ sidebarOpen, onToggleSidebar }: ConversationV
                   renderActionsExtra={renderComposerGoalAction}
                   runtimeConfig={{
                     isSessionActive: isProviderBusy && !isCompactingAfterReply,
+                    awaitingAnswer,
                     // While hydrating, status is gated to 'idle' (see
                     // useHarnessSession) but processAlive derives from the
                     // partial event log — the pair reads alive+idle, which the
@@ -1373,6 +1376,7 @@ export function ConversationView({ sidebarOpen, onToggleSidebar }: ConversationV
             project={project}
             coordinatorRunning={harnessStatus === 'streaming' || harnessStatus === 'initializing'}
             onOpenWorker={(workerId) => navigate(`/c/${workerId}`)}
+            coordinatorId={conversationId}
           />
           ) : isWorkerSession ? null : (
           <InsightsPanel
@@ -1387,7 +1391,7 @@ export function ConversationView({ sidebarOpen, onToggleSidebar }: ConversationV
             onJumpToTurn={handleJumpToTurn}
             onBranch={async (newSessionId) => {
               await invalidateConversations();
-              navigate(`/c/${newSessionId}`);
+              void navigate(`/c/${newSessionId}`);
             }}
           />
           )}

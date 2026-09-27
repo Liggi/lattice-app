@@ -1,7 +1,6 @@
 import type { JSX } from 'react';
 import type { UnifiedConversationSummary } from '../../../types';
-import { quietFor, type SessionActivity } from '../../../utils/session-activity';
-import { lastUsedAt } from '../../../utils/sidebar-ordering';
+import { lastUsedAt, quietFor, type SessionActivity } from '../../../utils/session-activity';
 import { SessionStateIcon } from './SessionStateIcon';
 
 const MAX_WORKERS = 4;

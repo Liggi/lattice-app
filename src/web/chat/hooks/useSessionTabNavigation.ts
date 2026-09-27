@@ -1,7 +1,7 @@
 import { useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useConversations } from '../contexts/ConversationsContext';
-import { getSidebarOrderedSessionIds } from '../utils/sidebar-ordering';
+import { useSidebarLists } from './useSidebarLists';
+import { sidebarOrderedIds } from '../utils/sidebar-ordering';
 
 /**
  * Enables Ctrl+Tab / Ctrl+Shift+Tab to cycle through sessions in sidebar visual order.
@@ -9,9 +9,8 @@ import { getSidebarOrderedSessionIds } from '../utils/sidebar-ordering';
  */
 export function useSessionTabNavigation(currentSessionId: string | undefined): void {
   const navigate = useNavigate();
-  const { conversations } = useConversations();
-
-  const orderedIds = useMemo(() => getSidebarOrderedSessionIds(conversations), [conversations]);
+  const lists = useSidebarLists();
+  const orderedIds = useMemo(() => sidebarOrderedIds(lists), [lists]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -33,7 +32,7 @@ export function useSessionTabNavigation(currentSessionId: string | undefined): v
 
       const nextId = orderedIds[nextIndex];
       if (nextId && nextId !== currentSessionId) {
-        navigate(`/c/${nextId}`);
+        void navigate(`/c/${nextId}`);
       }
     };
 
