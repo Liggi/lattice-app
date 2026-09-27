@@ -363,19 +363,11 @@ export function ProviderAuthTab(): JSX.Element {
               </div>
             </div>
             {claudeAuthMode === 'api-key' && (
-              <>
-                <SecretKeyField
-                  id="claude-anthropic-key"
-                  label="Anthropic API key"
-                  hint="Billed per token by Anthropic; also used for summaries and quick answers"
-                  placeholder="sk-ant-..."
-                  configured={anthropicKeyConfigured}
-                  onSave={(value) => saveClaudeBilling({ apiKey: value })}
-                />
-                {!anthropicKeyConfigured && (
-                  <p className="text-xs text-amber-300">No key saved yet, so conversations still use the Claude sign-in.</p>
-                )}
-              </>
+              <p className={`text-xs ${anthropicKeyConfigured ? 'text-fg-3' : 'text-amber-300'}`}>
+                {anthropicKeyConfigured
+                  ? 'Billed per token to the Anthropic API key below.'
+                  : 'No Anthropic API key saved below yet, so conversations still use the Claude sign-in.'}
+              </p>
             )}
             {billingError && <p className="text-xs text-rose-300">{billingError}</p>}
           </div>
@@ -454,6 +446,20 @@ export function ProviderAuthTab(): JSX.Element {
           </div>
         )}
       </ProviderCard>
+
+      <section className="border border-line rounded-lg bg-bg p-4 space-y-2">
+        <SecretKeyField
+          id="claude-anthropic-key"
+          label="Anthropic API key"
+          hint="Optional"
+          placeholder="sk-ant-..."
+          configured={anthropicKeyConfigured}
+          onSave={(value) => saveClaudeBilling({ apiKey: value })}
+        />
+        <p className="text-xs text-fg-3">
+          For Lattice&apos;s own short model calls: report summaries, worker activity lines and project names. Billed per token by Anthropic, apart from your plans.
+        </p>
+      </section>
 
       {error && (
         <p className="text-xs text-rose-300">{error}</p>

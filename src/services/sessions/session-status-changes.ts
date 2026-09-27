@@ -20,3 +20,19 @@ export function onStatusChanged(listener: (sessionId: string) => void): () => vo
   emitter.on('changed', listener);
   return () => { emitter.off('changed', listener); };
 }
+
+/**
+ * A turn began that no provider event announces: a message delivered into a
+ * running turn that the provider then started as a turn of its own (the
+ * `input:incorporated` with `where: 'next-turn'`, appended by the server, not
+ * the provider). Harness setup forwards this to the registry's session-started
+ * push, so the sidebar shows the turn and its end pushes idle again.
+ */
+export function noteTurnStarted(sessionId: string): void {
+  emitter.emit('turn-started', sessionId);
+}
+
+export function onTurnStarted(listener: (sessionId: string) => void): () => void {
+  emitter.on('turn-started', listener);
+  return () => { emitter.off('turn-started', listener); };
+}

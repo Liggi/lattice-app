@@ -140,6 +140,11 @@ export class PermissionTracker extends EventEmitter {
     return this.activeConversationRegistry.getStreamingIdForSession(asClaudeSessionId(sessionId));
   }
 
+  /** The provider session a streaming process belongs to, if the registry knows it. */
+  sessionIdForStreaming(streamingId: string): string | undefined {
+    return this.activeConversationRegistry?.getSessionIdForStreaming(asStreamingId(streamingId));
+  }
+
   /**
    * Add a new permission request.
    *
@@ -148,16 +153,20 @@ export class PermissionTracker extends EventEmitter {
    * SessionManager update that index through the harness's
    * `onFollowUpSpawn` callback (see harness/setup.ts), so the registry
    * stays current across stdin-write turns and respawn turns alike.
+   *
+   * A request with a `coordinator` is that coordinator's to decide, so the
+   * user is not notified until it escalates (`escalatePermission`).
    */
   addPermissionRequest(
     toolName: string,
     toolInput: Record<string, unknown>,
     streamingId?: string,
+    options?: { reason?: string; coordinator?: string; sessionId?: string },
   ): PermissionRequest {
     const id = randomUUID();
-    const sessionId = streamingId && this.activeConversationRegistry
-      ? this.activeConversationRegistry.getSessionIdForStreaming(asStreamingId(streamingId))
-      : undefined;
+    // A hook names its provider session itself; after a server restart the
+    // registry no longer maps a surviving process's streaming ID to it.
+    const sessionId = (streamingId ? this.sessionIdForStreaming(streamingId) : undefined) ?? options?.sessionId;
     const request: PermissionRequest = {
       id,
       streamingId: streamingId || 'unknown',
@@ -166,49 +175,65 @@ export class PermissionTracker extends EventEmitter {
       toolInput,
       timestamp: new Date().toISOString(),
       status: 'pending',
+      ...(options?.reason ? { reason: options.reason } : {}),
+      ...(options?.coordinator ? { coordinator: options.coordinator } : {}),
     };
 
     this.permissionRequests.set(id, request);
-    logger.info('Permission request added', { id, toolName, streamingId });
+    logger.info('Permission request added', { id, toolName, streamingId, coordinator: options?.coordinator });
 
     // Emit event for new permission request
     this.emit('permission_request', request);
 
-    // Send notification if services are available
-    if (this.notificationService && this.activeConversationRegistry && this.historyReader) {
-      // Get session ID from streaming ID
-      const sessionId = this.activeConversationRegistry.getSessionIdForStreaming(asStreamingId(streamingId || ''));
-      
-      if (sessionId) {
-        // Try to get conversation summary
-        this.historyReader.fetchConversationDirect(sessionId)
-          .then(({ metadata }) => {
-            if (this.notificationService) {
-              return this.notificationService.sendPermissionNotification(
-                request,
-                sessionId,
-                metadata?.summary
-              );
-            }
-          })
-          .catch(error => {
-            logger.error('Failed to fetch conversation metadata for notification', error);
-            // Fall back to sending without summary
-            if (this.notificationService) {
-              this.notificationService.sendPermissionNotification(request, sessionId)
-                .catch(err => logger.error('Failed to send permission notification', err));
-            }
-          });
-      } else {
-        // No session ID available, send without session info
-        this.notificationService.sendPermissionNotification(request)
-          .catch(error => {
-            logger.error('Failed to send permission notification', error);
-          });
-      }
-    }
+    if (!request.coordinator) this.notify(request);
 
     return request;
+  }
+
+  /**
+   * The coordinator handed a pending request to the user. The request stays
+   * pending; it now shows to the user and notifies them as an unrouted one would.
+   */
+  escalatePermission(id: string, why: string): PermissionRequest | undefined {
+    const request = this.permissionRequests.get(id);
+    if (!request || request.status !== 'pending') return undefined;
+    request.escalation = { why, at: new Date().toISOString() };
+    logger.info('Permission request escalated to the user', { id, coordinator: request.coordinator });
+    this.emit('permission_updated', request);
+    this.notify(request);
+    return request;
+  }
+
+  private notify(request: PermissionRequest): void {
+    if (!this.notificationService || !this.historyReader) return;
+    const sessionId = request.sessionId;
+    if (sessionId) {
+      // Try to get conversation summary
+      this.historyReader.fetchConversationDirect(sessionId)
+        .then(({ metadata }) => {
+          if (this.notificationService) {
+            return this.notificationService.sendPermissionNotification(
+              request,
+              sessionId,
+              metadata?.summary
+            );
+          }
+        })
+        .catch(error => {
+          logger.error('Failed to fetch conversation metadata for notification', error);
+          // Fall back to sending without summary
+          if (this.notificationService) {
+            this.notificationService.sendPermissionNotification(request, sessionId)
+              .catch(err => logger.error('Failed to send permission notification', err));
+          }
+        });
+    } else {
+      // No session ID available, send without session info
+      this.notificationService.sendPermissionNotification(request)
+        .catch(error => {
+          logger.error('Failed to send permission notification', error);
+        });
+    }
   }
 
   /**

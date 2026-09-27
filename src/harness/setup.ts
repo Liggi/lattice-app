@@ -13,6 +13,7 @@ import { MultiplexingProcessAdapter } from './multiplexing-process-adapter.js';
 import { appendCustomHarnessEvent } from './harness-custom-events.js';
 import { createHarnessRoutes } from './routes.js';
 import { createEventSideEffectsCallback } from './event-side-effects.js';
+import { onTurnStarted } from '../services/sessions/session-status-changes.js';
 import { SqliteEventStorageAdapter } from './sqlite-event-storage.js';
 import { initEventMessageReader } from './event-message-reader.js';
 import { runStartupRecoverySweep } from './startup-recovery-sweep.js';
@@ -109,6 +110,7 @@ export function setupHarness(deps: HarnessSetupDeps): HarnessRuntime {
   initEventMessageReader(eventStorage);
 
   const registry = deps.activeConversationRegistry;
+  onTurnStarted((sessionId) => registry.notifyActive(sessionId));
   _sessionManager = new SessionManager(adapter, {
     logger: {
       debug: (msg, data) => logger.debug(msg, data),

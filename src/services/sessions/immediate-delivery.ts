@@ -16,9 +16,8 @@
  * would act on it without having been told what came before. The batch is
  * every ready row in arrival order, composed by the same composer the drain
  * uses, so provenance and attachments are identical whichever route carries
- * them. Rows held for a quick answer are not ready and stay where they are,
- * and so are rows whose sender asked them to wait for the turn to end
- * (`send --after-turn`): a later message going in immediately passes them,
+ * them. Rows whose sender asked them to wait for the turn to end
+ * (`send --after-turn`) are not ready: a later message going in immediately passes them,
  * which is what the sender asked for, and they go at the turn boundary.
  *
  * **A reservation, not a flag.** Between choosing the rows and hearing back
@@ -67,6 +66,7 @@ import {
   unreadInboxItems,
 } from './session-inbox.js';
 import { withTurnAdmission, type TurnAdmission } from './turn-admission.js';
+import { noteTurnStarted } from './session-status-changes.js';
 
 const logger = createLogger('ImmediateDelivery');
 
@@ -175,6 +175,7 @@ export async function deliverIntoRunningTurn(input: {
       ...(late ? { late: true } : {}),
     } satisfies InputIncorporatedData);
     logger.info('Batch was taken into a turn', { sessionId, reservationId, where: stage.where, late });
+    if (stage.where === 'next-turn') noteTurnStarted(sessionId);
     // Anything that arrived while the delivery was unresolved was held out of
     // the drain by it (see `sessionHasDeliveryInFlight`); this is where it
     // becomes deliverable again.
@@ -296,7 +297,7 @@ export async function deliverIntoRunningTurn(input: {
  * is mid-turn and can take it, at the turn boundary otherwise.
  *
  * This is the entry point for rows the server writes on its own account — a
- * quick answer the fast responder has already shown the user — rather than ones
+ * worker's report, the user's reaction — rather than ones
  * that arrive through the send route with an admission already held. The
  * refusal is the signal: a session that is not in a turn cannot be steered,
  * and `deliverIntoRunningTurn` releases the batch when it says so, which is

@@ -51,6 +51,9 @@ const PRICING: Record<string, { input: number; output: number }> = {
   'claude-sonnet-4-5': { input: 3.0, output: 15.0 },
   // Other providers
   'gemini-3.1-pro-preview': { input: 2.0, output: 12.0 },
+  // TypeSafe publishes no price page. $0.042/M input with output free is the
+  // early-access rate quoted by third parties (Requesty, 2026-09); unconfirmed.
+  'jev-latest': { input: 0.042, output: 0 },
 };
 
 /**
@@ -75,10 +78,10 @@ const CACHE_WRITE_MULTIPLIER = 1.25; // 5-minute TTL; a 1h TTL would be 2.0
 const CACHE_READ_MULTIPLIER = 0.1;
 
 /** Which process spent the money. Answers "broken down by source". */
-export type SpendSource = 'lattice' | 'ambient-scan' | 'voice' | 'daemon' | 'script';
+export type SpendSource = 'lattice' | 'ambient-scan' | 'daemon' | 'script';
 
 /** Which bill it lands on. Three separate invoices, so keep them separable. */
-export type SpendProvider = 'anthropic' | 'openai' | 'google';
+export type SpendProvider = 'anthropic' | 'openai' | 'google' | 'typesafe';
 
 /**
  * Adds a column to an existing table when it isn't there yet. SQLite has no

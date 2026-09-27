@@ -7,6 +7,7 @@ import { AskUserQuestionTool } from '@liggi/agent-ui-toolkit';
 import { CompactionDivider } from './CompactionDivider';
 import { SkillConversationContext } from './SkillHeading';
 import { WorkerEventBlock } from '../WorkerEvents/WorkerEventBlock';
+import { FeedbackProposalCard } from '../Feedback/FeedbackProposalCard';
 import { BLOCK_BUDGET_BASE, BLOCK_BUDGET_STEP } from './message-list-constants';
 import { useMessageAnimation } from './use-message-animation';
 import { useScrollManagement } from './use-scroll-management';
@@ -448,6 +449,7 @@ export const MessageList: React.FC<MessageListProps> = ({
     const applyMessageAnimation = isNewMessage && !isAssistant;
     const isCompactionMessage = isCompactionBoundaryMessage(item.message);
     const isWorkerMessage = isWorkerEventMessage(item.message);
+    const feedbackProposal = item.message.type === 'system' && item.message.systemSubtype === 'feedback' ? item.message.feedbackProposal : undefined;
     const isStreamingMessage = isStreaming && isAssistant;
 
     return (
@@ -466,6 +468,10 @@ export const MessageList: React.FC<MessageListProps> = ({
               durationMs={item.message.compactMetadata?.durationMs}
               costUsd={item.message.compactMetadata?.costUsd}
             />
+          ) : feedbackProposal ? (
+            <ErrorBoundary name="FeedbackProposal">
+              <FeedbackProposalCard proposal={feedbackProposal} timestamp={item.message.timestamp} onNavigateToSession={onNavigateToSession} />
+            </ErrorBoundary>
           ) : isWorkerMessage ? (
             <ErrorBoundary name="WorkerEvent">
               <WorkerEventBlock message={item.message} onNavigateToSession={onNavigateToSession} />

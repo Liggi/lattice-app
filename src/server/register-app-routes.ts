@@ -5,6 +5,8 @@ import { createSkillsRoutes } from '@/routes/system/skills.routes.js';
 import { createPermissionRoutes } from '@/routes/session/permission.routes.js';
 import { createPendingQuestionRoutes } from '@/routes/session/pending-question.routes.js';
 import { createFileSystemRoutes } from '@/routes/system/filesystem.routes.js';
+import { createImageRoutes } from '@/routes/system/image.routes.js';
+import { createAuthRoutes } from '@/routes/system/auth.routes.js';
 import { createLogRoutes } from '@/routes/system/log.routes.js';
 import { createWorkingDirectoriesRoutes } from '@/routes/system/working-directories.routes.js';
 import { createConfigRoutes } from '@/routes/system/config.routes.js';
@@ -25,7 +27,6 @@ import { createSessionStatusRoutes } from '@/routes/session/session-status.route
 import { createSessionHistoryRoutes } from '@/routes/session/session-history.routes.js';
 import { createAmbientRoutes } from '@/routes/ambient.routes.js';
 import { createKnowledgeMapRoutes } from '@/routes/km.routes.js';
-import { createVoiceRoutes } from '@/routes/voice/voice.routes.js';
 import { errorHandler } from '@/middleware/error-handler.js';
 import type { ClaudeHistoryReader } from '@/services/sessions/claude-history-reader.js';
 import type { ActiveConversationRegistry } from '@/services/process/active-conversation-registry.js';
@@ -39,6 +40,7 @@ import type { ConversationService } from '@/services/sessions/conversation-servi
 import type { WorkingDirectoriesService } from '@/services/working-directories-service.js';
 import type { Logger } from '@/services/infrastructure/logger.js';
 import type { CodexRequestCoordinator } from '@/services/process/codex-request-coordinator.js';
+import { servesViteDevClient } from './vite-dev-client.js';
 
 export interface RegisterAppRoutesDeps {
   app: Express;
@@ -64,16 +66,21 @@ export function registerAppRoutes(deps: RegisterAppRoutesDeps): void {
   const { app } = deps;
 
   // System
+  app.use('/api/auth', createAuthRoutes());
   app.use('/api/system', createSystemRoutes());
   app.use('/api/skills', createSkillsRoutes({ conversationService: deps.conversationService }));
   app.use('/api/permissions', createPermissionRoutes(deps.permissionTracker));
   app.use('/api/filesystem', createFileSystemRoutes(deps.fileSystemService));
+  app.use('/api/images', createImageRoutes({
+    listWorkingDirectories: async () =>
+      (await deps.workingDirectoriesService.getWorkingDirectories()).directories.map((d) => d.path),
+  }));
   app.use('/api/logs', createLogRoutes());
   app.use('/api/working-directories', createWorkingDirectoriesRoutes(deps.workingDirectoriesService));
   app.use('/api/config', createConfigRoutes(deps.configService));
   app.use('/api/provider-auth', createProviderAuthRoutes({ processManagerClient: deps.processManagerClient }));
   app.use('/api/notifications', createNotificationRoutes());
-  app.use('/api/feedback', createFeedbackRoutes());
+  app.use('/api/feedback', createFeedbackRoutes(deps.configService));
   app.use('/api/pending-questions', createPendingQuestionRoutes(
     deps.pendingQuestionService,
     deps.historyReader,
@@ -117,10 +124,6 @@ export function registerAppRoutes(deps: RegisterAppRoutesDeps): void {
   app.use('/api/context-transfers', createContextTransfersRoutes());
   app.use('/api/notes', createNotesRoutes());
   app.use('/api/teams', createTeamsRoutes());
-  app.use('/api/voice', createVoiceRoutes({
-    conversationService: deps.conversationService,
-    sessionInfoService: deps.sessionInfoService,
-  }));
 
   // Learning map — agent write path for typed article nodes.
   // See docs/learning-map-api.md.
@@ -144,7 +147,7 @@ export function registerAppRoutes(deps: RegisterAppRoutesDeps): void {
   });
 
   // Frontend SPA fallback + error handler (must be last)
-  if (process.env.NODE_ENV !== 'development') {
+  if (!servesViteDevClient) {
     app.get('*', (req, res) => {
       if (/\.(js|css|map|png|jpg|svg|ico|woff2?|ttf|eot)$/i.test(req.path)) {
         res.status(404).end();

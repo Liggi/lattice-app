@@ -2,10 +2,7 @@
  * What `/send` does with the user's message when the session is mid-turn.
  *
  * Since 2026-09-22 the message goes in immediately and the model sorts out
- * what to do with it, rather than waiting for the turn to end. The quick
- * answer is not an alternative to that and never waits for it: it answers
- * the user in parallel and is handed over separately, with a delivery status of
- * its own. The cases here are the ones where the two could interfere.
+ * what to do with it, rather than waiting for the turn to end.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -17,16 +14,12 @@ import { SessionInfoService } from '../../src/services/sessions/session-info-ser
 import { ConversationService } from '../../src/services/sessions/conversation-service.js';
 import { createHarnessRoutes } from '../../src/harness/routes.js';
 import { __resetTurnAdmissionForTests } from '../../src/services/sessions/turn-admission.js';
-import { __setGenerationOverridesForTests } from '../../src/services/infrastructure/generation-gates.js';
 
 const appended: Array<{ type: string; data: Record<string, unknown> }> = [];
 /** The coordinator every case posts to; created fresh per test. */
 let sessionId = '';
 let nextSeq = 100;
 let immediateDelivery: boolean | undefined = true;
-
-const routeVerdict = vi.fn(async () => ({ needsReplyNow: true, score: 0.9 }));
-const recordRoute = vi.fn();
 
 vi.mock('../../src/services/infrastructure/config-service.js', () => ({
   ConfigService: {
@@ -42,13 +35,8 @@ vi.mock('../../src/harness/harness-custom-events.js', () => ({
     return { seq: nextSeq, type, data };
   },
 }));
-vi.mock('../../src/services/sessions/coordinator-router.js', () => ({
-  routeCoordinatorMessage: (...args: unknown[]) => routeVerdict(...(args as [])),
-  recordRoute: (...args: unknown[]) => recordRoute(...(args as [])),
-}));
 
 const inbox = await import('../../src/services/sessions/session-inbox.js');
-const fastReply = await import('../../src/services/sessions/coordinator-fast-reply.js');
 
 /** Every steer accepts and reports the full stage sequence, unless told otherwise. */
 function build(options: { steer?: SessionManager['steer'] } = {}) {
@@ -78,9 +66,6 @@ function build(options: { steer?: SessionManager['steer'] } = {}) {
   return { app, send, steer };
 }
 
-/** Let the deferred quick-answer work, which runs after the response, finish. */
-const settle = () => new Promise((resolve) => setTimeout(resolve, 10));
-
 beforeEach(async () => {
   ConversationService.resetInstance();
   DatabaseProvider.resetInstance();
@@ -90,17 +75,11 @@ beforeEach(async () => {
   }).conversationId;
   appended.length = 0;
   immediateDelivery = true;
-  routeVerdict.mockClear();
-  routeVerdict.mockResolvedValue({ needsReplyNow: true, score: 0.9 });
-  recordRoute.mockClear();
-  __setGenerationOverridesForTests({ coordinatorFastReply: true });
-  vi.spyOn(fastReply, 'answerProvisionally').mockResolvedValue(undefined);
   __resetTurnAdmissionForTests();
 });
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
-  __setGenerationOverridesForTests(null);
   ConversationService.resetInstance();
   DatabaseProvider.resetInstance();
 });
@@ -152,7 +131,8 @@ describe('a message to a session in a turn', () => {
     const res = await request(app).post(`/api/harness/${sessionId}/send`).send({ input: 'use PEACH' });
 
     expect(steer).not.toHaveBeenCalled();
-    expect(res.body).toMatchObject({ ok: true, delivery: 'after-turn', responder: 'fast' });
+    expect(res.body).toMatchObject({ ok: true, delivery: 'after-turn' });
+    expect(res.body.responder).toBeUndefined();
   });
 
   it('falls back to the inbox when the provider will not take it, rather than inventing a delivery', async () => {
@@ -162,8 +142,7 @@ describe('a message to a session in a turn', () => {
     const res = await request(app).post(`/api/harness/${sessionId}/send`).send({ input: 'use PEACH' });
 
     expect(res.body).toMatchObject({ ok: true, delivery: 'after-turn' });
-    // In the inbox, not sent: held for the quick answer that is now writing,
-    // and drained with it at the turn boundary.
+    // In the inbox, not sent: drained at the turn boundary.
     expect(inbox.unreadInboxItemsOfSource(sessionId, 'user')).toHaveLength(1);
   });
 
@@ -178,62 +157,6 @@ describe('a message to a session in a turn', () => {
 
     expect(res.body).toMatchObject({ delivery: 'saved', immediate: { status: 'uncertain' } });
     expect(res.body.note).toContain('not acknowledged');
-  });
-});
-
-describe('the quick answer alongside it', () => {
-  it('answers in parallel without holding the message back or duplicating it', async () => {
-    const { app } = build();
-
-    const res = await request(app).post(`/api/harness/${sessionId}/send`).send({ input: 'what is the status?' });
-    await settle();
-
-    // The message went in as itself, once.
-    expect(res.body).toMatchObject({ delivery: 'now' });
-    expect(inbox.unreadInboxItems(sessionId)).toHaveLength(0);
-    // And the answer was written for the row that was already delivered,
-    // without being stored on it.
-    expect(fastReply.answerProvisionally).toHaveBeenCalledWith(
-      expect.objectContaining({ inboxId: res.body.inboxId, attachToRow: false }),
-    );
-    expect(inbox.getInboxItem(res.body.inboxId as string)?.reply).toBeNull();
-  });
-
-  it('does not hold the message for the router, which runs after the response', async () => {
-    let resolveRouter: (v: unknown) => void = () => {};
-    routeVerdict.mockImplementation(() => new Promise((resolve) => { resolveRouter = resolve; }) as never);
-    const { app } = build();
-
-    const res = await request(app).post(`/api/harness/${sessionId}/send`).send({ input: 'what is the status?' });
-
-    // Answered while the router is still thinking.
-    expect(res.body).toMatchObject({ delivery: 'now' });
-    resolveRouter({ needsReplyNow: false });
-    await settle();
-  });
-
-  it('still holds the message for its answer when it could not be delivered', async () => {
-    const steer = vi.fn(async (): Promise<SteerOutcome> => ({ status: 'rejected', reason: 'no running turn' }));
-    const { app } = build({ steer: steer as unknown as SessionManager['steer'] });
-
-    const res = await request(app).post(`/api/harness/${sessionId}/send`).send({ input: 'what is the status?' });
-
-    expect(res.body).toMatchObject({ delivery: 'after-turn', responder: 'fast' });
-    expect(inbox.getInboxItem(res.body.inboxId as string)?.reply_pending).toBe(1);
-    const call = vi.mocked(fastReply.answerProvisionally).mock.calls[0]?.[0];
-    expect(call).toMatchObject({ inboxId: res.body.inboxId });
-    // Not the detached form: this answer belongs to a row that is waiting.
-    expect(call?.attachToRow).not.toBe(false);
-  });
-
-  it('writes no answer at all when the router says none is needed', async () => {
-    routeVerdict.mockResolvedValue({ needsReplyNow: false, score: 0.1 } as never);
-    const { app } = build();
-
-    await request(app).post(`/api/harness/${sessionId}/send`).send({ input: 'carry on' });
-    await settle();
-
-    expect(fastReply.answerProvisionally).not.toHaveBeenCalled();
   });
 });
 

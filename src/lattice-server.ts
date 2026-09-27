@@ -50,6 +50,7 @@ import { ConversationService } from './services/sessions/conversation-service.js
 import { drainAllInboxes } from './services/sessions/session-inbox.js';
 import { settleHeldDeliveries } from './services/sessions/held-delivery-settlement.js';
 import { wakeRestartWaiters } from './services/sessions/wait-watch.js';
+import { servesViteDevClient } from './server/vite-dev-client.js';
 
 // ViteExpress will be imported dynamically in initialize() if needed
 let ViteExpress: typeof import('vite-express') | undefined;
@@ -558,7 +559,7 @@ export class LatticeServer {
       await this.initialize();
 
       // Start Express server
-      const isDev = process.env.NODE_ENV === 'development';
+      const isDev = servesViteDevClient;
       this.logger.debug('Creating HTTP server listener', { 
         useViteExpress: isDev,
         environment: process.env.NODE_ENV 
@@ -826,8 +827,7 @@ export class LatticeServer {
     this.app.use(express.json({ limit: '10mb' }));
 
     // Static file serving
-    const isDev = process.env.NODE_ENV === 'development';
-    if (!isDev) {
+    if (!servesViteDevClient) {
       // In production/test, serve built static files
       // In production, __dirname will be /path/to/node_modules/lattice-app/dist
       // We need to serve from dist/web

@@ -66,10 +66,16 @@ async function fetchAttentionState(): Promise<AttentionState> {
   // The backend resolves provider session IDs → conversationId for us.
   const sessionAttention: Record<string, number> = {};
 
-  for (const perm of permissionsResult.permissions) {
+  // A worker's request is its coordinator's to decide until it escalates;
+  // an escalated one also marks the coordinator, where the user is asked.
+  const permissions = permissionsResult.permissions.filter((perm) => !perm.coordinator || perm.escalation);
+  for (const perm of permissions) {
     const key = perm.conversationId || perm.sessionId;
     if (key) {
       sessionAttention[key] = (sessionAttention[key] || 0) + 1;
+    }
+    if (perm.coordinator) {
+      sessionAttention[perm.coordinator] = (sessionAttention[perm.coordinator] || 0) + 1;
     }
   }
 
@@ -81,7 +87,7 @@ async function fetchAttentionState(): Promise<AttentionState> {
   }
 
   return {
-    permissionCount: permissionsResult.permissions.length,
+    permissionCount: permissions.length,
     questionCount: pendingQuestionsResult.questions.length,
     sessionAttention,
   };

@@ -263,10 +263,24 @@ export class ProcessDaemon extends EventEmitter {
    * The environment every Claude child gets: the daemon's, minus what would
    * make the CLI think it is nested inside another Claude, plus the user's
    * settings.json overrides.
+   *
+   * CLAUDE_CODE_AUTO_MODE_SERVER=1: a `-p` session does not ask the API to run
+   * auto mode's classifier checks unless told to, and makes its own classifier
+   * requests instead, which are billed. Only auto (and plan) sessions read it.
+   *
+   * BASH_DEFAULT_TIMEOUT_MS / BASH_MAX_TIMEOUT_MS: stock Claude Code stops a
+   * Bash call at 2 minutes, which cuts off ordinary builds and test runs. A
+   * value in the daemon's environment or the user's settings.json wins.
    */
   private childEnv(): Record<string, string | undefined> {
     const { NODE_OPTIONS: _NO, VSCODE_INSPECTOR_OPTIONS: _VIO, CLAUDECODE: _CC, CLAUDE_CODE_ENTRYPOINT: _CCE, ...cleanEnv } = process.env;
-    return { ...cleanEnv, ...this.envOverrides };
+    return {
+      CLAUDE_CODE_AUTO_MODE_SERVER: '1',
+      BASH_DEFAULT_TIMEOUT_MS: '300000',
+      BASH_MAX_TIMEOUT_MS: '600000',
+      ...cleanEnv,
+      ...this.envOverrides,
+    };
   }
 
   /**
@@ -1678,6 +1692,10 @@ export class ProcessDaemon extends EventEmitter {
    * - "default": Use Claude's default permission behavior (permission prompts)
    * - "acceptEdits": Auto-accept file edits but prompt for other tools
    * - "plan": Plan mode - research only, no edits
+   * - "auto": Claude Code's classifier reviews each action and blocks risky
+   *   ones; after repeated blocks it falls back to prompting through the bridge.
+   *   Claude Code starts in Manual instead when auto is unavailable, so the
+   *   init message's `permissionMode` is what the session really runs in.
    *
    * For non-default modes, also installs Lattice as the SDK permission
    * host via `--permission-prompt-tool stdio`. This catches `behavior: 'ask'`
@@ -1703,6 +1721,10 @@ export class ProcessDaemon extends EventEmitter {
         break;
       case 'plan':
         args.push('--permission-mode', 'plan');
+        args.push('--permission-prompt-tool', 'stdio');
+        break;
+      case 'auto':
+        args.push('--permission-mode', 'auto');
         args.push('--permission-prompt-tool', 'stdio');
         break;
       case 'bypassPermissions':
@@ -1772,7 +1794,10 @@ You are running inside the Lattice orchestrator dashboard.
       config.sessionIndexBlock,
     ].filter(Boolean);
     const systemPrompt = systemPromptParts.join('\n');
-    args.push('--system-prompt', systemPrompt);
+    // Appended, not replacing: `--system-prompt` dropped Claude Code's own prompt
+    // (tool guidance, care with commits) from every Lattice session. Resume passes
+    // nothing because Claude Code keeps the first spawn's prompt in the transcript.
+    args.push('--append-system-prompt', systemPrompt);
 
     // Apply permission mode
     this.applyPermissionMode(args, config.permissionMode);

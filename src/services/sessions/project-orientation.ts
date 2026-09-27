@@ -108,7 +108,7 @@ export function composeProjectOrientation(
     `${SERVER_NOTE_PREFIX} ${opening} It is what you decide from; your context is not the record.`,
     `Keep it current as you go (\`${cli} session note ${conversationId} …\`), and read what it points to rather than working from memory of it.]`,
     '',
-    renderProjectState(state, { cli, conversationId, userName: userName() }),
+    renderProjectState(state, { cli, conversationId, userName: userName(), now: Date.now() }),
     '',
     SERVER_NOTE_END,
     '',

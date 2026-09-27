@@ -555,7 +555,7 @@ export function registerUnifiedConversationQueryRoutes(
     const text = typeof body.text === 'string' ? body.text.trim() : '';
     // `close` records how it was resolved and `update` may only change the
     // structured half, so neither needs text; everything else is the note.
-    if (!text && kind !== 'close' && kind !== 'update') {
+    if (!text && kind !== 'close' && kind !== 'update' && kind !== 'unpark') {
       res.status(400).json({ error: 'text is required' });
       return;
     }
@@ -606,6 +606,31 @@ export function registerUnifiedConversationQueryRoutes(
         res.status(400).json({ error: `a priority names an open thread: ${state.open.map((t) => t.seq).join(', ') || 'none open'}` });
         return;
       }
+    }
+
+    // Parking keeps a thread without working it: it leaves the remaining-work
+    // list and the stale list, and `unpark` brings it back as it was.
+    if (kind === 'park' || kind === 'unpark') {
+      const target = state.open.find((candidate) => candidate.seq === body.ref);
+      if (typeof body.ref !== 'number' || !target) {
+        res.status(400).json({ error: `ref must be an open thread: ${state.open.map((t) => t.seq).join(', ') || 'none open'}` });
+        return;
+      }
+      if (kind === 'park' && target.parked) {
+        res.status(400).json({ error: `thread ${target.seq} is already parked: ${target.parked.reason}` });
+        return;
+      }
+      if (kind === 'unpark' && !target.parked) {
+        res.status(400).json({ error: `thread ${target.seq} is not parked` });
+        return;
+      }
+      const seq = appendProjectNote(conversationId, { kind, text, by: body.by === 'user' ? 'user' : 'coordinator', ref: body.ref });
+      if (seq === null) {
+        res.status(503).json({ error: 'Note not recorded' });
+        return;
+      }
+      res.json({ seq, state: readProjectState(conversationId) });
+      return;
     }
 
     if (kind === 'retire' || kind === 'priority') {

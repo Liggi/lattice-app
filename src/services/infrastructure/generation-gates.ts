@@ -1,5 +1,6 @@
 import type { GenerationConfig } from '@/types/config.js';
 import { ConfigService } from './config-service.js';
+import { anthropicClientFactory } from './anthropic-client-factory.js';
 import { createLogger } from './logger.js';
 import { CONFIG_FILE } from '@/utils/constants.js';
 
@@ -13,7 +14,11 @@ const logger = createLogger('GenerationGates');
  * this module:
  *
  * 1. **Closed by default.** An unreadable or uninitialised config answers
- *    "no", never "yes". A gate that fails open is not a gate.
+ *    "no", never "yes". A gate that fails open is not a gate. A switch left
+ *    unset is off too, except the few in KEYED_DEFAULTS: those come on once
+ *    the keys they spend are saved, so a newcomer who pastes an Anthropic
+ *    key gets them without editing config.json. An explicit true or false
+ *    always wins.
  * 2. **Read per call.** ConfigService watches config.json and reloads on
  *    change, so flipping a switch takes effect on the next tick with no
  *    restart — which matters when the thing you are turning off is spending
@@ -29,11 +34,20 @@ const DESCRIPTIONS: Record<GenerationFeature, string> = {
   permissionPatterns: 'permission pattern suggestions',
   sessionReview: 'session reviews',
   gemini: 'Gemini calls',
-  voice: 'voice mode',
-  coordinatorFastReply: 'coordinator routing and fast replies',
   workerActivity: 'worker activity lines',
   workerReportSummary: 'worker report summaries',
   projectName: 'project names',
+};
+
+/**
+ * Switches that default on when their keys exist: cheap, one call per report,
+ * worker or outcome. Insights stays off: it runs on every turn, so its bill
+ * grows with use.
+ */
+const KEYED_DEFAULTS: Partial<Record<GenerationFeature, () => boolean>> = {
+  workerReportSummary: () => anthropicClientFactory.isConfigured(),
+  workerActivity: () => anthropicClientFactory.isConfigured(),
+  projectName: () => anthropicClientFactory.isConfigured(),
 };
 
 /**
@@ -53,12 +67,15 @@ export function isGenerationEnabled(feature: GenerationFeature): boolean {
   if (testOverrides && feature in testOverrides) {
     return testOverrides[feature] === true;
   }
+  let explicit: boolean | undefined;
   try {
-    return ConfigService.getInstance().getConfig().generation?.[feature] === true;
+    explicit = ConfigService.getInstance().getConfig().generation?.[feature];
   } catch {
     // getConfig() throws before initialize(). Boot-time ticks land here.
     return false;
   }
+  if (typeof explicit === 'boolean') return explicit;
+  return KEYED_DEFAULTS[feature]?.() ?? false;
 }
 
 /**

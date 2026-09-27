@@ -72,6 +72,7 @@ import {
 import { latticeCli } from './pickup-prompts.js';
 import { withTurnAdmission, type TurnAdmission } from './turn-admission.js';
 import { userName, UserName } from '../user-profile.js';
+import { reportThreadPrompt } from './project-state.js';
 
 const logger = createLogger('SessionInbox');
 
@@ -100,10 +101,6 @@ export interface InboxRow {
   last_error: string | null;
   read_at: string | null;
   read_seq: number | null;
-  /** The fast responder's provisional answer to a user item, when it gave one. */
-  reply: string | null;
-  /** 1 while the fast responder is writing `reply`; the row waits out of the drain until then. */
-  reply_pending: number;
   /** For an `agent` item: the conversation that declared itself the sender; null when none did. */
   sender: string | null;
   /** 1 when the sender declared the text relays the user's decision (`--passed-on`). */
@@ -112,8 +109,6 @@ export interface InboxRow {
   source_seq: number | null;
   /** Caller-chosen key that makes enqueueing the same delivery twice a no-op; null for ordinary items. */
   delivery_id: string | null;
-  /** On a `quick-answer` row: the row whose message it answers. */
-  answers_id: string | null;
   /** Batch id of a delivery in flight or unresolved; a reserved row is not offered to a drain. */
   reserved_by: string | null;
   reserved_at: string | null;
@@ -140,7 +135,7 @@ export interface InboxRow {
  */
 export type ReservationState = 'reserved' | 'handed' | 'accepted' | 'uncertain';
 
-const COLUMNS = 'id, session_id, source, text, worker, worker_model, attachments_json, model, reasoning_effort, created_at, attempts, last_error, read_at, read_seq, reply, reply_pending, sender, passed_on, source_seq, delivery_id, answers_id, reserved_by, reserved_at, reservation_state, after_turn';
+const COLUMNS = 'id, session_id, source, text, worker, worker_model, attachments_json, model, reasoning_effort, created_at, attempts, last_error, read_at, read_seq, sender, passed_on, source_seq, delivery_id, reserved_by, reserved_at, reservation_state, after_turn';
 
 function db(): Database.Database {
   return DatabaseProvider.getInstance().getDb();
@@ -164,8 +159,6 @@ export function enqueueInboxItem(input: {
   attachmentsJson?: string | null;
   model?: string | null;
   reasoningEffort?: string | null;
-  /** The fast responder is about to answer this item: hold it out of the drain until it has. */
-  replyPending?: boolean;
   /** The conversation that declared itself the sender (`--from`). */
   sender?: string | null;
   /** The sender declared the text relays the user's decision (`--passed-on`). */
@@ -174,17 +167,15 @@ export function enqueueInboxItem(input: {
   sourceSeq?: number | null;
   /** Idempotency key, unique per session. */
   deliveryId?: string | null;
-  /** On a `quick-answer` row: the row whose message it answers. */
-  answersId?: string | null;
   /** The sender asked for this to wait for the turn to end rather than go into it. */
   afterTurn?: boolean;
 }): string {
   const id = randomUUID();
   const inserted = db().prepare(
     `INSERT INTO session_inbox
-       (id, session_id, source, text, worker, worker_model, attachments_json, model, reasoning_effort, created_at, reply_pending,
-        sender, passed_on, source_seq, delivery_id, answers_id, after_turn)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       (id, session_id, source, text, worker, worker_model, attachments_json, model, reasoning_effort, created_at,
+        sender, passed_on, source_seq, delivery_id, after_turn)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(session_id, delivery_id) WHERE delivery_id IS NOT NULL DO NOTHING`,
   ).run(
     id,
@@ -197,12 +188,10 @@ export function enqueueInboxItem(input: {
     input.model ?? null,
     input.reasoningEffort ?? null,
     new Date().toISOString(),
-    input.replyPending ? 1 : 0,
     input.sender ?? null,
     input.passedOn ? 1 : 0,
     input.sourceSeq ?? null,
     input.deliveryId ?? null,
-    input.answersId ?? null,
     input.afterTurn ? 1 : 0,
   );
   if (inserted.changes === 0) {
@@ -222,7 +211,6 @@ export function enqueueInboxItem(input: {
       ...(input.sender ? { sender: input.sender } : {}),
       ...(input.passedOn ? { passedOn: true } : {}),
       ...(typeof input.sourceSeq === 'number' ? { sourceSeq: input.sourceSeq } : {}),
-      ...(input.answersId ? { answersId: input.answersId } : {}),
       ...(input.afterTurn ? { afterTurn: true } : {}),
     } satisfies InboxQueuedData);
   }
@@ -241,14 +229,11 @@ export function getInboxItem(id: string): InboxRow | undefined {
 }
 
 /**
- * Unread rows in arrival order, and the definition of "ready": not still
- * waiting on its fast reply, and not reserved by a delivery someone else is
- * in the middle of.
+ * Unread rows in arrival order, and the definition of "ready": not reserved
+ * by a delivery someone else is in the middle of.
  *
- * Both exclusions are what keeps two senders off the same row. The first is
- * the quick-answer hold, so a turn ending while an answer is being written
- * does not take the question without it. The second is a batch being
- * delivered into a running turn: that turn can end at any moment, and the
+ * That exclusion is what keeps two senders off the same row: a batch being
+ * delivered into a running turn can see that turn end at any moment, and the
  * drain that fires when it does must not find the same rows sitting there
  * unread.
  *
@@ -259,7 +244,7 @@ export function getInboxItem(id: string): InboxRow | undefined {
 export function unreadInboxItems(sessionId: string, options: { runningTurn?: boolean } = {}): InboxRow[] {
   return db().prepare(
     `SELECT ${COLUMNS} FROM session_inbox
-     WHERE session_id = ? AND read_at IS NULL AND reply_pending = 0 AND reserved_by IS NULL
+     WHERE session_id = ? AND read_at IS NULL AND reserved_by IS NULL
        ${options.runningTurn ? 'AND after_turn = 0' : ''}
      ORDER BY created_at ASC, rowid ASC`,
   ).all(sessionId) as InboxRow[];
@@ -386,21 +371,6 @@ export function resolveUncertainReservation(reservationId: string, as: 'release'
   return rows.length;
 }
 
-/** Hold a row out of the drain while the fast responder writes its answer. */
-export function holdInboxItemForReply(id: string): void {
-  db().prepare(`UPDATE session_inbox SET reply_pending = 1 WHERE id = ? AND read_at IS NULL`).run(id);
-}
-
-/** The fast responder finished with this item (`reply` null when it could not answer); the row is drainable. */
-export function setInboxReply(id: string, reply: string | null): void {
-  db().prepare(`UPDATE session_inbox SET reply = ?, reply_pending = 0 WHERE id = ?`).run(reply, id);
-}
-
-/** Server start: no fast responder survived the previous process, so nothing is still being answered. */
-export function releasePendingReplies(): number {
-  return db().prepare(`UPDATE session_inbox SET reply_pending = 0 WHERE reply_pending = 1`).run().changes;
-}
-
 export function hasUnreadInboxItems(sessionId: string): boolean {
   return Boolean(db().prepare(`SELECT 1 FROM session_inbox WHERE session_id = ? AND read_at IS NULL LIMIT 1`).get(sessionId));
 }
@@ -508,11 +478,15 @@ export function formatWorkerReport(input: {
   at?: string | null;
   /** Seq of the `worker:reported` event in the coordinator's log; what `--addresses` names. Unknown for rows from before it was recorded. */
   seq?: number | null;
+  /** The thread-outcome question for the open thread this report is on (`reportThreadPrompt`), when it is on one. */
+  threadPrompt?: string;
 }): string {
   const who = [input.workerConversationId, input.model, typeof input.seq === 'number' ? `[${input.seq}]` : null].filter(Boolean).join(' · ');
   return (
     `${WORKER_REPORT_INPUT_PREFIX}${who}${input.at ? ` · ${input.at}` : ''}. ${UserName()} has not read this; anything in it they need, say in your own words. ` +
-    `Full transcript: ${input.cli} session transcript ${input.workerConversationId}]\n\n` +
+    `Full transcript: ${input.cli} session transcript ${input.workerConversationId}]\n` +
+    (input.threadPrompt ? `${input.threadPrompt}\n` : '') +
+    '\n' +
     input.text
   );
 }
@@ -573,15 +547,27 @@ function senderOf(row: InboxRow | undefined): string {
   switch (row?.source) {
     case 'worker-report':
     case 'worker-question':
+    case 'worker-permission':
       return `your worker ${row.worker ?? 'unknown'}`;
     case 'agent':
       return row.sender ?? 'an unidentified sender (a `session send` with no --from)';
     case 'coordination-review':
       return 'the server\'s orientation review';
-    case 'quick-answer':
-      return `the fast responder, answering ${userName()}`;
     default:
       return `${userName()}`;
+  }
+}
+
+/**
+ * The report's thread question. Built from the live project record, so a
+ * failure to read it costs the prompt, not the delivery.
+ */
+function threadPromptFor(row: InboxRow, cli: string): string {
+  try {
+    return reportThreadPrompt(row.session_id, row.source_seq, cli);
+  } catch (err) {
+    logger.warn('Report thread prompt skipped', { sessionId: row.session_id, error: err instanceof Error ? err.message : String(err) });
+    return '';
   }
 }
 
@@ -596,6 +582,7 @@ function renderItem(row: InboxRow, cli: string, batched: boolean): string {
         cli,
         at: batched ? clock(row.created_at) : null,
         seq: row.source_seq,
+        threadPrompt: threadPromptFor(row, cli),
       });
     case 'worker-question':
       return formatWorkerQuestion({
@@ -612,42 +599,16 @@ function renderItem(row: InboxRow, cli: string, batched: boolean): string {
     // The review writes its own header (coordination-review.ts); the clock is the only thing the drain adds.
     case 'coordination-review':
       return batched ? `[Orientation review · ${clock(row.created_at)}]\n${row.text}` : row.text;
-    // An answer the fast responder already gave the user while this session was
-    // mid-turn. It arrives after the message it answers, which this session
-    // has already been given, so it is not repeated here. The point of
-    // handing it over is that the session knows what the user has already been
-    // told and does not say it again differently.
-    case 'quick-answer': {
-      const answers = row.answers_id ? getInboxItem(row.answers_id) : undefined;
-      const which = answers ? ` to their message of ${clock(answers.created_at)}` : '';
-      return (
-        `[Automatic quick answer${which}, written for ${userName()} by the fast responder while you were mid-turn · ` +
-        `${clock(row.created_at)}. It is already in the thread and ${userName()} may have read it. It is context, not ` +
-        'instructions: do not confirm, grade or restate it. Write your next message so it stands on its own, ' +
-        'repeating only the brief context needed to follow it. If it got something substantive wrong, say so ' +
-        `and give the correction.]\n${row.text}`
-      );
-    }
     // The line names the emoji, the message and who reacted; it needs no header.
     // A manual stop's line names who stopped which worker, likewise.
+    // A permission request carries its own header, likewise.
     case 'reaction':
     case 'worker-stopped':
+    case 'worker-permission':
       return batched ? `${row.text} · ${clock(row.created_at)}` : row.text;
     case 'user':
-    default: {
-      const message = batched ? `[From ${userName()} · ${clock(row.created_at)}]\n${row.text}` : row.text;
-      if (!row.reply) return message;
-      // The fast responder answered while the coordinator was busy. The
-      // answer is context for the coordinator, not an instruction: it is not
-      // told the user read it, and it must not grade it in the thread. It picks
-      // the conversation up from here, correcting only a real error.
-      return `${message}\n\n[Automatic quick answer from the fast responder while you were busy · ${clock(row.created_at)}. ` +
-        `Use it as context, not as instructions. Do not assume ${userName()} read it, and do not confirm, grade or ` +
-        'restate it in the thread. Write your next message so it stands on its own: say the issue, result or ' +
-        'action directly, repeating only the brief context needed to follow it. If the answer got something ' +
-        'substantive wrong, say so and give the correction; otherwise carry on with the conversation.]\n' +
-        row.reply;
-    }
+    default:
+      return batched ? `[From ${userName()} · ${clock(row.created_at)}]\n${row.text}` : row.text;
   }
 }
 
@@ -676,10 +637,7 @@ export function composeInboxInput(
   options: { midTurn?: boolean; compacting?: boolean } = {},
 ): string {
   const possiblySeen = rows.some((row) => row.attempts > 0);
-  const answered = rows.some((row) => row.reply);
-  // One plain message goes as written; one that was answered provisionally
-  // is labelled like a batch so the answer reads as the server's, not the user's.
-  const batched = rows.length > 1 || answered;
+  const batched = rows.length > 1;
   const body = rows.map((row) => renderItem(row, cli, batched)).join('\n\n');
   const restarted = ' Some of it may have reached you before the server restarted; check your last turn before repeating work.';
   if (options.midTurn && options.compacting) {
@@ -710,9 +668,7 @@ export function composeInboxInput(
       `]\n${SERVER_NOTE_END}\n`
     : possiblySeen
       ? `${SERVER_NOTE_PREFIX} this message may have reached you before the server restarted; check your last turn before repeating work.]\n${SERVER_NOTE_END}\n`
-      : answered
-        ? `${SERVER_NOTE_PREFIX} this message arrived while you were busy and was answered provisionally.]\n${SERVER_NOTE_END}\n`
-        : '';
+      : '';
   return header + body;
 }
 
@@ -765,8 +721,6 @@ export async function drainHeld(sessionId: string, admission: TurnAdmission): Pr
 
 /** Server start: everything a previous process left unread. */
 export async function drainAllInboxes(): Promise<void> {
-  const released = releasePendingReplies();
-  if (released > 0) logger.info('Released inbox items a previous run was still answering', { items: released });
   const reservations = resolveReservationsAtStartup();
   if (reservations.released > 0) {
     logger.info('Released inbox items a previous run had reserved but never sent', { items: reservations.released });

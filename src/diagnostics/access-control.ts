@@ -2,11 +2,13 @@
  * Diagnostics access control (§1.2).
  *
  * Diagnostics expose paths, process args, prompts, message content, and other
- * sensitive runtime data. Default-closed in production; loopback-open in
- * development/test for local triage.
+ * sensitive runtime data. Default-closed in production and in any built or
+ * installed server; loopback-open for a source checkout run in
+ * development/test, for local triage.
  */
 
 import type { Request } from 'express';
+import { runsFromSource } from '../server/vite-dev-client.js';
 
 function isLoopback(ip: string | undefined): boolean {
   if (!ip) return false;
@@ -24,7 +26,7 @@ interface MaybeAdminRequest extends Request {
 
 function isLocalDevOrTest(): boolean {
   const env = process.env.NODE_ENV;
-  return env === 'development' || env === 'test';
+  return runsFromSource && (env === 'development' || env === 'test');
 }
 
 export function mayReadDiagnostics(req: Request): boolean {

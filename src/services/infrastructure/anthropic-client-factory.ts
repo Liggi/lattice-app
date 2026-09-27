@@ -8,7 +8,7 @@ interface FactoryState {
 
 /**
  * The Anthropic client for Lattice's own generation features (summaries,
- * quick answers, insights). Uses the API key from config or ANTHROPIC_API_KEY;
+ * insights). Uses the API key from config or ANTHROPIC_API_KEY;
  * with neither, those features are unavailable.
  */
 export class AnthropicClientFactory {

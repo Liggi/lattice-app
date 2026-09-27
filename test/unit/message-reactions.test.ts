@@ -111,8 +111,8 @@ describe('reactions in the inbox and the thread', () => {
     const row = (id: string, source: 'user' | 'reaction', text: string) => ({
       id, session_id: 'conv-front', source, text, worker: null, worker_model: null,
       attachments_json: null, model: null, reasoning_effort: null, created_at: '2026-09-23T21:04:00.000Z', attempts: 0,
-      last_error: null, read_at: null, read_seq: null, reply: null, reply_pending: 0, sender: null, passed_on: 0,
-      source_seq: null, delivery_id: null, answers_id: null, reserved_by: null, reserved_at: null, reservation_state: null,
+      last_error: null, read_at: null, read_seq: null, sender: null, passed_on: 0,
+      source_seq: null, delivery_id: null, reserved_by: null, reserved_at: null, reservation_state: null,
       after_turn: 0,
     }) as inbox.InboxRow;
     const line = 'The user reacted 👍 to your message "Release 906 is live."';

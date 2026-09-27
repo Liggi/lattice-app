@@ -197,6 +197,15 @@ export interface PermissionRequest {
   status: 'pending' | 'approved' | 'denied';
   modifiedInput?: Record<string, unknown>;
   denyReason?: string;
+  /** Why the provider asked, in its own words (Claude Code's `decisionReason`). */
+  reason?: string;
+  /**
+   * The coordinator (`conv-*`) that decides this request because the asking
+   * session is its worker. Until it escalates, the user is not asked.
+   */
+  coordinator?: string;
+  /** Set when the coordinator handed the decision to the user, with its reason. */
+  escalation?: { why: string; at: string };
 }
 
 // Question types (for AskUserQuestion tool)
@@ -358,9 +367,14 @@ export interface ConversationDetailsResponse {
 
 
 export interface PermissionDecisionRequest {
-  action: 'approve' | 'deny';
+  /** `escalate` is the coordinator handing its worker's request to the user. */
+  action: 'approve' | 'deny' | 'escalate';
   modifiedInput?: Record<string, unknown>;
   denyReason?: string;
+  /** The deciding coordinator (`conv-*`); must match the request's coordinator. Absent when the user decides. */
+  from?: string;
+  /** With `escalate`: one sentence telling the user why it is theirs to decide. */
+  why?: string;
 }
 
 export interface PermissionDecisionResponse {

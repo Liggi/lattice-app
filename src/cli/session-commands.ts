@@ -14,6 +14,7 @@ import path from 'path';
 import { DatabaseProvider } from '../services/infrastructure/database-provider.js';
 import { CONFIG_DIR } from '../utils/constants.js';
 import { compactSession, reactToUsersMessage, sendSessionMessage } from './session-send.js';
+import { serverAuthHeaders } from './server-auth.js';
 import { latticeCli } from '../services/sessions/pickup-prompts.js';
 
 import {
@@ -456,7 +457,7 @@ function cmdArchive(cmd: ParsedCommand, flag: boolean, label: string): void {
  * The server to dial: the address the server wrote into the agent CLI
  * (agent-cli.ts), else {host, port} from config.json, the file it loads.
  */
-function readServerAddress(): { host: string; port: number } {
+export function readServerAddress(): { host: string; port: number } {
   const envPort = Number(process.env.LATTICE_SERVER_PORT);
   if (process.env.LATTICE_SERVER_HOST && Number.isInteger(envPort) && envPort > 0) {
     return { host: process.env.LATTICE_SERVER_HOST, port: envPort };
@@ -564,7 +565,10 @@ async function projectRequestWithArchived(cmd: ParsedCommand, conv: string, path
   const address = readServerAddress();
   const host = str(cmd, 'host') ?? address.host;
   const port = int(cmd, 'port') ?? address.port;
-  const response = await fetch(`http://${host}:${port}/api/conv/${encodeURIComponent(conv)}/project${path}`, init);
+  const response = await fetch(`http://${host}:${port}/api/conv/${encodeURIComponent(conv)}/project${path}`, {
+    ...init,
+    headers: { ...(init?.headers as Record<string, string> | undefined), ...serverAuthHeaders() },
+  });
   const text = await response.text();
   if (!response.ok) throw new Error(`server rejected the request (HTTP ${response.status}): ${text}`);
   const result = parseJson(text) as { state?: ProjectStateResponse; archivedWorkers?: Array<{ worker: string; reason: string }> } | ProjectStateResponse;
@@ -662,11 +666,12 @@ async function cmdNote(cmd: ParsedCommand): Promise<void> {
   // `--with` is the evidence line, and each of these wants its own.
   const usesWith = [
     int(cmd, 'close') !== undefined,
+    int(cmd, 'park') !== undefined,
     Boolean(str(cmd, 'reconcile')),
     Boolean(str(cmd, 'retire')),
     bool(cmd, 'account-from-now'),
   ].filter(Boolean).length;
-  if (usesWith > 1) fail('--close, --retire, --reconcile and --account-from-now each take their own --with; make them separate calls');
+  if (usesWith > 1) fail('--close, --park, --retire, --reconcile and --account-from-now each take their own --with; make them separate calls');
   const fields = {
     ...(owner ? { owner: parseOwnerFlag(owner) } : {}),
     ...(next ? { nextAction: next } : {}),
@@ -722,6 +727,14 @@ async function cmdNote(cmd: ParsedCommand): Promise<void> {
       ...(addresses && !updatesThread ? { addresses: parseAddressesFlag(addresses) as number[] } : {}),
     });
   }
+  const park = int(cmd, 'park');
+  if (park !== undefined) {
+    const why = str(cmd, 'with');
+    if (!why) fail('--park needs --with "<why it is parked and what would bring it back>"');
+    notes.push({ kind: 'park', text: why, by: 'coordinator', ref: park });
+  }
+  const unpark = int(cmd, 'unpark');
+  if (unpark !== undefined) notes.push({ kind: 'unpark', text: '', by: 'coordinator', ref: unpark });
   const accountFrom = bool(cmd, 'account-from-now');
   if (accountFrom) {
     notes.push({
@@ -757,7 +770,7 @@ async function cmdNote(cmd: ParsedCommand): Promise<void> {
   const now = str(cmd, 'now');
   if (now) notes.push({ kind: 'now', text: now, by: 'coordinator' });
   if (notes.length === 0) {
-    fail('note needs at least one of --outcome, --priority, --decide, --retire, --open, --thread, --close, --now, --reconcile, --account-from-now');
+    fail('note needs at least one of --outcome, --priority, --decide, --retire, --open, --thread, --close, --park, --unpark, --now, --reconcile, --account-from-now');
   }
 
   if (open && thread !== undefined) fail('--open starts a new thread and --thread updates an existing one; pass one');
@@ -775,7 +788,7 @@ async function cmdNote(cmd: ParsedCommand): Promise<void> {
   }
   if (isJson(cmd)) emitJson(state);
   else {
-    process.stdout.write(`Noted. Project state for ${conv}:\n${renderProjectState(state!, { userName: userName() })}\n`);
+    process.stdout.write(`Noted. Project state for ${conv}:\n${renderProjectState(state!, { userName: userName(), now: Date.now() })}\n`);
     // Said so the coordinator does not archive them again by hand, and knows
     // a send brings any of them back.
     if (archived.length > 0) {
@@ -791,7 +804,7 @@ async function cmdState(cmd: ParsedCommand): Promise<void> {
   if (isJson(cmd)) emitJson(state);
   // The default is the active record, the same text the server puts in front
   // of a project turn. --history adds what is no longer in force.
-  else process.stdout.write(`${renderProjectState(state, { history: bool(cmd, 'history'), cli: latticeCli(), conversationId: conv, userName: userName() })}${renderUnreadSection(state.unread)}\n`);
+  else process.stdout.write(`${renderProjectState(state, { history: bool(cmd, 'history'), cli: latticeCli(), conversationId: conv, userName: userName(), now: Date.now() })}${renderUnreadSection(state.unread)}\n`);
 }
 
 /**
@@ -818,7 +831,7 @@ async function cmdWorkers(cmd: ParsedCommand): Promise<void> {
   const address = readServerAddress();
   const host = str(cmd, 'host') ?? address.host;
   const port = int(cmd, 'port') ?? address.port;
-  const response = await fetch(`http://${host}:${port}/api/conv/${encodeURIComponent(conv)}/workers`);
+  const response = await fetch(`http://${host}:${port}/api/conv/${encodeURIComponent(conv)}/workers`, { headers: serverAuthHeaders() });
   const text = await response.text();
   if (!response.ok) throw new Error(`server rejected the request (HTTP ${response.status}): ${text}`);
   const payload = parseJson(text) as WorkersResponse;
@@ -934,7 +947,7 @@ async function cmdNew(cmd: ParsedCommand): Promise<void> {
   try {
     res = await fetch(url, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...serverAuthHeaders() },
       body: JSON.stringify(body),
     });
   } catch (err) {
@@ -991,7 +1004,7 @@ async function cmdSwitch(cmd: ParsedCommand): Promise<void> {
   try {
     response = await fetch(`http://${host}:${port}/api/conv/${encodeURIComponent(conv)}/switch`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...serverAuthHeaders() },
       body: JSON.stringify({ provider, model }),
     });
   } catch (err) {
@@ -1066,6 +1079,41 @@ async function cmdReact(cmd: ParsedCommand): Promise<void> {
   process.stdout.write(`${said} the user's message ${String(result.messageId)}: "${String(result.text)}"\n`);
 }
 
+const PERMISSION_ACTIONS: Record<string, 'approve' | 'deny' | 'escalate'> = { allow: 'approve', deny: 'deny', escalate: 'escalate' };
+
+async function cmdPermission(cmd: ParsedCommand): Promise<void> {
+  const id = cmd.named.id;
+  const action = PERMISSION_ACTIONS[cmd.named.action];
+  if (!action) fail(`permission takes allow, deny or escalate, got "${cmd.named.action}"`);
+  const from = str(cmd, 'from');
+  if (!from) fail('permission needs --from <your own conversation id>');
+  const reason = str(cmd, 'reason');
+  if (action === 'escalate' && !reason) fail('escalate needs --reason "<one plain sentence for the user>"');
+  const address = readServerAddress();
+  const host = str(cmd, 'host') ?? address.host;
+  const port = int(cmd, 'port') ?? address.port;
+  const response = await fetch(`http://${host}:${port}/api/permissions/${encodeURIComponent(id)}/decision`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', ...serverAuthHeaders() },
+    body: JSON.stringify({
+      action,
+      from,
+      ...(action === 'deny' && reason ? { denyReason: reason } : {}),
+      ...(action === 'escalate' ? { why: reason } : {}),
+    }),
+  });
+  const text = await response.text();
+  if (!response.ok) fail(`permission refused (HTTP ${response.status}): ${text}`);
+  if (isJson(cmd)) {
+    emitJson(parseJson(text));
+    return;
+  }
+  const said = action === 'approve' ? 'Allowed; the worker carries on.'
+    : action === 'deny' ? 'Denied; the worker is told why.'
+      : 'Handed to the user; they are asked in your thread and notified.';
+  process.stdout.write(`${said}\n`);
+}
+
 // ---------------------------------------------------------------------------
 // move-worker / move-thread — splitting a project
 
@@ -1077,7 +1125,7 @@ async function moveRequest(cmd: ParsedCommand, url: string, body: unknown): Prom
   const port = int(cmd, 'port') ?? address.port;
   const response = await fetch(`http://${host}:${port}/api/conv/${url}`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', ...serverAuthHeaders() },
     body: JSON.stringify(body),
   });
   const text = await response.text();
@@ -1177,10 +1225,11 @@ const HANDLERS = new Map<string, (cmd: ParsedCommand) => void | Promise<void>>([
   ['move-thread', cmdMoveThread],
   ['compact', cmdCompact],
   ['react', cmdReact],
+  ['permission', cmdPermission],
 ]);
 
 /** Verbs that are pure HTTP clients to the running server and open no SQLite connection. */
-const HTTP_VERBS = new Set(['new', 'note', 'state', 'workers', 'switch', 'move-worker', 'move-thread', 'compact', 'react']);
+const HTTP_VERBS = new Set(['new', 'note', 'state', 'workers', 'switch', 'move-worker', 'move-thread', 'compact', 'react', 'permission']);
 
 /** Verbs that only read, and so can open SQLite read-only. */
 const MUTATING_VERBS = new Set(['archive', 'unarchive']);

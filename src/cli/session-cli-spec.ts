@@ -305,7 +305,9 @@ export const SESSION_VERBS: VerbSpec[] = [
       { name: 'worker', kind: 'string', value: 'CONV', desc: 'With --open/--thread: a worker carrying this thread.' },
       { name: 'addresses', kind: 'string', value: 'REFS', desc: 'With --thread/--close: the worker report/question seqs this accounts for (or a worker conv id for its pending ones on this thread).' },
       { name: 'close', kind: 'int', value: 'ID', desc: 'Close an open thread by the id `state` shows.' },
-      { name: 'with', kind: 'string', value: 'TEXT', desc: 'With --close/--retire/--reconcile/--account-from-now: the evidence.' },
+      { name: 'park', kind: 'int', value: 'ID', desc: 'Park an open thread: kept, not worked, out of the remaining-work list; needs --with "<why>".' },
+      { name: 'unpark', kind: 'int', value: 'ID', desc: 'Bring a parked thread back as it was.' },
+      { name: 'with', kind: 'string', value: 'TEXT', desc: 'With --close/--park/--retire/--reconcile/--account-from-now: the evidence or reason.' },
 
       { name: 'account-from-now', kind: 'boolean', desc: 'Start accounting for worker results here. Once only; everything earlier becomes history to reconcile.' },
       { name: 'reconcile', kind: 'string', value: 'SEQS', desc: 'Say what happened to reports from before accounting started, by seq; needs --as and --with.' },
@@ -440,6 +442,23 @@ export const SESSION_VERBS: VerbSpec[] = [
         '  has taken in, not one still waiting.',
       'Pass the emoji itself (👍, not :thumbsup:). Use it sparingly, as an acknowledgement — "seen", "on it",\n' +
         '  "done" — and never instead of a reply they need.',
+    ],
+  },
+  {
+    name: 'permission',
+    summary: 'Decide a worker\'s permission request, or hand it to the user.',
+    positionals: [{ name: 'id', required: true }, { name: 'action', required: true }],
+    flags: [
+      { name: 'from', kind: 'string', value: 'CONV', desc: 'Your own conversation id: the coordinator the request was sent to.' },
+      { name: 'reason', kind: 'string', value: 'TEXT', desc: 'With deny: what the worker should do instead. With escalate: one plain sentence telling the user why it is theirs.' },
+      { name: 'host', kind: 'string', value: 'H', desc: 'Server host (default: from config).' },
+      { name: 'port', kind: 'int', value: 'N', desc: 'Server port (default: from config).' },
+      JSON_FLAG,
+    ],
+    notes: [
+      '<action> is allow, deny or escalate. <id> is the request id in the permission message you received.',
+      'allow and deny answer the worker at once and the user never sees the request. escalate shows it to the\n' +
+        '  user, with your reason, in your thread and the worker\'s, and notifies them; do not also ask in the thread.',
     ],
   },
   {

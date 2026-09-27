@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { deriveStatus, deriveActivity, deriveProcessAlive, deriveUsage, deriveBackgroundTasks, hasRunningBackgroundTasks, deriveScheduledWakeup, derivePlanOutcomes } from '../../src/protocol/derive.js'
 import { makeEvent, makeContentEvent, resetSeq } from '../helpers/events.js'
+import type { EventType } from '../../src/protocol/events.js'
 
 beforeEach(() => resetSeq())
 
@@ -172,6 +173,75 @@ describe('deriveStatus', () => {
       makeEvent('context:compaction', { phase: 'completed', result: 'success' }),
     ]
     expect(deriveStatus(events)).toBe('streaming')
+  })
+
+  // Event order recorded from a Claude session sent a message mid-compaction
+  // (conv-PK-0ehg9u-G3 seq 68-82, 27 Sep 2026): the message is held until the
+  // compaction ends, then answered as a turn with no input:sent of its own.
+  describe('a message held through a compaction', () => {
+    const compactionWithHeldMessage = () => [
+      makeEvent('run:ready'),
+      makeEvent('turn:end'),
+      makeEvent('input:sent', { text: '/compact', source: 'command' }),
+      makeEvent('context:compaction', { phase: 'started' }),
+      makeEvent('input:sent', { text: 'What colour is the sea?' }),
+      makeEvent('context:compaction', { phase: 'completed', result: 'success' }),
+      makeEvent('run:ready'),
+      makeEvent('turn:end', { compact: true }),
+      makeEvent('input:read' as EventType, { ids: ['a'] }),
+      makeEvent('input:incorporated' as EventType, { where: 'next-turn' }),
+      makeEvent('turn:end'),
+    ]
+
+    it('reads streaming once the compaction turn ends and the message starts', () => {
+      expect(deriveStatus(compactionWithHeldMessage())).toBe('streaming')
+      expect(deriveStatus([...compactionWithHeldMessage(), makeEvent('run:ready')])).toBe('streaming')
+    })
+
+    it('reads streaming when the compaction boundary lands after the incorporation', () => {
+      // Recorded the other way round in conv-PK-0ehg9u-G3 seq 96-101.
+      const events = [
+        makeEvent('turn:end'),
+        makeEvent('input:sent', { text: '/compact', source: 'command' }),
+        makeEvent('context:compaction', { phase: 'started' }),
+        makeEvent('input:sent', { text: 'What colour is the sea?' }),
+        makeEvent('context:compaction', { phase: 'completed', result: 'success' }),
+        makeEvent('input:read' as EventType, { ids: ['a'] }),
+        makeEvent('input:incorporated' as EventType, { where: 'next-turn' }),
+        makeEvent('run:ready'),
+        makeEvent('turn:end', { compact: true }),
+        makeEvent('turn:end'),
+        makeEvent('run:ready'),
+      ]
+      expect(deriveStatus(events)).toBe('streaming')
+    })
+
+    it('reads idle once the answer ends', () => {
+      const events = [
+        ...compactionWithHeldMessage(),
+        makeEvent('run:ready'),
+        makeContentEvent([{ type: 'text', text: 'Blue.' }]),
+        makeEvent('turn:end'),
+      ]
+      expect(deriveStatus(events)).toBe('idle')
+    })
+
+    it('reads idle when the turn after it ends on an error', () => {
+      const events = [
+        makeEvent('turn:end'),
+        makeEvent('input:incorporated' as EventType, { where: 'next-turn' }),
+        makeEvent('turn:end', { error: { message: 'Overloaded', reason: 'api_error' } }),
+      ]
+      expect(deriveStatus(events)).toBe('idle')
+    })
+
+    it('does not treat a mid-turn incorporation as a new turn', () => {
+      const events = [
+        makeEvent('turn:end'),
+        makeEvent('input:incorporated' as EventType, { where: 'mid-turn' }),
+      ]
+      expect(deriveStatus(events)).toBe('idle')
+    })
   })
 
   it('returns starting for a new run after previous ended', () => {

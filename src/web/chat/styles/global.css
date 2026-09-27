@@ -368,33 +368,3 @@ body {
   0% { transform: translateX(-100%); }
   100% { transform: translateX(400%); }
 }
-
-/* Voice orb.
- *
- * A slow breath in the ring while ready (accent), a faster one while live
- * (rose, since tapping it then ends the session). It breathes in the border
- * and fill, not a glow. Reduced motion holds the resting state. */
-.voice-orb[data-voice-state='ready'] {
-  animation: voice-orb-breathe-cool 3.2s ease-in-out infinite;
-}
-
-.voice-orb[data-voice-state='live'] {
-  animation: voice-orb-breathe-warm 2.2s ease-in-out infinite;
-}
-
-@keyframes voice-orb-breathe-cool {
-  0%, 100% { border-color: rgb(var(--color-cool-rgb) / 0.35); background-color: rgb(var(--color-cool-rgb) / 0.05); }
-  50%      { border-color: rgb(var(--color-cool-rgb) / 0.7); background-color: rgb(var(--color-cool-rgb) / 0.12); }
-}
-
-@keyframes voice-orb-breathe-warm {
-  0%, 100% { border-color: rgb(var(--color-rose-rgb) / 0.4); background-color: rgb(var(--color-rose-rgb) / 0.06); }
-  50%      { border-color: rgb(var(--color-rose-rgb) / 0.8); background-color: rgb(var(--color-rose-rgb) / 0.14); }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .voice-orb[data-voice-state='ready'],
-  .voice-orb[data-voice-state='live'] {
-    animation: none;
-  }
-}

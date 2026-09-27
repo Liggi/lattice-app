@@ -11,7 +11,9 @@
 
 import { readFileSync } from 'node:fs';
 import { parseJson } from '../../utils/json.js';
+import type { LLMOperationType } from '../insights/insight-types.js';
 import { ConfigService } from './config-service.js';
+import { getCostTracker } from './cost-tracker.js';
 import { createLogger } from './logger.js';
 
 const logger = createLogger('TypeSafeClient');
@@ -64,6 +66,13 @@ export function isTypeSafeConfigured(): boolean {
   return resolveTypeSafeKey() !== null;
 }
 
+export interface JudgeOptions {
+  timeoutMs: number;
+  fetchImpl?: typeof fetch;
+  /** Recorded in `llm_costs` with the call's token usage. */
+  cost?: { operation: LLMOperationType; sessionId: string };
+}
+
 /**
  * Ask Jev one noul question. Throws `TypeSafeUnavailableError` when the key
  * is missing, the call times out, or the service answers anything but 200
@@ -73,7 +82,7 @@ export function isTypeSafeConfigured(): boolean {
 export async function judgeNoul(
   state: string,
   question: NoulQuestion,
-  options: { timeoutMs: number; fetchImpl?: typeof fetch } = { timeoutMs: 3000 },
+  options: JudgeOptions = { timeoutMs: 3000 },
 ): Promise<NoulAnswer> {
   const answer = await judgeNouls(state, { q: question }, options);
   return { noul: answer.nouls.q, model: answer.model, ms: answer.ms };
@@ -83,7 +92,7 @@ export async function judgeNoul(
 export async function judgeNouls<K extends string>(
   state: string,
   questions: Record<K, NoulQuestion>,
-  options: { timeoutMs: number; fetchImpl?: typeof fetch } = { timeoutMs: 3000 },
+  options: JudgeOptions = { timeoutMs: 3000 },
 ): Promise<{ nouls: Record<K, number>; model: string; ms: number }> {
   const key = resolveTypeSafeKey();
   if (!key) throw new TypeSafeUnavailableError('TypeSafe key not configured');
@@ -125,7 +134,11 @@ export async function judgeNouls<K extends string>(
     } catch {
       throw new TypeSafeUnavailableError('TypeSafe answered with malformed JSON');
     }
-    const answer = (parsed ?? {}) as { model?: unknown; answers?: Record<string, { noul?: unknown } | undefined> };
+    const answer = (parsed ?? {}) as {
+      model?: unknown;
+      answers?: Record<string, { noul?: unknown } | undefined>;
+      usage?: { input_tokens?: unknown; output_tokens?: unknown };
+    };
     const nouls = {} as Record<K, number>;
     for (const k of keys) {
       const noul = answer.answers?.[k]?.noul;
@@ -134,6 +147,30 @@ export async function judgeNouls<K extends string>(
       }
       nouls[k] = noul;
     }
-    return { nouls, model: typeof answer.model === 'string' ? answer.model : JEV_MODEL, ms: Date.now() - started };
+    const ms = Date.now() - started;
+    logJevCost(answer.usage, options.cost, ms);
+    return { nouls, model: typeof answer.model === 'string' ? answer.model : JEV_MODEL, ms };
+  }
+}
+
+/** Jev bills per token like any model; without this its spend never reached the cost log. */
+function logJevCost(
+  usage: { input_tokens?: unknown; output_tokens?: unknown } | undefined,
+  cost: JudgeOptions['cost'],
+  durationMs: number,
+): void {
+  const count = (n: unknown) => (typeof n === 'number' && Number.isFinite(n) ? n : 0);
+  try {
+    getCostTracker().log({
+      sessionId: cost?.sessionId ?? 'typesafe',
+      operation: cost?.operation ?? 'NEEDS_YOU',
+      model: JEV_MODEL,
+      inputTokens: count(usage?.input_tokens),
+      outputTokens: count(usage?.output_tokens),
+      durationMs,
+      provider: 'typesafe',
+    });
+  } catch {
+    // Ledger unavailable; the judgement still returns.
   }
 }

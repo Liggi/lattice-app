@@ -34,6 +34,11 @@ vi.mock('../../src/services/sessions/worker-report-delivery.js', () => ({
   deliverWorkerReport,
 }));
 
+const { harnessStatus } = vi.hoisted(() => ({ harnessStatus: { value: 'idle' } }));
+vi.mock('../../src/harness/setup.js', () => ({
+  getHarnessSessionManager: () => ({ inspect: () => ({ status: harnessStatus.value, processAlive: false }) }),
+}));
+
 function registerActive(registry: ActiveConversationRegistry, conversationId: string): void {
   const ac: ActiveConversation = {
     conversationId,
@@ -66,6 +71,7 @@ describe('createEventSideEffectsCallback — lifecycle pushes', () => {
 
   beforeEach(() => {
     onTurnEnd.mockReset();
+    harnessStatus.value = 'idle';
     registry = new ActiveConversationRegistry();
     idlePushes = [];
     startedPushes = [];
@@ -86,6 +92,22 @@ describe('createEventSideEffectsCallback — lifecycle pushes', () => {
     expect(idlePushes).toEqual(['conv-a']);
     expect(onTurnEnd).toHaveBeenCalledWith('conv-a');
     expect(deliverWorkerReport).toHaveBeenCalledWith('conv-a');
+  });
+
+  // A message sent while Claude compacts is answered as a turn of its own the
+  // moment the compaction's turn ends; the log then derives streaming, and
+  // the idle push waits for the answer's own turn:end.
+  it('pushes no idle on a turn:end the log says a held message has turned into a new turn', () => {
+    registerActive(registry, 'conv-h');
+    onEvent(event('input:sent', 'conv-h', { text: '/compact', source: 'command' }));
+
+    harnessStatus.value = 'streaming';
+    onEvent(event('turn:end', 'conv-h', {}));
+    expect(idlePushes).toEqual([]);
+
+    harnessStatus.value = 'idle';
+    onEvent(event('turn:end', 'conv-h', {}));
+    expect(idlePushes).toEqual(['conv-h']);
   });
 
   it('pushes session-idle ONCE when turn:end and run:end both arrive', () => {

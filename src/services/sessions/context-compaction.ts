@@ -174,7 +174,7 @@ function describeWorker(state: WorkerState, lastReport: string | null, cli: stri
 
 /**
  * The coordinator's workers as text, from its own log: who, the task, and
- * where each stands. Read by the restore block and by the fast responder.
+ * where each stands. Read by the restore block.
  */
 export function renderWorkerRoster(events: readonly WorkerEventLike[], cli: string): string {
   const lastReports = new Map<string, string>();

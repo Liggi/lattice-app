@@ -14,9 +14,6 @@ function assistant(id: string, content: string | DisplayContentBlock[]): RenderI
 function user(id: string, content: string): RenderItem {
   return { kind: 'message', message: { id, messageId: id, type: 'user', content, timestamp: '2026-09-19T20:56:00.000Z', provider: 'codex' } };
 }
-function quickAnswer(id: string, content: string): RenderItem {
-  return { kind: 'message', message: { id, messageId: id, type: 'assistant', content: [text(content)], timestamp: '2026-09-19T20:56:30.000Z', provider: 'codex', responder: 'fast' } };
-}
 function workerBlock(id: string): RenderItem {
   return { kind: 'message', message: { id, messageId: id, type: 'system', systemSubtype: 'worker', content: '', timestamp: '2026-09-19T20:56:40.000Z', provider: 'codex' } };
 }
@@ -78,16 +75,16 @@ describe('foldCoordinatorMachinery', () => {
     expect([done.summary, done.temporalState]).toEqual(['Reasoning', 'historical']);
   });
 
-  it('keeps the current work active when a quick answer, a worker block or the user arrives mid-turn', () => {
+  it('keeps the current work active when a worker block or the user arrives mid-turn', () => {
     const working = assistant('a1', [thinking('still going')]);
-    for (const interruption of [quickAnswer('q1', 'A quick answer.'), workerBlock('w1'), user('u1', 'one more thing')]) {
+    for (const interruption of [workerBlock('w1'), user('u1', 'one more thing')]) {
       const folds = foldCoordinatorMachinery([working, interruption], true).filter((i) => i.kind === 'folded');
       expect(folds.map((f) => (f.kind === 'folded' ? [f.summary, f.temporalState] : null))).toEqual([['Thinking', 'active']]);
     }
   });
 
   it('leaves nothing active when the coordinator has spoken since, even mid-stream', () => {
-    const items = [assistant('a1', [thinking('done with this')]), assistant('a2', [text('Answer.')]), quickAnswer('q1', 'aside')];
+    const items = [assistant('a1', [thinking('done with this')]), assistant('a2', [text('Answer.')]), workerBlock('w1')];
     const folds = foldCoordinatorMachinery(items, true).filter((i) => i.kind === 'folded');
     expect(folds.map((f) => (f.kind === 'folded' ? f.temporalState : null))).toEqual(['historical']);
   });

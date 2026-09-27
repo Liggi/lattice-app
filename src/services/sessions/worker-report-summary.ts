@@ -28,7 +28,8 @@
  *    completion.
  *
  * Bounds: gated by `generation.workerReportSummary`, closed by default; one
- * call per report and never a retry loop; skipped when a summary for that
+ * call per report, plus one follow-up when a line is over the card's bounds or
+ * it names something the report does not, and never a retry loop; skipped when a summary for that
  * report already exists, so a replayed delivery cannot write a second one.
  *
  * It runs after the report has already reached the coordinator — the delivery
@@ -48,11 +49,14 @@ import { appendCustomHarnessEvent } from '../../harness/harness-custom-events.js
 import { getEvents } from '../../session-history/repository.js';
 import {
   foldWorkerStates,
+  reportSummaryDraft,
+  reportSummaryOverLimits,
   usableReportSummary,
   WORKER_REPORT_SUMMARY_EVENT,
   type WorkerReportSummaryData,
 } from '../../types/worker-events.js';
 import { userName } from '../user-profile.js';
+import { unsupportedDetails } from '../insights/human-input.js';
 
 const logger = createLogger('WorkerReportSummary');
 
@@ -130,17 +134,36 @@ export function buildSummaryPrompt(task: string | null, report: string): { syste
     '  tests pass when the report says some fail.',
     '- Keep every blocker, open question, uncertainty and remaining step that changes what happens next. If the',
     '  worker is stuck, is asking something, or disagrees with the approach, that is the first line.',
+    '- The task above is context only: it says what the worker was sent to do, not what it did. State as done only',
+    '  what the report itself says is done. A report that only says it is waiting on something is summarised as',
+    '  waiting ("Waiting on CI for PR #290"), never as the task finished. Do not say what a PR, commit or branch',
+    '  contains, or that the task\'s change was made, unless the report says so; the task is what was asked, not',
+    '  what happened.',
+    '- Copy every name, number, version, ticket, PR and commit id exactly as the report writes it. If you are not',
+    '  sure of one, describe it in plain words instead of writing it from memory.',
     '- No praise, no verdict on the quality of the work, no "successfully", no counts of files or lines, no time',
     '  or effort estimates.',
     `- Name the part of the product ${userName()} would point at rather than the mechanism inside it. They have not read this`,
     '  code today and will not open the files.',
   ].join('\n');
   const user = [
-    ...(task ? ['What this worker was sent to do:', task, ''] : []),
+    ...(task ? ['What this worker was sent to do (context only; the report says what was done):', task, ''] : []),
     'The report it ended its turn on, as written:',
     report,
   ].join('\n');
   return { system, user };
+}
+
+/**
+ * Names, numbers and ids in a summary that its report and task do not contain,
+ * checked a sentence at a time so each sentence's first word counts as a
+ * sentence start rather than a name. Exported for tests.
+ */
+export function summaryDetailsMissing(summary: { title: string; text: string }, source: string): string[] {
+  const sentences = [summary.title, ...summary.text.split('\n')]
+    .flatMap((line) => line.replace(/^\s*-\s+/, '').split(/(?<=[.!?:;])\s+|\s+[\u2014-]\s+/))
+    .filter((sentence) => sentence.trim());
+  return [...new Set(sentences.flatMap((sentence) => unsupportedDetails(sentence, source)))];
 }
 
 /**
@@ -225,27 +248,52 @@ async function summariseReport({ coordinator, worker, reportSeq, report }: Repor
     messages: [{ role: 'user', content: prompt.user }],
   });
   const durationMs = Date.now() - started;
-  try {
-    getCostTracker().log({
-      sessionId: worker,
-      operation: 'WORKER_REPORT_SUMMARY',
-      model,
-      inputTokens: response.usage?.input_tokens ?? 0,
-      outputTokens: response.usage?.output_tokens ?? 0,
-      cacheCreationInputTokens: response.usage?.cache_creation_input_tokens ?? 0,
-      cacheReadInputTokens: response.usage?.cache_read_input_tokens ?? 0,
-      durationMs,
-    });
-  } catch (err) {
-    logger.debug('Cost tracking failed', { error: err });
-  }
+  logSummaryCost(worker, model, response, durationMs);
 
-  const summary = usableReportSummary(
-    response.content.map((block) => (block.type === 'text' ? block.text : '')).join('\n'),
-  );
-  if (!summary) {
+  const firstReply = replyText(response);
+  const draft = reportSummaryDraft(firstReply);
+  if (!draft) {
     logger.debug('No usable report summary; the card shows the report as stored', { worker, model });
     return;
+  }
+
+  // Two things send a summary back, once, in one follow-up. A line over the
+  // card's bounds used to lose the whole summary — about one report in seven —
+  // when all it needed was shortening. And a summary that names something the
+  // report does not say reads as right and is not. A second answer that still
+  // has either problem is dropped, and the card shows the report as stored.
+  const source = `${context.task ?? ''}\n${report}`;
+  const tooLong = reportSummaryOverLimits(draft);
+  const missing = summaryDetailsMissing({ title: draft.title, text: draft.points.join('\n') }, source);
+  let summary = usableReportSummary(firstReply);
+  if (!summary || missing.length > 0) {
+    logger.info('Report summary sent back', { worker, reportSeq, tooLong, details: missing });
+    const retryStarted = Date.now();
+    const retry = await client.messages.create({
+      model,
+      max_tokens: MAX_OUTPUT_TOKENS,
+      thinking: THINKING,
+      system: prompt.system,
+      messages: [
+        { role: 'user', content: prompt.user },
+        { role: 'assistant', content: firstReply },
+        { role: 'user', content: sendBackRequest(tooLong, missing) },
+      ],
+    });
+    logSummaryCost(worker, model, retry, Date.now() - retryStarted);
+    const second = usableReportSummary(replyText(retry));
+    const stillMissing = second ? summaryDetailsMissing(second, source) : [];
+    if (!second || stillMissing.length > 0) {
+      const secondDraft = second ? null : reportSummaryDraft(replyText(retry));
+      logger.info('Report summary dropped: the second answer still does not fit or still names details not in the report', {
+        worker,
+        reportSeq,
+        tooLong: secondDraft ? reportSummaryOverLimits(secondDraft) : [],
+        details: stillMissing,
+      });
+      return;
+    }
+    summary = second;
   }
 
   const manager = getHarnessSessionManager();
@@ -261,4 +309,40 @@ async function summariseReport({ coordinator, worker, reportSeq, report }: Repor
     model,
   } satisfies WorkerReportSummaryData);
   logger.info('Report summary written', { worker, reportSeq, model, ms: durationMs, title: summary.title });
+}
+
+function replyText(response: Anthropic.Message): string {
+  return response.content.map((block) => (block.type === 'text' ? block.text : '')).join('\n');
+}
+
+/** The follow-up that names what was wrong with the first summary. Exported for tests. */
+export function sendBackRequest(tooLong: string[], missing: string[]): string {
+  const parts: string[] = [];
+  if (tooLong.length > 0) {
+    parts.push(`Your summary does not fit the card. ${tooLong.join(' ')} Shorten it by saying less, not by cutting words ` +
+      'off: drop the least important fact or clause rather than leave a line unfinished.');
+  }
+  if (missing.length > 0) {
+    parts.push(`Your summary writes ${missing.map((d) => `"${d}"`).join(', ')}, which the report does not contain. ` +
+      'Copy every name, number and id exactly as the report writes it, or describe it in plain words.');
+  }
+  parts.push('Write it again in the same shape.');
+  return parts.join('\n\n');
+}
+
+function logSummaryCost(worker: string, model: string, response: Anthropic.Message, durationMs: number): void {
+  try {
+    getCostTracker().log({
+      sessionId: worker,
+      operation: 'WORKER_REPORT_SUMMARY',
+      model,
+      inputTokens: response.usage?.input_tokens ?? 0,
+      outputTokens: response.usage?.output_tokens ?? 0,
+      cacheCreationInputTokens: response.usage?.cache_creation_input_tokens ?? 0,
+      cacheReadInputTokens: response.usage?.cache_read_input_tokens ?? 0,
+      durationMs,
+    });
+  } catch (err) {
+    logger.debug('Cost tracking failed', { error: err });
+  }
 }

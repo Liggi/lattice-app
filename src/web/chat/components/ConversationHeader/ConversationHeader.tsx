@@ -1,7 +1,7 @@
 /* oxlint-disable react-doctor/no-cascading-set-state, react-doctor/no-giant-component, react-doctor/prefer-useReducer, react-doctor/no-render-in-render, react-doctor/no-effect-event-handler */
 import { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { Archive, ArrowLeft, PanelRight, PanelLeft, Menu, X, Settings, Import } from 'lucide-react';
+import { Archive, ArrowLeft, PanelRight, PanelLeft, Menu, X, Settings, Import, MessageSquare } from 'lucide-react';
 import { LatticeLogo } from '../shared/LatticeLogo';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../../services/api';
@@ -12,6 +12,7 @@ import { SettingsDialog } from '../SettingsDialog/SettingsDialog';
 import { archivedSidebarQueryKey } from '../../hooks/useArchivedSidebarSessions';
 import { removeConversationFromListCache, type ConversationListCacheData } from '../../utils/conversation-list-cache';
 import { useToast } from '../Toast/Toast';
+import { FeedbackDialog } from '../Feedback/FeedbackDialog';
 
 const UNDO_ARCHIVE_TOAST_MS = 8000;
 
@@ -52,6 +53,8 @@ export function ConversationHeader({
   const { conversations, invalidateConversations } = useConversations();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // An agent's proposals appear as cards in the chat, not here.
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
   const { showToast, dismissToast } = useToast();
 
   const refreshLists = () => Promise.all([
@@ -226,6 +229,21 @@ export function ConversationHeader({
           <Tooltip>
             <TooltipTrigger asChild>
               <button
+                onClick={() => setFeedbackOpen(true)}
+                disabled={!sessionId}
+                aria-label="Send feedback about this session"
+                className={iconBtn}
+                data-testid="session-feedback"
+              >
+                <MessageSquare size={16} />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent>Send feedback about this session</TooltipContent>
+          </Tooltip>
+
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
                 onClick={() => setSettingsOpen(true)}
                 aria-label="Settings"
                 className={iconBtn}
@@ -280,6 +298,18 @@ export function ConversationHeader({
                   <span>{isArchived ? 'Restore' : 'Archive'}</span>
                 </button>
 
+                <button
+                  onClick={() => {
+                    setFeedbackOpen(true);
+                    setMobileMenuOpen(false);
+                  }}
+                  disabled={!sessionId}
+                  className={menuItem}
+                >
+                  <MessageSquare size={16} />
+                  <span>Send feedback</span>
+                </button>
+
                 <div className="border-t border-line my-1" />
 
                 <button
@@ -311,6 +341,12 @@ export function ConversationHeader({
 
       {/* Settings Dialog */}
       <SettingsDialog isOpen={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      <FeedbackDialog
+        isOpen={feedbackOpen}
+        onClose={() => setFeedbackOpen(false)}
+        conversationId={sessionId ?? null}
+        screen="conversation"
+      />
     </TooltipProvider>
   );
 }

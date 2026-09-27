@@ -1,1 +1,1 @@
-export { PermissionBanner } from './PermissionBanner';
+export { PermissionBanner, PermissionWaitingLine } from './PermissionBanner';

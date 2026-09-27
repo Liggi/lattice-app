@@ -10,7 +10,6 @@ import { AMBIENT_LATEST_PATH } from '@/routes/ambient.routes.js';
 const SECRET_FIELDS = [
   ['anthropic', 'apiKey'],
   ['gemini', 'apiKey'],
-  ['elevenlabs', 'apiKey'],
 ] as const;
 
 /**

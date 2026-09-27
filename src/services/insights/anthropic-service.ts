@@ -12,6 +12,7 @@ import { anthropicClientFactory } from '../infrastructure/anthropic-client-facto
 import { getCostTracker } from '../infrastructure/cost-tracker.js';
 import type { LLMOperationType } from './insight-types.js';
 import { parseJson } from '../../utils/json.js';
+import { unsupportedDetails } from './human-input.js';
 import {
   SESSION_CATEGORIES,
   SESSION_CATEGORY_DEFINITIONS,
@@ -21,7 +22,8 @@ import {
 
 // Return type for extractSessionInsights - the core fields extracted from conversation
 export interface ExtractedInsights {
-  context: SessionContext;
+  /** Null when the model said the user's messages do not show what the session is for. */
+  context: SessionContext | null;
   theme: string;
   categories: SessionCategorySet | null;
   tags: SessionTags | null;
@@ -68,8 +70,8 @@ interface MetadataEvalResponse {
   tags?: { complexity?: string };
 }
 
-const DEFAULT_MISSION_MAX_CHARS = 54;
-const DEFAULT_MISSION_MAX_WORDS = 8;
+/** A mission is a sidebar title: it has to fit one line whole. */
+export const MISSION_MAX_CHARS = 54;
 const LEADING_MISSION_FILLERS: RegExp[] = [
   /^the (main )?goal (of this session )?is to\s+/i,
   /^our (main )?goal (for this session )?is to\s+/i,
@@ -81,32 +83,6 @@ const LEADING_MISSION_FILLERS: RegExp[] = [
   /^work(?:ing)? on\s+/i,
   /^we (?:are|were) (?:working|focusing) on\s+/i,
 ];
-
-function truncateAtWordBoundary(value: string, maxChars: number): string {
-  if (value.length <= maxChars) return value;
-
-  const candidate = value.slice(0, maxChars + 1);
-  const lastSpace = candidate.lastIndexOf(' ');
-  if (lastSpace >= Math.floor(maxChars * 0.6)) {
-    return candidate.slice(0, lastSpace).trim();
-  }
-
-  return value.slice(0, maxChars).trim();
-}
-
-function stripTrailingSeparator(value: string): string {
-  return value.replace(/[,:;|/-]+$/g, '').trim();
-}
-
-function stripTrailingConnector(value: string): string {
-  return value.replace(/\b(?:and|or|to|for|with|from|by|into|onto|via)$/i, '').trim();
-}
-
-function limitWordCount(value: string, maxWords: number): string {
-  const words = value.split(/\s+/).filter(Boolean);
-  if (words.length <= maxWords) return value;
-  return words.slice(0, maxWords).join(' ');
-}
 
 function normalizeMissionCasing(value: string): string {
   for (let index = 0; index < value.length; index += 1) {
@@ -130,11 +106,7 @@ function normalizeMissionCasing(value: string): string {
   return value;
 }
 
-export function normalizeMissionText(mission: string, maxChars: number = DEFAULT_MISSION_MAX_CHARS): string {
-  const safeMaxChars = Number.isFinite(maxChars) && maxChars > 12
-    ? Math.floor(maxChars)
-    : DEFAULT_MISSION_MAX_CHARS;
-
+export function normalizeMissionText(mission: string): string {
   const original = mission.trim();
   if (!original) return '';
 
@@ -151,32 +123,10 @@ export function normalizeMissionText(mission: string, maxChars: number = DEFAULT
     }
   }
 
+  // Trailing punctuation only. The mission is shown whole: length is the
+  // model's job (see `fitMission`), never a cut here.
   cleaned = cleaned.replace(/\s*[.!?]+$/, '').trim();
-
-  if (!cleaned) {
-    cleaned = original;
-  }
-
-  const firstClause = cleaned.split(/[.?!;:|]|(?:\s-\s)|(?:\s—\s)/)[0]?.trim() ?? cleaned;
-  let concise = firstClause.length >= 16 ? firstClause : cleaned;
-  concise = stripTrailingConnector(stripTrailingSeparator(limitWordCount(concise, DEFAULT_MISSION_MAX_WORDS)));
-
-  if (!concise) {
-    concise = cleaned;
-  }
-
-  concise = normalizeMissionCasing(concise);
-
-  if (concise.length <= safeMaxChars) {
-    return concise;
-  }
-
-  if (firstClause.length >= 24 && firstClause.length <= safeMaxChars) {
-    return stripTrailingConnector(stripTrailingSeparator(firstClause));
-  }
-
-  const truncated = stripTrailingSeparator(truncateAtWordBoundary(concise, safeMaxChars));
-  return stripTrailingConnector(truncated);
+  return normalizeMissionCasing(cleaned || original);
 }
 
 /** A project title has to fit one sidebar line beside a tile and a time. */
@@ -196,7 +146,8 @@ export const PROJECT_NAME_MAX_CHARS = 40;
 const VERB_LED_NAME = /^(add|build|clean|create|deliver|design|develop|drive|enable|ensure|establish|finish|fix|get|give|implement|improve|make|move|own|prioriti[sz]e|prove|refactor|remove|resolve|restore|run|ship|simplify|sort|take|turn|update|verify|work)\b/i;
 
 /**
- * Trim a generated project name to something renderable, or reject it.
+ * Clean a generated project name, or reject it. Never cuts: a name too long
+ * for its line goes back to the model (see `generateProjectName`).
  *
  * Kept separate from the API call so the rules are testable without a client,
  * and separate from `normalizeMissionText` because the two want opposite
@@ -216,8 +167,7 @@ export function normalizeProjectName(raw: string): string | null {
   if (cleaned.length > PROJECT_NAME_MAX_CHARS * 2) return null;
   if (VERB_LED_NAME.test(cleaned)) return null;
 
-  const trimmed = stripTrailingSeparator(truncateAtWordBoundary(cleaned, PROJECT_NAME_MAX_CHARS));
-  return trimmed || null;
+  return cleaned;
 }
 
 /**
@@ -487,6 +437,77 @@ export class AnthropicService extends EventEmitter {
   }
 
   /**
+   * A mission that is too long to show whole, or names something the input
+   * does not contain, goes back to the model once with the problem stated.
+   * Returns the mission to show, or null to keep whatever was shown before:
+   * a detail still missing from the input after the second try means the
+   * model cannot name this session correctly. A second answer that is still
+   * too long is kept whole; nothing here cuts it.
+   */
+  private async fitMission(
+    client: Anthropic,
+    system: string,
+    userContent: string,
+    firstReply: string,
+    mission: string,
+    sessionId?: string,
+  ): Promise<string | null> {
+    const problems = (candidate: string) => {
+      const found: string[] = [];
+      if (candidate.length > MISSION_MAX_CHARS) found.push(`it is ${candidate.length} characters and has to fit in ${MISSION_MAX_CHARS}`);
+      const unsupported = unsupportedDetails(candidate, userContent);
+      if (unsupported.length > 0) found.push(`it names ${unsupported.map((d) => `"${d}"`).join(', ')}, which the input does not contain`);
+      return { found, unsupported };
+    };
+
+    const first = problems(mission);
+    if (first.found.length === 0) return mission;
+    this.logger.info('Mission sent back to the model', { sessionId, mission, problems: first.found });
+
+    const startTime = Date.now();
+    const response = await this.withRetry('fitMission', () =>
+      client.messages.create({
+        model: this.models.generation,
+        max_tokens: 100,
+        thinking: THINKING,
+        system,
+        messages: [
+          { role: 'user', content: userContent },
+          { role: 'assistant', content: firstReply },
+          {
+            role: 'user',
+            content: `The mission "${mission}" does not work: ${first.found.join('; ')}. ` +
+              `Write it again so it fits in ${MISSION_MAX_CHARS} characters and names only things written in the input. ` +
+              'Reply with only JSON: {"mission": "..."}, or {"mission": null} if you cannot.',
+          },
+        ],
+      })
+    );
+    this.logCost(response, 'MISSION_FIT', this.models.generation, Date.now() - startTime, sessionId);
+
+    const text = response.content[0]?.type === 'text' ? response.content[0].text : '';
+    const braces = text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1);
+    let second: unknown = null;
+    try {
+      second = (parseJson(braces) as { mission?: unknown }).mission;
+    } catch {
+      second = null;
+    }
+    if (typeof second !== 'string' || !second.trim()) {
+      this.logger.info('Mission withdrawn after a fit request', { sessionId, mission, problems: first.found });
+      return null;
+    }
+
+    const retry = normalizeMissionText(second);
+    const after = problems(retry);
+    if (after.unsupported.length > 0) {
+      this.logger.info('Mission dropped: names details the input does not contain', { sessionId, mission: retry, details: after.unsupported });
+      return null;
+    }
+    return retry;
+  }
+
+  /**
    * Extract rich, structured session insights using Sonnet.
    * Returns: context (project, area, mission, scope), theme, and tags (complexity).
    */
@@ -500,12 +521,16 @@ export class AnthropicService extends EventEmitter {
 
 The goal: Someone glancing at this dashboard should immediately understand what this session is about.
 
+What you are shown: the messages the user typed and, for a session a coordinator started, the brief it was started with. Messages from other agents, workers and the server were left out, so a short reply like "yeah do it" may be answering something you cannot see. Do not guess at what it answered. If neither the brief nor the user's messages show what the session is for, set context.mission to null instead of inferring one from the assistant responses or task list; a missing mission is better than a wrong one.
+
+Names and details: every name, number, version, ticket id, repo, product or person in the mission must appear exactly as written in the input ("Opus 5.5", not "Opus 5"; the ticket the user named, not a neighbouring one). If you are not sure of a detail, use a plain word instead ("the model upgrade", "an image bug"). A vague title is fine; a wrong detail is not.
+
 Extract the following:
 
 1. CONTEXT - Identity of the session:
    - project: The actual project/tool/codebase being worked ON in this session. Derive this from the conversation content — what is the user building, fixing, or discussing? The working directory may be provided as a hint, but ONLY use it if it clearly identifies a specific project (e.g. "/home/alex/code/recipe-planner" → "Recipe Planner"). IGNORE generic paths like home directories (e.g. "/home/user", "/Users/alex", "~"). IMPORTANT: The orchestrator/dashboard tool that manages these sessions lives at a directory called "lattice" — if the session is working on the orchestrator/dashboard itself, use "Lattice".
    - area: The specific component/module/domain if applicable (null if general)
-   - mission: The session's overall purpose as a concise phrase (3-7 words, <=54 chars). This is the through-line of the WHOLE session — what someone would say the session is for — NOT the sub-task currently in progress. Sessions wander through tangents and mini-tasks; weigh the earliest requests and recurring goals over the most recent messages. Be specific and concrete. Avoid filler intros like "The goal is to..."
+   - mission: The session's overall purpose as a concise phrase, or null when the input does not show it. It is shown whole as a one-line title and never cut, so write it to fit: at most ${MISSION_MAX_CHARS} characters. This is the through-line of the WHOLE session — what someone would say the session is for — NOT the sub-task currently in progress. Sessions wander through tangents and mini-tasks; weigh the earliest requests and recurring goals over the most recent messages. Be specific and concrete. Avoid filler intros like "The goal is to..."
    - scope: "minor" (quick fix), "feature" (meaningful addition), "major" (significant change)
 
 2. CATEGORIES - Work-type classification from this CLOSED set (use these exact words):
@@ -524,16 +549,17 @@ CRITICAL OUTPUT INSTRUCTIONS:
 - Do NOT include markdown code blocks or formatting
 - Start your response with { and end with }
 - No prose, no commentary, ONLY the JSON object
-- Ensure context.mission is concise (<=54 characters)
+- Ensure context.mission is at most ${MISSION_MAX_CHARS} characters
 
 JSON Structure:
 {
-  "context": { "project": "string", "area": "string|null", "mission": "string", "scope": "minor|feature|major" },
+  "context": { "project": "string", "area": "string|null", "mission": "string|null", "scope": "minor|feature|major" },
   "categories": { "primary": "string", "secondary": ["string"] },
   "theme": "string",
   "tags": { "complexity": "routine|tricky|gnarly" }
 }`;
 
+    const userContent = `Analyze this coding session and extract structured insights:\n\n${conversationText}`;
     let responseText: string | null = null;
     const startTime = Date.now();
     try {
@@ -546,12 +572,7 @@ JSON Structure:
           // No assistant prefill: the 5-family rejects a trailing assistant
           // turn with a 400. The system prompt's ONLY-JSON instructions plus
           // the brace-extraction fallbacks below carry the same guarantee.
-          messages: [
-            {
-              role: 'user',
-              content: `Analyze this coding session and extract structured insights:\n\n${conversationText}`
-            }
-          ]
+          messages: [{ role: 'user', content: userContent }]
         })
       );
       const durationMs = Date.now() - startTime;
@@ -588,7 +609,7 @@ JSON Structure:
       });
 
       const parsed = parseJson(jsonText) as {
-        context?: SessionContext;
+        context?: Omit<SessionContext, 'mission'> & { mission?: string | null };
         categories?: { primary?: string; secondary?: string[] };
         theme?: string;
         tags?: SessionTags;
@@ -599,7 +620,14 @@ JSON Structure:
         throw new LatticeError('ANTHROPIC_INSIGHTS_ERROR', 'Invalid response structure: missing context', 500);
       }
 
-      if (!parsed.context.mission || typeof parsed.context.mission !== 'string') {
+      // An explicit null is the model declining: the user's messages do not
+      // say what the session is for. Callers keep what they had.
+      const mission = parsed.context.mission;
+      if (mission === null || (typeof mission === 'string' && !mission.trim())) {
+        this.logger.info('Session insights declined: user messages do not show the mission', { sessionId });
+        return { context: null, theme: '', categories: null, tags: null };
+      }
+      if (typeof mission !== 'string') {
         throw new LatticeError('ANTHROPIC_INSIGHTS_ERROR', 'Invalid response structure: missing mission', 500);
       }
 
@@ -616,10 +644,15 @@ JSON Structure:
           }
         : null;
 
+      const fitted = await this.fitMission(client, systemPrompt, userContent, responseText, normalizeMissionText(mission), sessionId);
+      if (fitted === null) {
+        return { context: null, theme: '', categories: null, tags: null };
+      }
+
       const result: ExtractedInsights = {
         context: {
           ...parsed.context,
-          mission: normalizeMissionText(parsed.context.mission),
+          mission: fitted,
         },
         theme: parsed.theme || 'working',
         categories,
@@ -630,7 +663,7 @@ JSON Structure:
         model: this.models.generation,
         inputTokens: response.usage?.input_tokens,
         outputTokens: response.usage?.output_tokens,
-        project: result.context.project,
+        project: parsed.context.project,
         theme: result.theme
       });
 
@@ -1103,6 +1136,62 @@ Respond with ONLY the summary text, nothing else. No quotes, no explanation.`;
   }
 
   /**
+   * A project name too long for its line, or naming something the outcome does
+   * not, goes back to the model once with the problem stated, as missions do in
+   * `fitMission`. Returns null when the second answer still names something
+   * the outcome does not; a second answer that is still long is kept whole.
+   */
+  private async fitProjectName(
+    client: Anthropic,
+    prompt: string,
+    firstReply: string,
+    name: string,
+    outcome: string,
+    sessionId?: string,
+  ): Promise<string | null> {
+    const problems: string[] = [];
+    if (name.length > PROJECT_NAME_MAX_CHARS) problems.push(`it is ${name.length} characters and has to fit in ${PROJECT_NAME_MAX_CHARS}`);
+    const unsupported = unsupportedDetails(name, outcome);
+    if (unsupported.length > 0) problems.push(`it names ${unsupported.map((d) => `"${d}"`).join(', ')}, which the outcome does not contain`);
+    if (problems.length === 0) return name;
+    this.logger.info('Project name sent back to the model', { sessionId, name, problems });
+
+    const startTime = Date.now();
+    const response = await this.withRetry('fitProjectName', () =>
+      client.messages.create({
+        model: this.models.quickCheck,
+        max_tokens: 30,
+        thinking: THINKING,
+        temperature: 0,
+        messages: [
+          { role: 'user', content: prompt },
+          { role: 'assistant', content: firstReply },
+          {
+            role: 'user',
+            content: `The name "${name}" does not work: ${problems.join('; ')}. ` +
+              `Write it again so it fits in ${PROJECT_NAME_MAX_CHARS} characters and names only things written in the outcome. ` +
+              'Respond with ONLY the name, nothing else.',
+          },
+        ],
+      })
+    );
+    this.logCost(response, 'PROJECT_NAME', this.models.quickCheck, Date.now() - startTime, sessionId);
+
+    const raw = response.content[0]?.type === 'text' ? response.content[0].text : '';
+    const retry = normalizeProjectName(raw);
+    if (!retry) {
+      this.logger.info('Project name withdrawn after a fit request', { sessionId, name, raw });
+      return null;
+    }
+    const stillUnsupported = unsupportedDetails(retry, outcome);
+    if (stillUnsupported.length > 0) {
+      this.logger.info('Project name dropped: names details the outcome does not contain', { sessionId, name: retry, details: stillUnsupported });
+      return null;
+    }
+    return retry;
+  }
+
+  /**
    * The short title a project carries in the sidebar, written from the outcome
    * its coordinator has agreed with the user.
    *
@@ -1132,7 +1221,8 @@ Write the project's name, as it will appear in a sidebar list next to their othe
 
 - Name the thing being owned, not the work being done to it. "Lattice workspace improvements", not "Simplify the sidebar".
 - A noun phrase. No leading verb, no "Improve/Build/Fix/Turn ... into".
-- Use the full ${PROJECT_NAME_MAX_CHARS} characters if the name needs them. A name is only too long if it passes ${PROJECT_NAME_MAX_CHARS}; it is too short the moment it drops a word that distinguishes this project from a neighbouring one.
+- Use the full ${PROJECT_NAME_MAX_CHARS} characters if the name needs them. A name is only too long if it passes ${PROJECT_NAME_MAX_CHARS}; it is shown whole and never cut, so a longer one does not fit. It is too short the moment it drops a word that distinguishes this project from a neighbouring one.
+- Every name, product and version in it must appear in the outcome exactly as written there.
 - Keep the outcome's concrete nouns — product, system and domain names are what make a project recognisable in a list. Drop the verbs and the qualifiers.
 - Never end on a bare generic noun ("and app", "and work", "system stuff"). If a word is worth keeping, keep the word that identifies it.
 - It has to stay right for months, while the tasks underneath it change. Nothing about the current step belongs in it.
@@ -1154,11 +1244,13 @@ Respond with ONLY the name, nothing else.`;
       this.logCost(response, 'PROJECT_NAME', this.models.quickCheck, durationMs, sessionId);
 
       const raw = response.content[0]?.type === 'text' ? response.content[0].text : '';
-      const name = normalizeProjectName(raw);
-      if (!name) {
-        this.logger.debug('Project name generation produced nothing usable', { raw: raw.slice(0, 80) });
+      const first = normalizeProjectName(raw);
+      if (!first) {
+        this.logger.debug('Project name generation produced nothing usable', { raw });
         return null;
       }
+      const name = await this.fitProjectName(client, prompt, raw, first, outcome, sessionId);
+      if (!name) return null;
 
       this.logger.info('Project name generated', {
         durationMs,

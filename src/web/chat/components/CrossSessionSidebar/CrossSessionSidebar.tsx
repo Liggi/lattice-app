@@ -1,12 +1,14 @@
 /* oxlint-disable react-doctor/no-cascading-set-state, react-doctor/no-giant-component, react-doctor/prefer-useReducer, react-doctor/no-render-in-render, react-doctor/no-effect-event-handler */
 import React, { useCallback, useMemo, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import {
   PanelLeft,
   Plus,
   ChevronDown, ChevronRight,
+  Inbox,
 } from 'lucide-react';
+import { useFeedbackInboxUnread, useFeedbackStatus } from '../../hooks/useFeedback';
 import { SessionCard } from '../shared/SessionCard';
 import { LatticeLogo } from '../shared/LatticeLogo';
 
@@ -100,6 +102,10 @@ export function CrossSessionSidebar({
   onOpen: _onOpen,
 }: CrossSessionSidebarProps): JSX.Element | null {
   const navigate = useNavigate();
+  const location = useLocation();
+  const onFeedbackPage = location.pathname === '/feedback';
+  const feedbackInbox = useFeedbackStatus()?.inbox === true;
+  const feedbackUnread = useFeedbackInboxUnread(feedbackInbox);
   const queryClient = useQueryClient();
   const { conversations, loading, recentActions, invalidateConversations, recentlyCompletedSessions } = useConversations();
 
@@ -234,6 +240,25 @@ export function CrossSessionSidebar({
 
       {/* Session list */}
       <div className="relative flex-1 overflow-y-auto px-3 pt-2 pb-3 flex flex-col gap-5">
+        {feedbackInbox && (
+          <button
+            onClick={() => {
+              navigate('/feedback');
+              if (window.innerWidth < 768) onClose();
+            }}
+            data-testid="sidebar-feedback-inbox"
+            className={`flex items-center justify-between gap-2 px-2 py-1.5 rounded-md text-sm transition-colors cursor-pointer ${
+              onFeedbackPage ? 'bg-surface-2 text-fg' : 'text-fg-2 hover:text-fg hover:bg-surface'
+            }`}
+          >
+            <span className="flex items-center gap-2.5">
+              <Inbox size={16} className="text-fg-3" />
+              <span>Feedback</span>
+            </span>
+            {feedbackUnread ? <span className="font-mono text-[11px] text-accent">{feedbackUnread} unread</span> : null}
+          </button>
+        )}
+
         <div data-testid="projects-section">
           <div className="flex items-center justify-between px-2 pb-1.5 text-xs font-medium text-fg-3">
             <span>Projects</span>

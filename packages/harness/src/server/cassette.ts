@@ -14,7 +14,7 @@
  * think-time — only CLI processing time after stdin is preserved).
  */
 
-import type { ProcessAdapter, ProcessHandle, SpawnConfig } from './process-adapter.js'
+import type { ProcessAdapter, ProcessHandle, SpawnConfig, SteerOutcome, SteerRequest } from './process-adapter.js'
 
 // ---- Cassette entry types ----
 
@@ -198,6 +198,7 @@ export class CassetteAdapter implements ProcessAdapter {
     let lineResolve: ((value: IteratorResult<string>) => void) | null = null
     let stdinGate: (() => void) | null = null
     let stdinIndex = 0
+    const awaitingIncorporation: Array<NonNullable<SteerRequest['onStage']>> = []
     let resolveExit!: (value: { code: number; signal?: string }) => void
     const exited = new Promise<{ code: number; signal?: string }>(resolve => {
       resolveExit = resolve
@@ -251,6 +252,11 @@ export class CassetteAdapter implements ProcessAdapter {
         lastTs = entry.ts
 
         if (entry.type === 'stdout') {
+          if (awaitingIncorporation.length > 0 && answersInput(entry.data)) {
+            for (const onStage of awaitingIncorporation.splice(0)) {
+              onStage({ kind: 'incorporated', where: 'mid-turn', evidence: 'cassette playback reached a line answering it' })
+            }
+          }
           emitLine(entry.data)
         } else if (entry.type === 'exit') {
           endStream()
@@ -288,15 +294,30 @@ export class CassetteAdapter implements ProcessAdapter {
       },
     }
 
+    const write = (input: string): void => {
+      self.stdinWrites.push(input)
+      if (stdinGate) {
+        const gate = stdinGate
+        stdinGate = null
+        gate()
+      }
+    }
+
     return {
       stdout,
-      write(input: string) {
-        self.stdinWrites.push(input)
-        if (stdinGate) {
-          const gate = stdinGate
-          stdinGate = null
-          gate()
-        }
+      write,
+      /**
+       * A mid-turn input goes to the next stdin marker like any write. It is
+       * acknowledged at once and reported taken in at the next line that
+       * answers it, as the live CLI's queue would report them.
+       */
+      async steer(request: SteerRequest): Promise<SteerOutcome> {
+        if (!alive) return { status: 'rejected', reason: 'Cassette playback has ended' }
+        request.onStage?.({ kind: 'handed-over' })
+        write(request.input)
+        request.onStage?.({ kind: 'accepted', late: false })
+        if (request.onStage) awaitingIncorporation.push(request.onStage)
+        return { status: 'accepted' }
       },
       signal(sig: NodeJS.Signals) {
         self.signals.push(sig)
@@ -305,5 +326,17 @@ export class CassetteAdapter implements ProcessAdapter {
       get alive() { return alive },
       pid: undefined,
     }
+  }
+}
+
+/** Whether a recorded CLI line is the model answering input: a thinking or text block, or the turn's result. */
+function answersInput(line: string): boolean {
+  try {
+    const frame = JSON.parse(line) as { type?: string; message?: { content?: Array<{ type?: string }> } }
+    if (frame.type === 'result') return true
+    return frame.type === 'assistant'
+      && (frame.message?.content ?? []).some(block => block.type === 'thinking' || block.type === 'text')
+  } catch {
+    return false
   }
 }

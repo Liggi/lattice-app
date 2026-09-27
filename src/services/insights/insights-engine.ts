@@ -8,6 +8,10 @@ import { resolveCanonicalId } from '../sessions/resolve-canonical-id.js';
 import { LatticeError } from '@/types/index.js';
 import { allowGeneration } from '../infrastructure/generation-gates.js';
 import { InsightAuditRepository } from './insight-audit-repository.js';
+import { homedir } from 'os';
+import { capMessage, humanTextOfInput, isGenericFolder, pickupBriefOf } from './human-input.js';
+import { ConfigService } from '../infrastructure/config-service.js';
+import { userName } from '../user-profile.js';
 
 // =============================================================================
 // Types — owned by InsightsEngine (previously on SessionInfoService)
@@ -125,6 +129,15 @@ export type { SessionInsights, TodoItem } from '@/types/index.js';
 const MIN_USER_MESSAGES = 2;
 
 // Debounce: skip if insights were computed within this window.
+/** The one folder every session is launched from (Settings → Launch folder). */
+function launchFolder(): string | undefined {
+  try {
+    return ConfigService.getInstance().getConfig().server?.defaultWorkingDirectory;
+  } catch {
+    return undefined;
+  }
+}
+
 const RECOMPUTE_COOLDOWN_MS = 60_000;
 
 export class InsightsEngine {
@@ -346,13 +359,16 @@ export class InsightsEngine {
 
   /**
    * Read conversation content from harness events.
-   * Returns structured data for insight generation.
+   * Returns structured data for insight generation. `userPrompts` holds only
+   * what the user wrote (see `human-input.ts`), never server-injected input.
    */
   private readConversationFromEvents(sessionId: string): {
     userPrompts: string[];
     assistantTexts: string[];
     todoState: TodoItem[] | null;
     messageCount: number;
+    /** A worker's task as its coordinator wrote it at pickup; null for anything else. */
+    brief: string | null;
   } {
     type EventRow = { type: string; data: string };
     const rows = this.db.prepare(
@@ -363,24 +379,35 @@ export class InsightsEngine {
     const assistantTexts: string[] = [];
     let todoState: TodoItem[] | null = null;
     let messageCount = 0;
+    const name = userName();
+    // Codex streams a reply as many content events sharing one messageId; join
+    // them so "recent assistant responses" are replies, not ". play to".
+    let lastTextMessageId: string | null = null;
+    let brief: string | null = null;
 
     for (const row of rows) {
       const data = parseJson(row.data) as Record<string, unknown>;
 
       if (row.type === 'input:sent') {
         const text = data.text as string | undefined;
-        if (text?.trim()) {
-          userPrompts.push(text.trim());
-          messageCount++;
-        }
+        if (text?.trim()) messageCount++;
+        const human = text ? humanTextOfInput(text, name) : null;
+        if (human) userPrompts.push(human);
+        brief ??= text ? pickupBriefOf(text) : null;
       } else if (row.type === 'content') {
         const blocks = data.blocks as Array<{ type: string; text?: string; thinking?: string; name?: string; input?: Record<string, unknown> }> | undefined;
         if (!blocks) continue;
         messageCount++;
 
+        const messageId = typeof data.messageId === 'string' ? data.messageId : null;
         for (const block of blocks) {
           if (block.type === 'text' && block.text?.trim()) {
-            assistantTexts.push(block.text.trim());
+            if (messageId && messageId === lastTextMessageId && assistantTexts.length > 0) {
+              assistantTexts[assistantTexts.length - 1] += block.text;
+            } else {
+              assistantTexts.push(block.text);
+            }
+            lastTextMessageId = messageId;
           } else if (block.type === 'tool_use' && block.name === 'TodoWrite' && block.input?.todos) {
             todoState = block.input.todos as TodoItem[];
           }
@@ -388,7 +415,7 @@ export class InsightsEngine {
       }
     }
 
-    return { userPrompts, assistantTexts, todoState, messageCount };
+    return { userPrompts, assistantTexts: assistantTexts.map((t) => t.trim()).filter(Boolean), todoState, messageCount, brief };
   }
 
   /**
@@ -405,27 +432,30 @@ export class InsightsEngine {
     assistantTexts: string[],
     todoState: TodoItem[] | null,
     workingDirectory: string | undefined,
+    brief: string | null = null,
   ): string {
     const todoContext = todoState
       ? `\nCurrent task list (the sub-task in flight right now — context for theme/tags, NOT the mission):\n${todoState.map(t => `- [${t.status}] ${t.content}`).join('\n')}`
       : '';
     const assistantContext = assistantTexts.length > 0
-      ? `\nMost recent assistant responses (current activity — context, NOT the mission):\n${assistantTexts.slice(-3).map(t => `- "${t.slice(0, 200)}"`).join('\n')}`
+      ? `\nMost recent assistant responses (current activity — context, NOT the mission):\n${assistantTexts.slice(-3).map(t => `- "${capMessage(t, 300)}"`).join('\n')}`
       : '';
-    const isGenericPath = !workingDirectory || workingDirectory === '~'
-      || /^\/home\/[^/]+\/?$/.test(workingDirectory) || /^\/root\/?$/.test(workingDirectory)
-      || workingDirectory === '/';
-    const projectContext = !isGenericPath ? `\nWorking directory: ${workingDirectory}` : '';
+    const projectContext = isGenericFolder(workingDirectory, homedir(), launchFolder())
+      ? ''
+      : `\nWorking directory: ${workingDirectory}`;
 
     const EARLIEST_COUNT = 5;
     const RECENT_COUNT = 10;
+    const prompts = userPrompts.map((p) => capMessage(p));
     let promptsSection: string;
-    if (userPrompts.length <= EARLIEST_COUNT + RECENT_COUNT) {
-      promptsSection = `User requests (chronological, complete):\n${userPrompts.map(p => `- "${p}"`).join('\n')}`;
+    if (prompts.length === 0) {
+      promptsSection = 'User requests: none. The user has not written to this session.';
+    } else if (prompts.length <= EARLIEST_COUNT + RECENT_COUNT) {
+      promptsSection = `User requests (chronological, complete):\n${prompts.map(p => `- "${p}"`).join('\n')}`;
     } else {
-      const earliest = userPrompts.slice(0, EARLIEST_COUNT);
-      const recent = userPrompts.slice(-RECENT_COUNT);
-      const omitted = userPrompts.length - EARLIEST_COUNT - RECENT_COUNT;
+      const earliest = prompts.slice(0, EARLIEST_COUNT);
+      const recent = prompts.slice(-RECENT_COUNT);
+      const omitted = prompts.length - EARLIEST_COUNT - RECENT_COUNT;
       promptsSection = [
         'Earliest user requests (session start — these anchor what the session is for):',
         ...earliest.map(p => `- "${p}"`),
@@ -435,7 +465,16 @@ export class InsightsEngine {
       ].join('\n');
     }
 
-    return `${projectContext}\n${promptsSection}\n${todoContext}${assistantContext}`;
+    const briefSection = brief
+      ? `\nBrief this session was started with (written by its coordinator, not the user; it says what the session was set up to do):\n"${capMessage(brief)}"\n`
+      : '';
+
+    return `${projectContext}${briefSection}\n${promptsSection}\n${todoContext}${assistantContext}`;
+  }
+
+  private isArchived(sessionId: string): boolean {
+    const row = this.db.prepare('SELECT archived FROM sessions WHERE session_id = ?').get(sessionId) as { archived?: number } | undefined;
+    return row?.archived === 1;
   }
 
   /**
@@ -443,6 +482,20 @@ export class InsightsEngine {
    * Runs in the background — never blocks the event pipeline.
    */
   async onTurnEnd(sessionId: string): Promise<void> {
+    // Two turn ends can arrive together (a turn cut by a restart and the
+    // resumed one); without this both pass the cooldown and both call the model.
+    if (this.turnEndInFlight.has(sessionId)) return;
+    this.turnEndInFlight.add(sessionId);
+    try {
+      await this.computeOnTurnEnd(sessionId);
+    } finally {
+      this.turnEndInFlight.delete(sessionId);
+    }
+  }
+
+  private turnEndInFlight = new Set<string>();
+
+  private async computeOnTurnEnd(sessionId: string): Promise<void> {
     try {
       // Feature switch, checked before the key and cooldown gates. This fires
       // on every turn of every session, so its bill tracks how much Lattice
@@ -452,6 +505,10 @@ export class InsightsEngine {
       // API key gate
       if (!anthropicService.isConfigured()) return;
 
+      // Archived sessions are hidden from the sidebar, and a session created
+      // archived is a verification fixture; nobody reads their titles.
+      if (this.isArchived(sessionId)) return;
+
       // Cooldown gate
       const lastComputed = this.lastComputedAt.get(sessionId);
       if (lastComputed && (Date.now() - lastComputed) < RECOMPUTE_COOLDOWN_MS) {
@@ -460,8 +517,15 @@ export class InsightsEngine {
       }
 
       // Read events and check minimum threshold
-      const { userPrompts, assistantTexts, todoState, messageCount } = this.readConversationFromEvents(sessionId);
-      if (userPrompts.length < MIN_USER_MESSAGES) return;
+      const { userPrompts, assistantTexts, todoState, messageCount, brief } = this.readConversationFromEvents(sessionId);
+      // A worker's brief says what it is for on its own; anything else waits for the user to say.
+      if (userPrompts.length < MIN_USER_MESSAGES && !brief) return;
+
+      // Only a new message from the user can change what the session is for.
+      // Turns driven by worker reports, server notes or agent messages would
+      // otherwise re-run the same prompt and get the same answer.
+      const existing = await this.getInsightsRecord(sessionId);
+      if (existing && existing.message_count === userPrompts.length) return;
 
       // Get working directory from conversation record
       let workingDirectory: string | undefined;
@@ -479,10 +543,23 @@ export class InsightsEngine {
 
       // Build prompt and call Anthropic
       const conversationText = this.buildInsightsConversationText(
-        userPrompts, assistantTexts, todoState, workingDirectory,
+        userPrompts, assistantTexts, todoState, workingDirectory, brief,
       );
 
       const result = await anthropicService.extractSessionInsights(conversationText, sessionId);
+
+      // Declined: keep whatever was shown before, but note the count so the
+      // same messages are not sent again on every later turn.
+      if (!result.context) {
+        await this.setInsightsRecord(existing
+          ? { ...existing, message_count: userPrompts.length }
+          : {
+            session_id: sessionId, context: null, tags: null, theme: null, categories: null,
+            computed_at: new Date().toISOString(), stale: false, message_count: userPrompts.length,
+          });
+        this.lastComputedAt.set(sessionId, Date.now());
+        return;
+      }
 
       // Store insights
       await this.setInsightsRecord({
@@ -509,7 +586,7 @@ export class InsightsEngine {
 
       this.logger.info('Insights computed and stored', {
         sessionId: sessionId.slice(0, 8),
-        mission: result.context?.mission?.slice(0, 40),
+        mission: result.context?.mission,
         theme: result.theme,
       });
     } catch (error) {
@@ -806,9 +883,9 @@ export class InsightsEngine {
     const canonicalSessionId = this.resolveCanonicalSessionId(sessionId);
 
     // Read conversation from harness events
-    const { userPrompts, assistantTexts, todoState, messageCount } = this.readConversationFromEvents(canonicalSessionId);
+    const { userPrompts, assistantTexts, todoState, brief } = this.readConversationFromEvents(canonicalSessionId);
 
-    if (userPrompts.length === 0) {
+    if (userPrompts.length === 0 && !brief) {
       throw this.toSessionNotReadyError(canonicalSessionId);
     }
 
@@ -821,10 +898,21 @@ export class InsightsEngine {
     } catch { /* optional context */ }
 
     const conversationText = this.buildInsightsConversationText(
-      userPrompts, assistantTexts, todoState, projectPath,
+      userPrompts, assistantTexts, todoState, projectPath, brief,
     );
 
     const result = await anthropicService.extractSessionInsights(conversationText, canonicalSessionId);
+
+    // Declined: callers cache what this returns, so hand back the previous
+    // insights rather than overwrite them with nothing.
+    if (!result.context) {
+      const previous = await this.getInsightsRecord(canonicalSessionId);
+      return {
+        ...(previous ? this.cachedToSessionInsights(previous) : { context: null, tags: null, theme: null }),
+        sessionId: canonicalSessionId,
+        messageCount: userPrompts.length,
+      };
+    }
 
     return {
       sessionId: canonicalSessionId,
@@ -832,7 +920,8 @@ export class InsightsEngine {
       tags: result.tags || null,
       theme: result.theme || null,
       categories: result.categories || null,
-      messageCount,
+      // The user-message count, as onTurnEnd stores it, so its new-message check holds after this path too.
+      messageCount: userPrompts.length,
     };
   }
 

@@ -27,33 +27,31 @@ import { appendWorkerEvent, currentWorkerTask, isWorkerQuestionSeq, openQuestion
 import { reopenArchivedWorker } from '../session-history/repository.js';
 import { buildCoordinatorRestore } from '../services/sessions/context-compaction.js';
 import { buildProjectOrientation } from '../services/sessions/project-orientation.js';
+import { buildWorkerDriftNote } from '../services/sessions/worker-drift.js';
 
-import { buildProjectStateNudge } from '../services/sessions/project-state.js';
+import { buildProjectStateNudge, buildStaleProjectLine } from '../services/sessions/project-state.js';
 import { latticeCli } from '../services/sessions/pickup-prompts.js';
 import {
   drainHeld,
   drainInbox,
   enqueueInboxItem,
   hasUnreadInboxItems,
-  holdInboxItemForReply,
   type DrainResult,
 } from '../services/sessions/session-inbox.js';
 import { admitTurn, isAdmissionToken, type TurnAdmission } from '../services/sessions/turn-admission.js';
 import { interruptTurn } from '../services/sessions/turn-interrupt.js';
 import { noteUserStoppedWorker } from '../services/sessions/worker-report-delivery.js';
-import { recordRoute, routeCoordinatorMessage } from '../services/sessions/coordinator-router.js';
 import {
   deliverIntoRunningTurn,
   immediateDeliveryEnabled,
   type ImmediateDeliveryResult,
 } from '../services/sessions/immediate-delivery.js';
-import { answerProvisionally } from '../services/sessions/coordinator-fast-reply.js';
 import { agentReact, reactToMessage } from '../services/sessions/message-reactions.js';
 import { isSingleEmoji } from '../types/message-reactions.js';
-import { allowGeneration } from '../services/infrastructure/generation-gates.js';
 import { INBOX_READ_EVENT, INBOX_UNDELIVERABLE_EVENT, type InboxReadData, type InboxUndeliverableData } from '../types/inbox.js';
 import { persistCoordinatorImages } from '../services/sessions/coordinator-attachments.js';
 import { appendCustomHarnessEvent } from './harness-custom-events.js';
+import { noteUserSent } from '../services/sessions/project-needs-you.js';
 import type { WorkerAnsweredData, WorkerReassignedData } from '../types/worker-events.js';
 
 const logger = createLogger('HarnessRoutes');
@@ -513,6 +511,11 @@ export function createHarnessRoutes(sessionManager: SessionManager, resolvers: H
     // interrupting send cannot each open the next turn. The inbox drain
     // already holds it and says so with its admission id; an `inboxIds` batch
     // from anything that does not is refused rather than let through.
+    // A composer send is the user writing to this session. On a project it
+    // answers every ask waiting on them from before now (project-needs-you.ts).
+    // A drain's inbox batch is not a new send: its rows were counted when sent.
+    if (!fromAgent && !inboxIds) noteUserSent(sessionManager, sessionId);
+
     const admissionToken = typeof body.admission === 'string' ? body.admission : undefined;
     const heldByCaller = admissionToken !== undefined && isAdmissionToken(sessionId, admissionToken);
     if (inboxIds && !heldByCaller) {
@@ -541,10 +544,6 @@ export function createHarnessRoutes(sessionManager: SessionManager, resolvers: H
     // Everything below runs inside the admission and releases it on every
     // exit; `admission` is null only for the drain's own request, which takes
     // none of the paths that need it.
-    // Work that must happen after the response and outside the session's turn
-    // admission: a model call held inside it would block the next drain for
-    // as long as it ran.
-    let deferred: (() => Promise<void>) | null = null;
     try {
       // A new assignment is not sent into a worker's running turn: it would
       // put the work in hand on hold without anyone deciding to (2026-09-23).
@@ -706,14 +705,12 @@ export function createHarnessRoutes(sessionManager: SessionManager, resolvers: H
 
       // The user's own message to a session that is mid-turn.
       const userMidTurn = !inboxIds && Boolean(input) && delivery === 'after-turn' && !fromAgent;
-      const isCoordinator = Boolean(ConversationService.getInstance().getConversation(sessionId)?.coordinator);
 
       // The row is written before anything is sent, so a crash anywhere below
       // leaves the message durable rather than lost, and the batch it joins is
       // the inbox as it actually stands. Written once — the paths below reuse
       // it rather than adding a second row for the same message.
       let userInboxId: string | undefined;
-      let deliveredNow = false;
       if (userMidTurn && input && admission && immediateDeliveryEnabled()) {
         userInboxId = enqueueInboxItem({
           sessionId,
@@ -726,73 +723,13 @@ export function createHarnessRoutes(sessionManager: SessionManager, resolvers: H
         recordWorkerAnswer();
         const result = await deliverIntoRunningTurn({ sessionManager, sessionId, admission, inboxId: userInboxId });
         if (result.status !== 'rejected') {
-          deliveredNow = true;
           res.json(receiptForImmediate(result, userInboxId));
+          return;
         }
         // Refused: the row stays in the inbox and the paths below treat it as
         // any other message the session could not be given yet.
       }
 
-      // Independently: does the user need an answer before the turn finishes
-      // (coordinator-router.ts)?
-      //
-      // The two are no longer alternatives. When the
-      // message went in immediately, the coordinator has it and this answers
-      // the user in the meantime — so nothing is held back and nothing waits on
-      // anything: the answer is written after the response has been sent, and
-      // the row it links to has already been delivered. When the message
-      // could not go in, this is the path it always was: the row is held out
-      // of the drain while the answer is written, and the exchange reaches
-      // the coordinator together in its next batch.
-      if (userMidTurn && isCoordinator && input && allowGeneration('coordinatorFastReply')) {
-        if (deliveredNow && userInboxId) {
-          const alreadyDelivered = userInboxId;
-          const message = input;
-          // After the response, and outside the admission this route holds: a
-          // router call is a model call, and holding the session's turn
-          // boundary through one would delay the drain for no benefit now
-          // that the message itself has already gone.
-          deferred = async () => {
-            const verdict = await routeCoordinatorMessage(sessionId, message);
-            recordRoute(sessionId, verdict, verdict.needsReplyNow ? alreadyDelivered : undefined);
-            if (!verdict.needsReplyNow) return;
-            await answerProvisionally({
-              conversationId: sessionId,
-              inboxId: alreadyDelivered,
-              message,
-              // The message is not waiting on this answer, so the answer must
-              // not be stored on its row as though it were: that row has been
-              // read already, and anything attached to it now would never be
-              // seen. The answer reaches the coordinator on its own.
-              attachToRow: false,
-            });
-          };
-        } else {
-          const verdict = await routeCoordinatorMessage(sessionId, input);
-          if (verdict.needsReplyNow) {
-            // The hold is safe to apply after the insert because this route is
-            // holding the session's turn admission, which is the same lock a
-            // drain takes: no drain can run between the two statements.
-            const inboxId = userInboxId ?? enqueueInboxItem({
-              sessionId,
-              source: 'user',
-              text: input,
-              attachmentsJson: attachments.length > 0 ? JSON.stringify(attachments) : null,
-              model,
-              reasoningEffort,
-              replyPending: true,
-            });
-            if (userInboxId) holdInboxItemForReply(userInboxId);
-            else recordWorkerAnswer();
-            recordRoute(sessionId, verdict, inboxId);
-            res.json({ ok: true, delivery: 'after-turn' satisfies SendDelivery, inboxId, responder: 'fast' });
-            void answerProvisionally({ conversationId: sessionId, inboxId, message: input });
-            return;
-          }
-          recordRoute(sessionId, verdict);
-        }
-      }
-      if (deliveredNow) return;
       if (!inboxIds && (userInboxId !== undefined
         || (provider === 'codex' && delivery === 'after-turn')
         || hasUnreadInboxItems(sessionId))) {
@@ -815,18 +752,23 @@ export function createHarnessRoutes(sessionManager: SessionManager, resolvers: H
       // project session that compacted since its last input gets its preamble
       // and worker roster back; every project session gets the active project
       // state when the record has moved or its copy was compacted away; one
-      // whose last turn changed things without noting them gets the nudge.
-      // All three are empty otherwise, and this is the path an ordinary
+      // whose last turn changed things without noting them gets the nudge;
+      // one whose workers were started by someone else since they reported
+      // is told so (worker-drift.ts). All are empty otherwise, and this is the path an ordinary
       // message and a drained worker report both take. A failure to build any
       // of them is logged, not fatal: the message still goes.
       let restore = '';
       let orientation = '';
+      let drift = '';
       let nudge = '';
+      let staleLine = '';
       if (input) {
         try {
           restore = buildCoordinatorRestore(sessionId);
           orientation = buildProjectOrientation(sessionId, latticeCli());
+          drift = buildWorkerDriftNote(sessionId, latticeCli());
           nudge = buildProjectStateNudge(sessionId, latticeCli());
+          staleLine = buildStaleProjectLine(sessionId, latticeCli());
         } catch (err) {
           logger.warn('Coordinator context restore skipped', {
             sessionId,
@@ -835,7 +777,7 @@ export function createHarnessRoutes(sessionManager: SessionManager, resolvers: H
         }
       }
       if (restore) logger.info('Restoring coordinator context after compaction', { sessionId });
-      const outgoing = restore + orientation + nudge + (input ?? '');
+      const outgoing = restore + orientation + drift + nudge + staleLine + (input ?? '');
 
 
       const sendExtra = attachments.length > 0 || model || knownEffort
@@ -925,14 +867,6 @@ export function createHarnessRoutes(sessionManager: SessionManager, resolvers: H
     }
     } finally {
       admission?.release();
-      if (deferred) {
-        void deferred().catch((err) => {
-          logger.warn('Deferred post-send work failed', {
-            sessionId,
-            error: err instanceof Error ? err.message : String(err),
-          });
-        });
-      }
     }
   }));
 

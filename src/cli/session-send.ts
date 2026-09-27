@@ -7,6 +7,7 @@
  */
 
 import { parseJson } from '../utils/json.js';
+import { serverAuthHeaders } from './server-auth.js';
 
 export async function sendSessionMessage(options: {
   host: string;
@@ -35,7 +36,7 @@ export async function sendSessionMessage(options: {
     `http://${options.host}:${options.port}/api/harness/${encodeURIComponent(options.conversationId)}/send`,
     {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...serverAuthHeaders() },
       body: JSON.stringify({
         input: options.message,
         // The route labels the message for its reader by what the sender
@@ -70,7 +71,7 @@ export async function sendSessionMessage(options: {
 export async function compactSession(options: { host: string; port: number; conversationId: string }): Promise<Record<string, unknown>> {
   const response = await fetch(
     `http://${options.host}:${options.port}/api/harness/${encodeURIComponent(options.conversationId)}/compact`,
-    { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' },
+    { method: 'POST', headers: { 'content-type': 'application/json', ...serverAuthHeaders() }, body: '{}' },
   );
   const text = await response.text();
   if (response.status === 409) {
@@ -98,7 +99,7 @@ export async function reactToUsersMessage(options: {
     `http://${options.host}:${options.port}/api/harness/${encodeURIComponent(options.conversationId)}/agent-reactions`,
     {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...serverAuthHeaders() },
       body: JSON.stringify({
         emoji: options.emoji,
         action: options.remove ? 'remove' : 'add',

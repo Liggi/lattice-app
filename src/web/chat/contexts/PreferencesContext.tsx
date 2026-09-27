@@ -32,8 +32,6 @@ export interface PreferencesContextType {
   error: Error | null;
   /** Developer mode - shows prototypes, debug tools */
   devMode: boolean;
-  /** Voice orchestrator - gated because it needs GPT Live alpha access */
-  voiceEnabled: boolean;
 }
 
 const PreferencesContext = createContext<PreferencesContextType | undefined>(undefined);
@@ -50,7 +48,6 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
   const [serverConfig, setServerConfig] = useState<ServerConfig | null>(null);
   const [coordinatorConfig, setCoordinatorConfig] = useState<CoordinatorConfig | null>(null);
   const [devMode, setDevMode] = useState(false);
-  const [voiceEnabled, setVoiceEnabled] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
   useEffect(() => {
@@ -62,7 +59,6 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
         setServerConfig((config.server as ServerConfig | undefined) ?? null);
         setCoordinatorConfig(config.coordinator ?? null);
         setDevMode(config.interface?.devMode === true);
-        setVoiceEnabled(config.interface?.voice === true);
       } catch (err) {
         setError(err instanceof Error ? err : new Error('Failed to load preferences'));
       } finally {
@@ -97,7 +93,6 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
     isLoading,
     error,
     devMode,
-    voiceEnabled,
   }), [
     preferences,
     serverConfig,
@@ -107,7 +102,6 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
     isLoading,
     error,
     devMode,
-    voiceEnabled,
   ]);
 
   return (

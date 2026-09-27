@@ -59,8 +59,17 @@ export const PROJECT_FOLD_EVENT_TYPES = [
 ] as const;
 
 export const PROJECT_NOTE_KINDS = [
-  'outcome', 'decision', 'open', 'update', 'close', 'now', 'accounting', 'reconcile', 'priority', 'retire',
+  'outcome', 'decision', 'open', 'update', 'close', 'now', 'accounting', 'reconcile', 'priority', 'retire', 'park', 'unpark',
 ] as const;
+
+/**
+ * How long an open thread or the priority can go untouched before the
+ * coordinator is shown it again and asked to close, park or keep it. Finished
+ * threads were found to close at the report or never (26 Sep: every project's
+ * median gap from last report to close was 0h, while 11 of 45 open threads were
+ * finished and untouched for up to 105h), so the list is what brings the rest back.
+ */
+export const STALE_AFTER_MS = 24 * 60 * 60 * 1000;
 
 
 /** What a coordinator found when it looked at a report written before accounting existed. */
@@ -197,6 +206,11 @@ export interface ProjectOpenThread {
    * is how long the thread has waited on whoever it waits on now.
    */
   waitingSince: number;
+  /**
+   * Set while the thread is parked: kept, not being worked, and out of the
+   * user's remaining-work list and the stale list until it is unparked.
+   */
+  parked?: { at: number; reason: string };
   /** Set on a closed thread. */
   closedAt?: number;
   resolution?: string;
@@ -227,9 +241,9 @@ export interface ProjectState {
   /**
    * The decisions that still bind, newest last. A decision a later one
    * replaced, or a `retire` note withdrew, is in `retired` instead — so
-   * everything reading this state (the panel, a worker's restore block, the
-   * fast responder) is reading current instructions rather than a pile that
-   * contains both a rule and its correction.
+   * everything reading this state (the panel, a worker's restore block) is
+   * reading current instructions rather than a pile that contains both a rule
+   * and its correction.
    */
   decisions: ProjectDecision[];
   /** Decisions no longer in force, with what took each one out. History, not a backlog. */
@@ -573,6 +587,22 @@ export function foldProjectState(events: readonly ProjectEventLike[]): ProjectSt
         break;
       }
 
+      case 'park':
+      case 'unpark': {
+        if (typeof data.ref !== 'number') break;
+        const thread = threads.get(data.ref);
+        if (!thread || thread.closedAt !== undefined) break;
+        thread.updatedAt = event.timestamp;
+        if (data.kind === 'unpark') {
+          delete thread.parked;
+          break;
+        }
+        thread.parked = { at: event.timestamp, reason: data.text };
+        // Parked work is not the work the project is on.
+        if (state.priority?.thread === thread.seq) state.priority = null;
+        break;
+      }
+
       case 'accounting':
         // One boundary per coordinator: the first one is the record, and a
         // second note cannot move it and quietly unaccount what came after.
@@ -677,7 +707,50 @@ function renderWait(wait: ThreadWait): string {
   return `waiting on ${wait.kind}${target ? ` ${target}` : ''}: ${wait.text}`;
 }
 
-function renderThread(thread: ProjectOpenThread, user: string): string[] {
+/** When anything last moved a thread: a note on it, or a report or question from a worker on it. */
+export function threadLastTouched(thread: ProjectOpenThread): number {
+  const events = thread.events ?? [];
+  return Math.max(thread.updatedAt, events.length > 0 ? events[events.length - 1].at : 0);
+}
+
+/** "40m", "5h", "3d": how long ago, short enough for a detail line. */
+export function formatAgo(ms: number): string {
+  const minutes = Math.max(0, Math.floor(ms / 60_000));
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 48) return `${hours}h`;
+  return `${Math.floor(hours / 24)}d`;
+}
+
+export interface StaleProjectItems {
+  /** Open, unparked threads nothing has touched for `STALE_AFTER_MS`, oldest first. */
+  threads: Array<{ thread: ProjectOpenThread; idleMs: number }>;
+  /** Why the priority needs looking at, or null when it does not (or there is none). */
+  priority: { text: string; reason: 'unbound' | 'stale' } | null;
+}
+
+/**
+ * What the coordinator is shown again each turn until it closes, parks or
+ * touches it. A thread is stale when neither a note nor a worker event has
+ * moved it for a day. The priority is stale when its thread is, and is always
+ * flagged when it names no thread, because only a bound priority clears when
+ * its work closes.
+ */
+export function staleProjectItems(state: ProjectState, now: number, staleAfterMs = STALE_AFTER_MS): StaleProjectItems {
+  const threads = (state.open ?? [])
+    .filter((thread) => !thread.parked)
+    .map((thread) => ({ thread, idleMs: now - threadLastTouched(thread) }))
+    .filter((entry) => entry.idleMs >= staleAfterMs)
+    .sort((a, b) => b.idleMs - a.idleMs);
+  let priority: StaleProjectItems['priority'] = null;
+  if (state.priority) {
+    if (state.priority.thread === null) priority = { text: state.priority.text, reason: 'unbound' };
+    else if (threads.some((entry) => entry.thread.seq === state.priority!.thread)) priority = { text: state.priority.text, reason: 'stale' };
+  }
+  return { threads, priority };
+}
+
+function renderThread(thread: ProjectOpenThread, user: string, now?: number): string[] {
   const lines = [`- [${thread.seq}] ${thread.text}`];
   // Where it has got to comes before what happens next: a reader deciding
   // anything about this thread needs the established fact first.
@@ -693,6 +766,7 @@ function renderThread(thread: ProjectOpenThread, user: string): string[] {
   if (thread.nextAction) detail.push(`next: ${thread.nextAction}`);
   else if (thread.owner) detail.push('no next action noted');
   detail.push(thread.waitingOn ? renderWait(thread.waitingOn) : 'ready');
+  if (now !== undefined) detail.push(`touched ${formatAgo(now - threadLastTouched(thread))} ago`);
   lines.push(`  ${detail.join(' · ')}`);
 
   // A CLI is newer than the server it is talking to for the length of an
@@ -722,14 +796,15 @@ export interface RenderProjectStateOptions {
   conversationId?: string;
   /** What to call the user in the text; defaults to "the user". */
   userName?: string;
+  /** The clock to age threads and the priority against; omitted, no ages are shown. */
+  now?: number;
 }
 
 /**
  * The written state as text. By default this is the *active* projection —
  * what is currently true and currently binding — and it is the same text
- * everywhere: `session state`, the restore block after a compaction, the
- * orientation put in front of an ordinary or report-driven turn, and what
- * the fast responder answers from.
+ * everywhere: `session state`, the restore block after a compaction, and the
+ * orientation put in front of an ordinary or report-driven turn.
  *
  * What it leaves out is as deliberate as what it keeps. A project that has
  * run for a while accumulates a decision and its correction, threads it has
@@ -747,7 +822,8 @@ export function renderProjectState(state: ProjectState, options: RenderProjectSt
   lines.push(`Outcome: ${state.outcome ?? '(not noted yet)'}`);
   if (state.priority) {
     const where = state.priority.thread !== null ? ` (thread [${state.priority.thread}])` : '';
-    lines.push(`Priority: ${state.priority.text}${where}`);
+    const age = options.now !== undefined ? ` · set ${formatAgo(options.now - state.priority.at)} ago` : '';
+    lines.push(`Priority: ${state.priority.text}${where}${age}`);
   }
   if ((state.decisions ?? []).length > 0) {
     lines.push('Decisions in force:');
@@ -757,11 +833,18 @@ export function renderProjectState(state: ProjectState, options: RenderProjectSt
   } else {
     lines.push('Decisions in force: none noted.');
   }
-  if ((state.open ?? []).length > 0) {
+  const active = (state.open ?? []).filter((thread) => !thread.parked);
+  const parked = (state.open ?? []).filter((thread) => thread.parked);
+  if (active.length > 0) {
     lines.push('Open threads:');
-    for (const thread of state.open) lines.push(...renderThread(thread, user));
+    for (const thread of active) lines.push(...renderThread(thread, user, options.now));
   } else {
     lines.push('Open threads: none.');
+  }
+  // One line each: kept, not being worked, and not asking for anything.
+  if (parked.length > 0) {
+    lines.push('Parked (`--unpark <id>` brings one back):');
+    for (const thread of parked) lines.push(`- [${thread.seq}] ${thread.text} — ${thread.parked!.reason}`);
   }
   if ((state.attention ?? []).length > 0) {
     lines.push(`Waiting on your disposition (${state.attention.length}):`);

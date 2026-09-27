@@ -34,6 +34,7 @@ import { installedProviders } from '@/services/sessions/installed-providers.js';
 import { appendWorkerEvent } from '@/services/sessions/worker-events.js';
 import { readProjectState } from '@/services/sessions/project-state.js';
 import { buildProjectOrientation } from '@/services/sessions/project-orientation.js';
+import { buildWorkerDriftNote } from '@/services/sessions/worker-drift.js';
 import { switchCoordinator } from '@/services/sessions/coordinator-switch.js';
 import { unfinishedSwitchRefusal } from '@/services/sessions/coordinator-switch-state.js';
 
@@ -104,10 +105,6 @@ function resolveExistingConversationPermissionMode(params: {
 
   const serverDefault = ConfigService.getInstance().getConfig().server.defaultPermissionMode;
   return serverDefault || 'bypassPermissions';
-}
-
-async function resolveWorkspaceSystemPrompt(_workspace: string | undefined): Promise<string | undefined> {
-  return undefined;
 }
 
 export interface UnifiedConversationLifecycleRoutesContext {
@@ -244,12 +241,13 @@ export function registerUnifiedConversationLifecycleRoutes(
 
     // Default to server-configured permission mode when not provided.
     // Agents often omit this or pass 'default' — the server config is the source of truth.
-    const serverDefault = ConfigService.getInstance().getConfig().server.defaultPermissionMode;
+    const serverConfig = ConfigService.getInstance().getConfig().server;
+    const workerDefault = parentConversation && !body.coordinator ? serverConfig.workerPermissionMode : undefined;
     const permissionMode = provider === 'codex'
       ? CODEX_PERMISSION_MODE
       : provider === 'opencode'
         ? OPENCODE_PERMISSION_MODE
-        : requestedMode || serverDefault || 'bypassPermissions';
+        : requestedMode || workerDefault || serverConfig.defaultPermissionMode || 'bypassPermissions';
 
     logger.info('[CONV] Creating new conversation', {
       provider,
@@ -315,8 +313,6 @@ export function registerUnifiedConversationLifecycleRoutes(
           throw new LatticeError('HARNESS_UNAVAILABLE', 'Harness session manager not available', 500);
         }
 
-        const globalSystemPrompt = ConfigService.getInstance().getConfig().server.systemPrompt;
-        const workspacePrompt = await resolveWorkspaceSystemPrompt(workspace);
 
         // A coordinator's first-turn images are kept on disk for its workers
         // (see coordinator-attachments.ts); the adapters validate the blocks
@@ -348,7 +344,7 @@ export function registerUnifiedConversationLifecycleRoutes(
             ...(provider === 'opencode' ? {
               model: model ?? DEFAULT_OPENCODE_MODEL_ID,
             } : {}),
-            systemPrompt: body.systemPrompt || workspacePrompt || globalSystemPrompt,
+            systemPrompt: body.systemPrompt,
             initialContent,
             // Same blocks, second key: `initialContent` is the daemon adapter's
             // spelling, `attachments` is what the SDK adapter reads and what the
@@ -538,8 +534,6 @@ export function registerUnifiedConversationLifecycleRoutes(
         throw new LatticeError('HARNESS_UNAVAILABLE', 'Harness session manager not available', 500);
       }
 
-      const globalSystemPrompt = ConfigService.getInstance().getConfig().server.systemPrompt;
-      const resumeWorkspacePrompt = await resolveWorkspaceSystemPrompt(conversation.workspace);
 
       // A cold resume is the case with the least in context and, until now,
       // the only delivery path that carried no project record at all: the
@@ -548,7 +542,8 @@ export function registerUnifiedConversationLifecycleRoutes(
       // gets. Never fatal — the message goes either way.
       let resumeOrientation = '';
       try {
-        resumeOrientation = buildProjectOrientation(conversationId, latticeCli());
+        resumeOrientation = buildProjectOrientation(conversationId, latticeCli())
+          + buildWorkerDriftNote(conversationId, latticeCli());
       } catch (err) {
         logger.warn('[CONV] Project orientation skipped on resume', {
           conversationId,
@@ -576,7 +571,6 @@ export function registerUnifiedConversationLifecycleRoutes(
           ...(latestSegment.provider === 'opencode' ? {
             model: resumeModel,
           } : {}),
-          systemPrompt: resumeWorkspacePrompt || globalSystemPrompt,
           initialContent,
           ...(hasAttachments ? { attachments: initialContent } : {}),
         },
@@ -662,9 +656,6 @@ export function registerUnifiedConversationLifecycleRoutes(
       throw new LatticeError('HARNESS_UNAVAILABLE', 'Harness session manager not available', 500);
     }
     const conversation = conversationService.getConversation(conversationId);
-    // The system prompt a create or resume of this conversation would carry.
-    const systemPrompt = (await resolveWorkspaceSystemPrompt(conversation?.workspace))
-      || ConfigService.getInstance().getConfig().server.systemPrompt;
     const claudePermissionMode = resolveExistingConversationPermissionMode({ provider: 'claude' });
     const result = await switchCoordinator(conversationId, { provider: body.provider, model: body.model.trim() }, {
       sessionManager: harnessSessionManager,
@@ -673,7 +664,7 @@ export function registerUnifiedConversationLifecycleRoutes(
       cli: latticeCli(),
       claudeSpawn: () => {
         ensureHooksBeforeSpawn();
-        return { permissionMode: claudePermissionMode, systemPrompt };
+        return { permissionMode: claudePermissionMode };
       },
       // What a lifecycle resume of the Codex segment would start, minus a
       // message: the thread is resumed and waits.
@@ -691,7 +682,6 @@ export function registerUnifiedConversationLifecycleRoutes(
             workspace: conversation?.workspace,
             model: resumeModel,
             ...(effort ? { reasoningEffort: effort } : {}),
-            systemPrompt,
           },
         };
       },

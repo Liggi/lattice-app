@@ -7,7 +7,6 @@ export interface AppConfigInterface {
   colorScheme?: 'light' | 'dark' | 'system';
   language?: string;
   devMode?: boolean;
-  voice?: boolean;
   notifications?: {
     enabled: boolean;
     ntfyUrl?: string;

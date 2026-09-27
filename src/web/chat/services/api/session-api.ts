@@ -1,5 +1,5 @@
 import type { PendingQuestion } from '../../types';
-import { ConfigApi } from './config-api';
+import { FeedbackApi } from './feedback-api';
 import type {
   SessionAuditTrailResponse,
   SessionCostsResponse,
@@ -13,7 +13,7 @@ const SESSION_TURNS_CACHE_KEY_PREFIX = 'session:turns:';
 const NAV_METADATA_CACHE_TTL_MS = 15_000;
 const SESSION_TURNS_CACHE_TTL_MS = 10_000;
 
-export class SessionApi extends ConfigApi {
+export class SessionApi extends FeedbackApi {
   async getSessionTurns(sessionId: string): Promise<{ turns: import('../../types').Turn[] }> {
     return this.cachedGet(
       `${SESSION_TURNS_CACHE_KEY_PREFIX}${sessionId}`,

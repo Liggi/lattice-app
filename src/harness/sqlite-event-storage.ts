@@ -93,6 +93,9 @@ export const STATUS_BEARING_EVENT_TYPES = [
   // indicator. deriveStatus explicitly skips it, so including it here cannot
   // change ongoing/idle answers.
   'context:compaction',
+  // A delivered message the provider started as a turn of its own
+  // (where: 'next-turn'); deriveStatus reads it as the next turn running.
+  'input:incorporated',
 ] as const;
 
 export class SqliteEventStorageAdapter implements EventStorageAdapter {

@@ -39,7 +39,7 @@ vi.mock('../../src/services/infrastructure/cost-tracker.js', () => ({
   getCostTracker: () => ({ log: () => {} }),
 }));
 
-const { buildSummaryPrompt, noteWorkerReport, summaryModel } = await import(
+const { buildSummaryPrompt, noteWorkerReport, summaryDetailsMissing, summaryModel } = await import(
   '../../src/services/sessions/worker-report-summary.js'
 );
 const { reportSummaryPoints, usableReportSummary, WORKER_REPORT_SUMMARY_EVENT } = await import('../../src/types/worker-events.js');
@@ -240,6 +240,88 @@ describe('noteWorkerReport', () => {
     messagesCreate.mockRejectedValue(new Error('overloaded'));
     expect(() => noteWorkerReport({ coordinator: 'conv-c', worker: 'conv-w', reportSeq: 41, report: REPORT })).not.toThrow();
     await settle();
+    expect(appended).toHaveLength(0);
+  });
+});
+
+describe('names and ids in a summary', () => {
+  const report = 'The fix is committed as `6ff6f817`. Q2, Q12 and Q27 are left. ~4,343 tasks queued; failing 25–74% of calls.';
+
+  it('flags an id copied wrong and an item the report does not name', () => {
+    expect(summaryDetailsMissing({ title: 'Fix committed', text: 'Committed as 6ff8817.\nThree still fail (Q2, Q12, Q4).' }, report))
+      .toEqual(['6ff8817', 'Q4']);
+  });
+
+  it('lets numbers through however they are written, when the report has them', () => {
+    expect(summaryDetailsMissing({ title: 'Queue backed up', text: 'About 4343 tasks queued.\nCalls failing 25-74% of the time.' }, report))
+      .toEqual([]);
+  });
+});
+
+describe('a report that is only waiting (PR #290)', () => {
+  const task = "Move the Analyst's GPT-5.5 calls to Opus 5.5";
+  const report = 'Waiting on: CI for PR #290 (a background watcher will wake me when it finishes).';
+
+  it('tells the writer the task is context and that waiting is not done', () => {
+    const { system, user } = buildSummaryPrompt(task, report);
+    expect(system).toContain('The task above is context only');
+    expect(system).toContain('State as done only');
+    expect(system).toContain('summarised as\n  waiting');
+    expect(user).toContain('What this worker was sent to do (context only; the report says what was done):');
+  });
+});
+
+describe('the follow-up for details the report does not contain', () => {
+  const report = 'Committed as `6ff6f817` on branch compaction-note. Not merged yet.';
+  beforeEach(() => {
+    log.events[1] = { seq: 41, type: 'worker:reported', data: { worker: 'conv-w', model: 'claude-opus-5', text: report } };
+  });
+  const run = async () => {
+    noteWorkerReport({ coordinator: 'conv-c', worker: 'conv-w', reportSeq: 41, report });
+    for (let i = 0; i < 4; i++) await settle();
+  };
+
+  it('asks once more and stores the corrected summary', async () => {
+    messagesCreate
+      .mockResolvedValueOnce(answer('Fix committed, not merged\n\n- Committed as 6ff8817 on a new branch.'))
+      .mockResolvedValueOnce(answer('Fix committed, not merged\n\n- Committed as 6ff6f817 on a new branch.'));
+    await run();
+    expect(messagesCreate).toHaveBeenCalledTimes(2);
+    expect(messagesCreate.mock.calls[1][0].messages[2].content).toContain('"6ff8817"');
+    expect(appended[0].data).toMatchObject({ text: 'Committed as 6ff6f817 on a new branch.' });
+  });
+
+  it('stores nothing when the second answer still has it wrong', async () => {
+    messagesCreate.mockResolvedValue(answer('Fix committed, not merged\n\n- Committed as 6ff8817 on a new branch.'));
+    await run();
+    expect(messagesCreate).toHaveBeenCalledTimes(2);
+    expect(appended).toHaveLength(0);
+  });
+});
+
+describe('the follow-up for a summary too long for the card', () => {
+  const longLine = `- The header lost its Catch me up button and commitments chip, ${'and on mobile the sidebar and menu buttons now sit together at the top right of the screen '.repeat(2)}.`;
+  const run = async () => {
+    noteWorkerReport({ coordinator: 'conv-c', worker: 'conv-w', reportSeq: 41, report: REPORT });
+    for (let i = 0; i < 4; i++) await settle();
+  };
+
+  it('asks once to shorten the long line and stores the shorter summary', async () => {
+    messagesCreate
+      .mockResolvedValueOnce(answer(`Header and sidebar simplified\n\n${longLine}`))
+      .mockResolvedValueOnce(answer('Header and sidebar simplified\n\n- The Catch me up button and commitments chip are gone.'));
+    await run();
+    expect(messagesCreate).toHaveBeenCalledTimes(2);
+    const followUp: string = messagesCreate.mock.calls[1][0].messages[2].content;
+    expect(followUp).toMatch(/Line 1 under the first is \d+ characters; the most is 180\./);
+    expect(followUp).toContain('Shorten it by saying less');
+    expect(appended[0].data).toMatchObject({ text: 'The Catch me up button and commitments chip are gone.' });
+  });
+
+  it('stores nothing when the second answer is still too long', async () => {
+    messagesCreate.mockResolvedValue(answer(`Header and sidebar simplified\n\n${longLine}`));
+    await run();
+    expect(messagesCreate).toHaveBeenCalledTimes(2);
     expect(appended).toHaveLength(0);
   });
 });

@@ -1,3 +1,4 @@
+import type { FeedbackProposedData } from '@/types/feedback';
 import type { Provider } from '@/types/unified-messages';
 import type { WorkerStartedData, WorkerReassignedData, WorkerAnsweredData, WorkerReportedData, WorkerReportSummaryData, WorkerMovedData } from '@/types/worker-events';
 // Re-export necessary types from backend
@@ -123,16 +124,6 @@ export interface MessageAttribution {
   passedOn: boolean;
 }
 
-/**
- * What the loaded event window establishes about a quick answer reaching a turn
- * of the main session: `seen` — an `input:read` receipt names its inbox row, so
- * a turn was handed the batch (not that the session acted on it); `waiting` —
- * the row is in the window and no receipt names it; `unknown` — the row is not
- * in the window, or the window is not known to be complete, so the absence of a
- * receipt says nothing either way.
- */
-export type QuickAnswerDelivery = 'seen' | 'waiting' | 'unknown';
-
 export interface ConversationChatMessage {
   id: string; // Backend message ID (may not be unique, empty for pending user messages)
   messageId: string; // Client-side unique ID for React rendering
@@ -142,16 +133,9 @@ export interface ConversationChatMessage {
   workingDirectory?: string; // Working directory when the message was created
   parentToolUseId?: string; // For nested messages from Task tool use
   provider?: Provider; // Which AI provider this message is from/to
-  systemSubtype?: 'compact_boundary' | 'compact_starting' | 'worker';
+  systemSubtype?: 'compact_boundary' | 'compact_starting' | 'worker' | 'feedback';
   /** Heading for an error message; 'Error' when absent. */
   errorTitle?: string;
-  /** An assistant message written by the fast responder while the coordinator was busy; rendered as a quick answer. */
-  responder?: 'fast';
-  /**
-   * For a quick answer: what the loaded events establish about a turn of the
-   * main session having been handed the message and this answer.
-   */
-  responderDelivery?: QuickAnswerDelivery;
   /** Present when another agent sent this message; absent on the user's own. */
   attribution?: MessageAttribution;
   /** Set when systemSubtype is 'worker': a coordinator's record of a worker it dispatched. */
@@ -164,6 +148,8 @@ export interface ConversationChatMessage {
      */
     reportSummary?: WorkerReportSummaryData;
   };
+  /** Set when systemSubtype is 'feedback': an agent's feedback proposal, shown as a card to send. */
+  feedbackProposal?: FeedbackProposedData;
   compactMetadata?: {
     trigger?: string;
     preTokens?: number;

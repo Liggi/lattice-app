@@ -4,13 +4,62 @@ import type { SessionEvent, ContentBlock, ContentData, InputSentData, ToolUseBlo
 
 export type Status = 'idle' | 'starting' | 'streaming' | 'stopping'
 
+/**
+ * The host's record that the provider began taking a message delivered into a
+ * running turn. `where: 'next-turn'` means it became a turn of its own.
+ */
+const INPUT_INCORPORATED = 'input:incorporated'
+
+function opensNextTurn(event: SessionEvent): boolean {
+  return (event.type as string) === INPUT_INCORPORATED
+    && (event.data as { where?: string } | undefined)?.where === 'next-turn'
+}
+
+/**
+ * Whether the turn that ended at `end` left a delivered message to be the
+ * next turn, which is running now. A message sent while Claude compacts is
+ * held until the compaction ends and then answered as a turn with no
+ * `input:sent` of its own (its input:sent was logged mid-compaction); the
+ * incorporation lands just before the compaction's own `turn:end`, with no
+ * reply between them. Without this the session reads idle until the answer's
+ * first content arrives.
+ */
+function turnEndLeavesNextTurn(events: readonly SessionEvent[], end: number): boolean {
+  if ((events[end].data as TurnEndData | undefined)?.error) return false
+  for (let j = end - 1; j >= 0; j--) {
+    const event = events[j]
+    if (opensNextTurn(event)) return true
+    switch (event.type) {
+      case 'content':
+      case 'result':
+        if ((event.data as { parentToolUseId?: string | null } | undefined)?.parentToolUseId != null) continue
+        return false
+      case 'turn:end':
+        // The compaction's boundary is logged as a turn:end of its own, on
+        // either side of the incorporation depending on timing.
+        if ((event.data as TurnEndData | undefined)?.compact) continue
+        return false
+      case 'run:start':
+      case 'run:end':
+      case 'run:error':
+      case 'input:sent':
+      case 'stop:requested':
+        return false
+    }
+  }
+  return false
+}
+
 export function deriveStatus(events: readonly SessionEvent[]): Status {
   for (let i = events.length - 1; i >= 0; i--) {
+    // A delivered message the provider has started as a turn of its own.
+    if (opensNextTurn(events[i])) return 'streaming'
     switch (events[i].type) {
       case 'run:end':
       case 'run:error':
-      case 'turn:end':
         return 'idle'
+      case 'turn:end':
+        return turnEndLeavesNextTurn(events, i) ? 'streaming' : 'idle'
       case 'stop:requested':
         return 'stopping'
       case 'content':
@@ -52,7 +101,8 @@ export function deriveStatus(events: readonly SessionEvent[]): Status {
         // spawning and the first content event.
         for (let j = i - 1; j >= 0; j--) {
           if (events[j].type === 'input:sent') return 'streaming'
-          if (events[j].type === 'turn:end' || events[j].type === 'run:end') return 'idle'
+          if (events[j].type === 'turn:end') return turnEndLeavesNextTurn(events, j) ? 'streaming' : 'idle'
+          if (events[j].type === 'run:end') return 'idle'
           if (events[j].type === 'run:start') return 'idle'
         }
         return 'idle'

@@ -9,15 +9,16 @@
 // When updating, grep for PERMISSION_MODES to find all usages.
 
 /** Canonical permission modes for Claude sessions */
-export const PERMISSION_MODES = ['default', 'acceptEdits', 'bypassPermissions', 'plan'] as const;
+export const PERMISSION_MODES = ['default', 'acceptEdits', 'bypassPermissions', 'plan', 'auto'] as const;
 export type PermissionMode = typeof PERMISSION_MODES[number];
 
 export interface ServerConfig {
   host: string;
   port: number;
   /**
-   * Bearer token for API authentication. When set, all /api/* requests
-   * must include `Authorization: Bearer <token>`. If unset, no auth is enforced.
+   * Token for API authentication. When set, all /api/* requests must include
+   * `Authorization: Bearer <token>`; the web app asks for the token once and
+   * holds a sign-in cookie instead. If unset, no auth is enforced.
    * Used by cloud deployments to restrict access to the provisioned user.
    */
   authToken?: string;
@@ -44,15 +45,16 @@ export interface ServerConfig {
   /**
    * Default permission mode for new Claude sessions
    * 'default' = ask for permissions, 'acceptEdits' = auto-accept edits,
-   * 'bypassPermissions' = skip all prompts, 'plan' = plan only mode
+   * 'bypassPermissions' = skip all prompts, 'plan' = plan only mode,
+   * 'auto' = Claude Code's classifier decides, blocking risky actions
    */
   defaultPermissionMode?: PermissionMode;
   /**
-   * Custom system prompt injected into all Claude sessions spawned by Claudia.
-   * This is appended to Claude's default system prompt via --system-prompt.
-   * Use this for global instructions, persona customization, or project context.
+   * Permission mode for a new Claude worker (a session started with
+   * `pickedUpFrom`) that names none. Unset: workers follow
+   * `defaultPermissionMode` like any other session. Coordinators never use it.
    */
-  systemPrompt?: string;
+  workerPermissionMode?: PermissionMode;
 }
 
 export interface GeminiConfig {
@@ -116,20 +118,6 @@ export interface CoordinatorConfig {
    * tier mostly adds waiting. Worker routing is separate.
    */
   reasoningEffort?: string;
-  /**
-   * The fast responder: answers a message that needs a reply while the
-   * coordinator is mid-turn. Spend is
-   * gated by `generation.coordinatorFastReply`.
-   */
-  fastReply?: {
-    /** Anthropic model for the reply. Default: 'claude-sonnet-5'. */
-    model?: string;
-    /**
-     * Jev score at or above which a message is routed to the fast responder.
-     * Default from the 2026-09-20 calibration (see coordinator-router.ts).
-     */
-    threshold?: number;
-  };
 }
 
 export interface AnthropicConfig {
@@ -171,14 +159,6 @@ export interface InterfaceConfig {
    * Only set to true on your local development machine
    */
   devMode?: boolean;
-  /**
-   * Enable the voice orchestrator (`/voice`).
-   *
-   * Off by default: it needs a GPT Live alpha key, and the alpha is explicitly
-   * not for production traffic. Requires a secure context for the microphone,
-   * so over the tailnet it must be the HTTPS host rather than plain http.
-   */
-  voice?: boolean;
   notifications?: {
     enabled: boolean;
     ntfyUrl?: string;
@@ -188,26 +168,6 @@ export interface InterfaceConfig {
       vapidPrivateKey?: string;
     };
   };
-}
-
-export interface ElevenLabsConfig {
-  /**
-   * ElevenLabs API key for Conversational AI
-   * Get from: https://elevenlabs.io/app/settings/api-keys
-   */
-  apiKey?: string;
-
-  /**
-   * ElevenLabs Agent ID (created in their dashboard)
-   * Get from: https://elevenlabs.io/app/agents
-   */
-  agentId?: string;
-
-  /** TTS voice ID. Default: George (JBFqnCBsd6RMkjVDRZzb, premade free-tier) */
-  voiceId?: string;
-
-  /** TTS model. Default: eleven_v3 (most expressive, supports audio tags) */
-  model?: string;
 }
 
 export interface MessageLifecycleConfig {
@@ -259,6 +219,21 @@ export interface UserConfig {
   projects?: string[];
 }
 
+export interface FeedbackConfig {
+  /**
+   * Whether this Lattice may send feedback. On unless set to false; even on,
+   * nothing leaves the machine until the user presses Send, and false stops
+   * agents saving drafts too.
+   */
+  enabled?: boolean;
+  /**
+   * The feedback collector's base URL. Unset uses the build's default. A fork
+   * points this at its own collector; changing it strands drafts made for the
+   * old one, which can then only be deleted.
+   */
+  collectorUrl?: string;
+}
+
 export interface LatticeConfig {
   /**
    * Server configuration
@@ -274,15 +249,6 @@ export interface LatticeConfig {
    * OpenAI API configuration (optional)
    */
   openai?: OpenAIConfig;
-
-  /**
-   * GPT Live alpha configuration (optional)
-   *
-   * Deliberately separate from `openai` — Live alpha access is enrolled per
-   * project key, so the key that works here is generally NOT the same key used
-   * for cross-session synthesis. Overridden by OPENAI_LIVE_API_KEY.
-   */
-  openaiLive?: OpenAIConfig;
 
   /**
    * Anthropic API configuration (optional)
@@ -301,7 +267,7 @@ export interface LatticeConfig {
   user?: UserConfig;
 
   /**
-   * Coordinator role settings (router + fast responder).
+   * Coordinator role settings.
    */
   coordinator?: CoordinatorConfig;
 
@@ -316,11 +282,6 @@ export interface LatticeConfig {
   interface: InterfaceConfig;
 
   /**
-   * ElevenLabs Conversational AI configuration
-   */
-  elevenlabs?: ElevenLabsConfig;
-
-  /**
    * Storage lifecycle policy for unified message store.
    */
   messageLifecycle?: MessageLifecycleConfig;
@@ -329,6 +290,11 @@ export interface LatticeConfig {
    * Background model-backed generation.
    */
   generation?: GenerationConfig;
+
+  /**
+   * Sending feedback to the Lattice maintainer's collector.
+   */
+  feedback?: FeedbackConfig;
 
   /**
    * Plugin packages to load (npm package names)
@@ -387,19 +353,6 @@ export interface GenerationConfig {
   sessionReview?: boolean;
   /** Gemini consultation and generated session images (GeminiService). */
   gemini?: boolean;
-  /**
-   * Voice mode's act model (OpenAI /v1/responses) and the Live session it
-   * drives. Untracked by the cost tracker — Lattice records Anthropic spend
-   * only, so OpenAI and Gemini usage has never been measured here at all.
-   */
-  voice?: boolean;
-  /**
-   * The coordinator router (one Jev call per message that reaches a busy
-   * coordinator) and the fast responder it feeds (one Anthropic call when
-   * the router says the message needs a reply now). Off: a busy
-   * coordinator's messages wait for its next turn, as before.
-   */
-  coordinatorFastReply?: boolean;
   /**
    * The worker activity line (one short model-written phrase per worker card,
    * from that worker's own work evidence). Off: cards show the task and the

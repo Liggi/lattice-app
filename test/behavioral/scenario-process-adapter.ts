@@ -1,6 +1,6 @@
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
-import type { ProcessAdapter, ProcessHandle, SpawnConfig } from '@liggi/agent-ui-harness/server';
+import type { ProcessAdapter, ProcessHandle, SpawnConfig, SteerOutcome, SteerRequest } from '@liggi/agent-ui-harness/server';
 
 interface ContentBlock {
   type: string;
@@ -42,6 +42,14 @@ function sleep(ms: number): Promise<void> {
 
 let processCounter = 0;
 
+/** Whether an emitted event is the model answering input: a thinking or text block, or the turn's result. */
+function answersInput(event: Record<string, unknown>): boolean {
+  if (event.type === 'result') return true;
+  const content = (event.message as { content?: Array<{ type?: string }> } | undefined)?.content;
+  return event.type === 'assistant' && Array.isArray(content)
+    && content.some((block) => block.type === 'thinking' || block.type === 'text');
+}
+
 class ScenarioProcess implements ProcessHandle {
   alive = true;
   readonly pid: number | undefined = undefined;
@@ -58,6 +66,7 @@ class ScenarioProcess implements ProcessHandle {
   private stdinResponseIndex = 0;
   private mainSequenceDone = false;
   private readonly pendingStdinMessages: Array<Record<string, unknown>> = [];
+  private readonly awaitingIncorporation: Array<NonNullable<SteerRequest['onStage']>> = [];
 
   private readonly lineBuffer: string[] = [];
   private lineResolve: ((r: IteratorResult<string>) => void) | null = null;
@@ -109,6 +118,11 @@ class ScenarioProcess implements ProcessHandle {
 
   private emit(event: Record<string, unknown>): void {
     if (this.streamDone) return;
+    if (this.awaitingIncorporation.length > 0 && answersInput(event)) {
+      for (const onStage of this.awaitingIncorporation.splice(0)) {
+        onStage({ kind: 'incorporated', where: 'mid-turn', evidence: 'scenario reached an event answering it' });
+      }
+    }
     const line = JSON.stringify(event);
     if (this.lineResolve) {
       const resolve = this.lineResolve;
@@ -284,6 +298,20 @@ class ScenarioProcess implements ProcessHandle {
     } else {
       void this.handleStdinMessage(msg);
     }
+  }
+
+  /**
+   * The live CLI's steering path, reduced to what a scenario can show: the
+   * input is written like any other, acknowledged at once, and reported taken
+   * in at the next event that answers it.
+   */
+  async steer(request: SteerRequest): Promise<SteerOutcome> {
+    if (!this.alive) return { status: 'rejected', reason: 'Scenario process is not running' };
+    request.onStage?.({ kind: 'handed-over' });
+    this.write(request.input);
+    request.onStage?.({ kind: 'accepted', late: false });
+    if (request.onStage) this.awaitingIncorporation.push(request.onStage);
+    return { status: 'accepted' };
   }
 
   signal(sig: NodeJS.Signals): void {

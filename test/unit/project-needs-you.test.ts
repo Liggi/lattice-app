@@ -11,10 +11,11 @@ let open: ProjectOpenThread[] = [];
 let priority: { text: string } | null = null;
 let maxSeq = 1;
 let workerEvents: { type: string; timestamp: number; data: unknown }[] = [];
+let userSent: { timestamp: number }[] = [];
 const judgeNouls = vi.fn();
 
 vi.mock('../../src/services/sessions/project-state.js', () => ({ readProjectState: () => ({ open, priority, now: null }) }));
-vi.mock('../../src/session-history/repository.js', () => ({ getEvents: () => workerEvents }));
+vi.mock('../../src/session-history/repository.js', () => ({ getEvents: () => workerEvents, iterateEventsNewestFirst: () => userSent[Symbol.iterator]() }));
 vi.mock('../../src/harness/event-message-reader.js', () => ({ getEventStorage: () => ({ maxSeq: () => maxSeq }) }));
 vi.mock('../../src/services/infrastructure/typesafe-client.js', () => ({ judgeNouls: (...args: unknown[]) => judgeNouls(...args) }));
 vi.mock('../../src/services/infrastructure/database-provider.js', () => ({
@@ -94,5 +95,16 @@ describe('projectNeedsYou', () => {
     await settle();
     expect(judgeNouls).toHaveBeenCalledTimes(2);
     expect(projectNeedsYou('conv-p')).toEqual([]);
+  });
+
+  it('treats an ask as answered once the user has written to the project after it started waiting', async () => {
+    open = [thread(1, { waitingSince: 500 }), thread(2, { waitingSince: 900 })];
+    judgeNouls.mockResolvedValue({ nouls: { act: 0.9, parked: 0.1 } });
+    userSent = [{ timestamp: 700 }];
+    projectNeedsYou('conv-p');
+    await settle();
+    expect(projectNeedsYou('conv-p')?.map(item => item.seq)).toEqual([2]);
+    expect(judgeNouls).toHaveBeenCalledTimes(1);
+    userSent = [];
   });
 });

@@ -3,16 +3,18 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
-import { ClipboardPaste, CornerDownLeft, Loader2, RefreshCw, XCircle } from 'lucide-react';
+import { Check, ClipboardPaste, Copy, CornerDownLeft, ExternalLink, Loader2, RefreshCw, XCircle } from 'lucide-react';
 import { parseJson } from '../../../../utils/json.js';
+import { copyText } from '../../utils/copy-text';
 
 /**
  * Claude Code's own sign-in, shown in a terminal inside Lattice.
  *
  * The daemon runs `claude auth login` on a PTY; this draws its screen and
  * sends what the person types. Lattice does not read the URL or the code out
- * of the output: the link is tappable because the CLI prints it as one, and
- * the code goes wherever the CLI's prompt is. The attempt lives in the daemon,
+ * of the output for the exchange: the code goes wherever the CLI's prompt is.
+ * The sign-in link is read off the drawn screen only to offer it as a button,
+ * because on a phone it wraps to 16 lines. The attempt lives in the daemon,
  * so switching to the sign-in tab and back, or a dropped phone connection,
  * rejoins the same terminal.
  */
@@ -30,6 +32,8 @@ interface ClaudeLoginTerminalProps {
   onCancelled: () => void;
 }
 
+// The terminal's height is fixed and only its width follows the page. The
+// sign-in link has its own buttons, so the terminal need not show all of it.
 const TERMINAL_ROWS = 12;
 const INPUT_RETRIES = 2;
 
@@ -51,11 +55,29 @@ function openLink(uri: string): void {
   window.open(uri, '_blank', 'noopener');
 }
 
+const SIGN_IN_LINK = /https:\/\/\S+\/oauth\/authorize\?\S+/g;
+
+/** The last sign-in link on the screen, with the terminal's line wrapping undone. */
+function readSignInLink(term: Terminal): string | null {
+  const buffer = term.buffer.active;
+  let found: string | null = null;
+  let line = '';
+  for (let y = 0; y <= buffer.length; y += 1) {
+    const row = y < buffer.length ? buffer.getLine(y) : undefined;
+    if (row?.isWrapped) {
+      line += row.translateToString(true);
+      continue;
+    }
+    for (const match of line.matchAll(SIGN_IN_LINK)) found = match[0];
+    line = row?.translateToString(true) ?? '';
+  }
+  return found;
+}
+
 export function ClaudeLoginTerminal({ onFinished, onCancelled }: ClaudeLoginTerminalProps): JSX.Element {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const actionsRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<Terminal | null>(null);
-  const fitRef = useRef<FitAddon | null>(null);
   const attemptRef = useRef<string | null>(null);
   const streamRef = useRef<EventSource | null>(null);
   const clientIdRef = useRef(newClientId());
@@ -66,6 +88,8 @@ export function ClaudeLoginTerminal({ onFinished, onCancelled }: ClaudeLoginTerm
   const [error, setError] = useState<string | null>(null);
   const [typed, setTyped] = useState('');
   const [showTypeBar, setShowTypeBar] = useState(false);
+  const [signInLink, setSignInLink] = useState<string | null>(null);
+  const [linkCopied, setLinkCopied] = useState(false);
   const canReadClipboard = typeof navigator !== 'undefined' && !!navigator.clipboard?.readText;
 
   // Keystrokes leave in order and each carries its own sequence number, so a
@@ -112,6 +136,11 @@ export function ClaudeLoginTerminal({ onFinished, onCancelled }: ClaudeLoginTerm
     onFinished(state);
   }, [onFinished]);
 
+  const noticeSignInLink = useCallback(() => {
+    const term = termRef.current;
+    if (term) setSignInLink(readSignInLink(term));
+  }, []);
+
   // The screen, over Server-Sent Events. A `replay` frame is the whole history
   // so far, drawn on a cleared screen; `output` frames follow live.
   const openStream = useCallback((id: string) => {
@@ -121,16 +150,14 @@ export function ClaudeLoginTerminal({ onFinished, onCancelled }: ClaudeLoginTerm
     source.addEventListener('replay', (event) => {
       const { data } = parseJson((event as MessageEvent<string>).data) as { data: string };
       termRef.current?.reset();
-      termRef.current?.write(data);
+      setSignInLink(null);
+      termRef.current?.write(data, noticeSignInLink);
       setPhase('running');
       setError(null);
-      // On a phone the CLI's long link pushes the prompt and the buttons under
-      // the fold; bring them up so the person sees where to paste.
-      actionsRef.current?.scrollIntoView({ block: 'nearest' });
     });
     source.addEventListener('output', (event) => {
       const { data } = parseJson((event as MessageEvent<string>).data) as { data: string };
-      termRef.current?.write(data);
+      termRef.current?.write(data, noticeSignInLink);
     });
     source.addEventListener('state', (event) => {
       finish(parseJson((event as MessageEvent<string>).data) as LoginAttemptState);
@@ -148,12 +175,13 @@ export function ClaudeLoginTerminal({ onFinished, onCancelled }: ClaudeLoginTerm
         setPhase('reconnecting');
       }
     });
-  }, [finish]);
+  }, [finish, noticeSignInLink]);
 
   const start = useCallback(async (restart: boolean) => {
     const term = termRef.current;
     setError(null);
     setPhase('starting');
+    setSignInLink(null);
     seqRef.current = 0;
     try {
       const response = await fetch('/api/provider-auth/claude/login-terminal', {
@@ -196,16 +224,22 @@ export function ClaudeLoginTerminal({ onFinished, onCancelled }: ClaudeLoginTerm
     term.loadAddon(fit);
     term.loadAddon(new WebLinksAddon((_event, uri) => openLink(uri)));
     term.open(host);
-    fit.fit();
+    // Only the columns are fitted. Fitting rows to a box whose height comes
+    // from the terminal itself grew the box by a row on every resize.
+    const fitWidth = (): void => {
+      const cols = fit.proposeDimensions()?.cols;
+      if (!cols) return;
+      if (cols !== term.cols) term.resize(cols, TERMINAL_ROWS);
+    };
+    fitWidth();
     termRef.current = term;
-    fitRef.current = fit;
     const inputDisposable = term.onData((data) => sendInput(data));
 
     let resizeTimer: ReturnType<typeof setTimeout> | null = null;
     const observer = new ResizeObserver(() => {
       if (resizeTimer) clearTimeout(resizeTimer);
       resizeTimer = setTimeout(() => {
-        fit.fit();
+        fitWidth();
         sendResize();
       }, 150);
     });
@@ -260,21 +294,58 @@ export function ClaudeLoginTerminal({ onFinished, onCancelled }: ClaudeLoginTerm
     termRef.current?.focus();
   }, [sendInput, typed]);
 
+  // On a phone the link buttons push the terminal's buttons under the fold;
+  // bring them up once the link appears so the person sees where to paste.
+  const hasSignInLink = signInLink !== null;
+  useEffect(() => {
+    if (hasSignInLink) actionsRef.current?.scrollIntoView({ block: 'nearest' });
+  }, [hasSignInLink]);
+
+  const copyLink = useCallback(() => {
+    if (!signInLink || !copyText(signInLink)) return;
+    setLinkCopied(true);
+    setTimeout(() => setLinkCopied(false), 2000);
+  }, [signInLink]);
+
   const running = phase === 'running' || phase === 'reconnecting';
 
   return (
     <div className="space-y-3" data-testid="claude-login-terminal">
       <p className="text-xs text-fg-2">
         This is Claude Code&apos;s own sign-in, running on the computer that runs Lattice.
-        Tap the link it shows, sign in to Claude, then paste the code it gives you at the prompt.
+        Open the sign-in page, sign in to Claude, then paste the code it gives you at the prompt.
       </p>
 
+      {running && signInLink && (
+        <div className="flex flex-wrap items-center gap-2" data-testid="claude-login-link">
+          <button
+            type="button"
+            onClick={() => openLink(signInLink)}
+            className="ui-action-btn ui-action-btn--accent flex items-center gap-2 px-3 py-2 text-[13px] cursor-pointer"
+            data-testid="claude-login-open"
+          >
+            <ExternalLink size={14} />
+            <span>Open sign-in page</span>
+          </button>
+          <button
+            type="button"
+            onClick={copyLink}
+            className="ui-action-btn flex items-center gap-2 px-3 py-2 text-[13px] cursor-pointer"
+            data-testid="claude-login-copy"
+          >
+            {linkCopied ? <Check size={14} /> : <Copy size={14} />}
+            <span>{linkCopied ? 'Copied' : 'Copy link'}</span>
+          </button>
+        </div>
+      )}
+
       <div
-        ref={hostRef}
-        className="rounded-md border border-line-2 bg-[#0b0b0d] p-2 overflow-hidden"
+        className="rounded-md border border-line-2 bg-[#0b0b0d] p-2"
         data-testid="claude-login-screen"
         onClick={() => termRef.current?.focus()}
-      />
+      >
+        <div ref={hostRef} className="overflow-hidden" />
+      </div>
 
       {phase === 'starting' && !error && (
         <p className="flex items-center gap-2 text-xs text-fg-3"><Loader2 size={12} className="animate-spin" />Starting Claude Code…</p>

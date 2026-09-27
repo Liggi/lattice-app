@@ -9,6 +9,7 @@ import { anthropicService } from '@/services/insights/anthropic-service.js';
 import { getPermissionEventLog } from '@/services/permission-event-log.js';
 import { ClaudeSettingsService } from '@/services/infrastructure/claude-settings-service.js';
 import { ConversationService } from '@/services/sessions/conversation-service.js';
+import { addRoutedPermissionRequest } from '@/services/sessions/worker-permission-delivery.js';
 import { SessionInfoService } from '@/services/sessions/session-info-service.js';
 import { allowGeneration } from '@/services/infrastructure/generation-gates.js';
 
@@ -38,6 +39,13 @@ interface PreToolUseHookBody {
   hook_event_name?: string;
   tool_name?: string;
   tool_input?: Record<string, unknown>;
+}
+
+interface PermissionDeniedHookBody {
+  session_id?: string;
+  tool_name?: string;
+  tool_input?: Record<string, unknown>;
+  reason?: string;
 }
 
 interface CompactHookBody {
@@ -261,7 +269,7 @@ export function createPermissionRoutes(
     }
 
     // Add permission request with the provided streamingId
-    const request = permissionTracker.addPermissionRequest(toolName, toolInput ?? {}, streamingId);
+    const request = addRoutedPermissionRequest(permissionTracker, toolName, toolInput ?? {}, streamingId);
 
     // Log permission request with structured event
     permissionLog.request({
@@ -310,7 +318,7 @@ export function createPermissionRoutes(
       ? permissionTracker.resolveStreamingIdForSession(sessionId)
       : undefined;
 
-    const permissionRequest = permissionTracker.addPermissionRequest(toolName, toolInput, streamingId);
+    const permissionRequest = addRoutedPermissionRequest(permissionTracker, toolName, toolInput, streamingId, { sessionId });
     const decision = await waitForDecision(permissionRequest.id);
 
     if (decision.status === 'approved') {
@@ -406,7 +414,7 @@ export function createPermissionRoutes(
       return;
     }
 
-    const permissionRequest = permissionTracker.addPermissionRequest(toolName, toolInput, streamingId);
+    const permissionRequest = addRoutedPermissionRequest(permissionTracker, toolName, toolInput, streamingId, { sessionId });
     const decision = await waitForDecision(permissionRequest.id);
 
     if (decision.status === 'approved') {
@@ -425,6 +433,19 @@ export function createPermissionRoutes(
         permissionDecision: 'deny',
       },
     });
+  }));
+
+  // Auto mode blocked a tool call. Logged so blocks can be counted; the
+  // denial already happened, so the reply carries no decision.
+  router.post('/hooks/permission-denied', asyncHandler(async (req: RequestWithRequestId<PermissionDeniedHookBody>, res) => {
+    const hookBody = req.body || {};
+    getPermissionEventLog().autoDenied({
+      toolName: hookBody.tool_name ?? 'unknown',
+      toolInput: hookBody.tool_input,
+      sessionId: hookBody.session_id,
+      reason: hookBody.reason,
+    });
+    res.json({});
   }));
 
   router.post('/hooks/compact', asyncHandler(async (req: RequestWithRequestId<CompactHookBody>, res) => {
@@ -561,6 +582,10 @@ export function createPermissionRoutes(
         if (permission.sessionId === sessionId) {
           return true;
         }
+        // A request its coordinator escalated is asked in the coordinator's thread too.
+        if (permission.escalation && permission.coordinator === sessionId) {
+          return true;
+        }
         if (!permission.sessionId) {
           return false;
         }
@@ -607,8 +632,8 @@ export function createPermissionRoutes(
     });
 
     // Validate request body
-    if (!decisionRequest.action || !['approve', 'deny'].includes(decisionRequest.action)) {
-      throw new LatticeError('INVALID_ACTION', 'Action must be either "approve" or "deny"', 400);
+    if (!decisionRequest.action || !['approve', 'deny', 'escalate'].includes(decisionRequest.action)) {
+      throw new LatticeError('INVALID_ACTION', 'Action must be "approve", "deny" or "escalate"', 400);
     }
 
     // Get the permission request to validate it exists and is pending
@@ -617,6 +642,27 @@ export function createPermissionRoutes(
 
     if (!permission) {
       throw new LatticeError('PERMISSION_NOT_FOUND', 'Permission request not found or not pending', 404);
+    }
+
+    // A coordinator may decide only its own worker's request. The user (no `from`) may decide any.
+    if (decisionRequest.from !== undefined && decisionRequest.from !== permission.coordinator) {
+      throw new LatticeError('NOT_COORDINATOR', `${decisionRequest.from} is not the coordinator for this request`, 403);
+    }
+
+    if (decisionRequest.action === 'escalate') {
+      if (!permission.coordinator || decisionRequest.from === undefined) {
+        throw new LatticeError('INVALID_ACTION', 'Only the worker\'s coordinator can escalate, with --from', 400);
+      }
+      if (permission.escalation) {
+        throw new LatticeError('ALREADY_ESCALATED', 'This request is already with the user', 409);
+      }
+      const why = decisionRequest.why?.trim();
+      if (!why) {
+        throw new LatticeError('INVALID_ACTION', 'Escalating needs a reason for the user', 400);
+      }
+      permissionTracker.escalatePermission(requestId, why);
+      res.json({ success: true, message: 'Handed to the user' } satisfies PermissionDecisionResponse);
+      return;
     }
 
     // Update permission status

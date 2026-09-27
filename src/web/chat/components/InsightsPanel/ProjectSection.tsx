@@ -79,11 +79,13 @@ const COLLAPSED_THREAD_COUNT = 3;
 
 export function ProjectSection({ project, coordinatorRunning }: ProjectSectionProps): JSX.Element | null {
   const [threadsExpanded, setThreadsExpanded] = useState(false);
-  const noted = project.outcome || project.priority || project.now || project.open.length > 0 || project.closed.length > 0;
+  // A parked thread is kept but not remaining work, so it is not listed here.
+  const open = project.open.filter((thread) => !thread.parked);
+  const noted = project.outcome || project.priority || project.now || open.length > 0 || project.closed.length > 0;
   if (!noted) return null;
 
-  const hidden = project.open.length - COLLAPSED_THREAD_COUNT;
-  const shown = threadsExpanded ? project.open : project.open.slice(0, COLLAPSED_THREAD_COUNT);
+  const hidden = open.length - COLLAPSED_THREAD_COUNT;
+  const shown = threadsExpanded ? open : open.slice(0, COLLAPSED_THREAD_COUNT);
   // `closed` is in the order the coordinator closed them, so the last entry is
   // the most recent completion. It is read from the recorded state, so it is
   // the same row after a reload and no timer is involved.
@@ -126,7 +128,7 @@ export function ProjectSection({ project, coordinatorRunning }: ProjectSectionPr
         </div>
       )}
 
-      {(project.open.length > 0 || justDone) && (
+      {(open.length > 0 || justDone) && (
         <div data-testid="project-threads">
           <SectionHeading icon={ListTodo}>{shown.length > 0 ? 'Still to do' : 'Recently completed'}</SectionHeading>
           {shown.length > 0 && (

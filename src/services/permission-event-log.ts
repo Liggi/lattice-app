@@ -27,7 +27,8 @@ export type PermissionEventType =
   | 'approved'          // User approved permission
   | 'denied'            // User denied permission
   | 'pattern_suggest'   // Pattern suggestions generated
-  | 'allowlist_add';    // Pattern added to allowlist
+  | 'allowlist_add'     // Pattern added to allowlist
+  | 'auto_denied';      // Auto mode's classifier blocked a tool call
 
 export type PatternSource =
   | 'global'            // Matched global allowlist
@@ -93,6 +94,7 @@ export class PermissionEventLog {
     toolName: string;
     toolInput?: Record<string, unknown>;
     streamingId?: string;
+    sessionId?: string;
     permissionRequestId: string;
   }): void {
     this.addEvent({
@@ -100,6 +102,7 @@ export class PermissionEventLog {
       toolName: params.toolName,
       toolInput: params.toolInput,
       streamingId: params.streamingId,
+      sessionId: params.sessionId,
       permissionRequestId: params.permissionRequestId,
     });
 
@@ -188,6 +191,31 @@ export class PermissionEventLog {
       decision: params.decision,
       requestId: params.permissionRequestId.slice(0, 8),
       streamingId: params.streamingId?.slice(0, 8),
+    });
+  }
+
+  /**
+   * Log a tool call auto mode blocked (Claude Code's PermissionDenied hook).
+   * `reason` is the classifier's, usually the matched rule in brackets.
+   */
+  autoDenied(params: {
+    toolName: string;
+    toolInput?: Record<string, unknown>;
+    sessionId?: string;
+    reason?: string;
+  }): void {
+    this.addEvent({
+      eventType: 'auto_denied',
+      toolName: params.toolName,
+      toolInput: params.toolInput,
+      sessionId: params.sessionId,
+      denyReason: params.reason,
+    });
+
+    this.logger.info('Auto mode blocked a tool call', {
+      tool: params.toolName,
+      reason: params.reason,
+      sessionId: params.sessionId?.slice(0, 8),
     });
   }
 

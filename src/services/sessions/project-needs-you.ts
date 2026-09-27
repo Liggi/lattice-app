@@ -10,10 +10,19 @@
  * is scored in the background; when the score lands the project's status is
  * pushed as changed, so the client refetches it. A score stands until the
  * thread's `updatedAt` changes.
+ *
+ * A message from the user to the project answers every ask that was waiting
+ * before it, whether or not the coordinator has updated its record yet
+ * (2026-09-26: Needs you stayed lit on projects the user had answered and
+ * that were working again). The composer's send records it as a `user:sent`
+ * event in the coordinator's log, so it survives a restart.
  */
 
 import { withoutThreadRefs, type ProjectOpenThread } from '../../types/project-state.js';
+import type { SessionManager } from '@liggi/agent-ui-harness/server';
 import { getEventStorage } from '../../harness/event-message-reader.js';
+import { appendCustomHarnessEvent } from '../../harness/harness-custom-events.js';
+import { iterateEventsNewestFirst } from '../../session-history/repository.js';
 import { DatabaseProvider } from '../infrastructure/database-provider.js';
 import { createLogger } from '../infrastructure/logger.js';
 import { judgeNouls, type NoulQuestion } from '../infrastructure/typesafe-client.js';
@@ -71,6 +80,8 @@ export function __resetNeedsYouForTests(): void {
 }
 
 export function isNeedsYouCandidate(thread: ProjectOpenThread): boolean {
+  // A parked thread is kept, not asking for anything.
+  if (thread.parked) return false;
   return thread.owner?.kind === 'user' || thread.waitingOn?.kind === 'decision';
 }
 
@@ -135,7 +146,7 @@ function scoreInBackground(coordinatorId: string, thread: ProjectOpenThread): vo
       const { nouls } = await judgeNouls(
         renderState(projectName(coordinatorId), thread, Date.now()),
         { act: actQuestion(name), parked: parkedQuestion(name) },
-        { timeoutMs: JEV_TIMEOUT_MS },
+        { timeoutMs: JEV_TIMEOUT_MS, cost: { operation: 'NEEDS_YOU', sessionId: coordinatorId } },
       );
       const score = nouls.act * (1 - nouls.parked);
       scores.set(key, { updatedAt: thread.updatedAt, act: nouls.act, parked: nouls.parked, score });
@@ -161,11 +172,27 @@ function isCoordinator(conversationId: string): boolean {
   return row?.coordinator === 1;
 }
 
+export const USER_SENT_EVENT = 'user:sent';
+
+/** Record that the user has just sent this project a message; a no-op for a conversation that is not a project. */
+export function noteUserSent(manager: SessionManager, conversationId: string): void {
+  if (!isCoordinator(conversationId)) return;
+  appendCustomHarnessEvent(manager, conversationId, USER_SENT_EVENT, {});
+  noteStatusChanged(conversationId);
+}
+
+function lastUserSentAt(coordinatorId: string): number {
+  for (const event of iterateEventsNewestFirst(coordinatorId, [USER_SENT_EVENT])) return event.timestamp;
+  return 0;
+}
+
 interface ProjectSnapshot {
   seq: number;
   threads: ProjectOpenThread[];
   workingOn: string | null;
   workerTasks: Record<string, string>;
+  /** When the user last sent the project a message, epoch ms; 0 if never recorded. */
+  userSentAt: number;
 }
 
 function snapshot(coordinatorId: string): ProjectSnapshot {
@@ -180,6 +207,7 @@ function snapshot(coordinatorId: string): ProjectSnapshot {
     workingOn: focus ? withoutThreadRefs(focus) || null : null,
     workerTasks: Object.fromEntries(foldWorkerStates(getEvents(coordinatorId, { types: [...WORKER_EVENT_TYPES] }))
       .map(worker => [worker.worker, worker.task])),
+    userSentAt: lastUserSentAt(coordinatorId),
   };
   snapshots.set(coordinatorId, entry);
   return entry;
@@ -202,7 +230,9 @@ export function projectWorkerTasks(conversationId: string): Record<string, strin
 export function projectNeedsYou(conversationId: string): NeedsYouItem[] | null {
   if (!isCoordinator(conversationId)) return null;
   const items: NeedsYouItem[] = [];
-  for (const thread of snapshot(conversationId).threads) {
+  const { threads, userSentAt } = snapshot(conversationId);
+  for (const thread of threads) {
+    if (thread.waitingSince <= userSentAt) continue;
     const scored = scores.get(`${conversationId}:${thread.seq}`);
     if (!scored || scored.updatedAt !== thread.updatedAt) {
       scoreInBackground(conversationId, thread);

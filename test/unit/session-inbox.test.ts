@@ -63,8 +63,8 @@ function row(overrides: Partial<inbox.InboxRow>): inbox.InboxRow {
   return {
     id: 'i1', session_id: 'conv-c', source: 'user', text: 'hello', worker: null, worker_model: null,
     attachments_json: null, model: null, reasoning_effort: null, created_at: '2026-09-20T10:04:00.000Z',
-    attempts: 0, last_error: null, read_at: null, read_seq: null, reply: null, reply_pending: 0,
-    sender: null, passed_on: 0, source_seq: null, delivery_id: null, answers_id: null,
+    attempts: 0, last_error: null, read_at: null, read_seq: null,
+    sender: null, passed_on: 0, source_seq: null, delivery_id: null,
     reserved_by: null, reserved_at: null, reservation_state: null, ...overrides,
   };
 }

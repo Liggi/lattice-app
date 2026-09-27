@@ -85,9 +85,9 @@ export function usePermissions(conversationId: string | undefined): UsePermissio
   // this conversation (or with no session attribution) checks immediately.
   useActivityStreamSubscription({ type: 'activity' }, (event) => {
     if (!conversationId) return;
-    const payload = event as { type?: string; sessionId?: string | null };
+    const payload = event as { type?: string; sessionId?: string | null; coordinator?: string | null };
     if (payload.type !== 'permission-request' && payload.type !== 'permission-updated') return;
-    if (payload.sessionId && payload.sessionId !== conversationId) return;
+    if (payload.sessionId && payload.sessionId !== conversationId && payload.coordinator !== conversationId) return;
     void pollRef.current?.();
   });
 

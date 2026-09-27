@@ -123,6 +123,35 @@ function formatToolSummary(toolName: string, input: Record<string, unknown>): st
   }
 }
 
+/** The card's one-line question, in plain words for the tool at hand. */
+function permissionQuestion(toolName: string): string {
+  switch (toolName) {
+    case 'Bash':
+      return 'Allow this command?';
+    case 'Write':
+    case 'Edit':
+      return 'Allow this file change?';
+    case 'Read':
+      return 'Allow reading this file?';
+    default:
+      return `Allow ${toolName}?`;
+  }
+}
+
+/**
+ * What a worker's own view shows while its coordinator decides a request:
+ * one quiet line, no buttons. The user is asked only if the coordinator escalates.
+ */
+export function PermissionWaitingLine({ permission }: { permission: PermissionRequest }): JSX.Element {
+  return (
+    <div data-testid="permission-waiting" className="flex items-center gap-2 min-w-0 px-1 text-xs text-fg-3">
+      <ShieldAlert size={13} className="shrink-0" />
+      <span className="shrink-0">Waiting on the coordinator to allow</span>
+      <span className="font-mono truncate">{formatToolSummary(permission.toolName, permission.toolInput)}</span>
+    </div>
+  );
+}
+
 // Generate human-readable description for a pattern
 function getPatternDescription(pattern: string, totalPatterns: number, index: number): string {
   // First pattern is always exact match
@@ -314,77 +343,68 @@ export function PermissionBanner({
     return <PlanApprovalBanner onApprove={onApprove} onDeny={onDeny} isLoading={isLoading} />;
   }
 
+  const escalation = permission.escalation;
+
   return (
-    <div data-testid="permission-banner" className="border border-line rounded-lg overflow-hidden bg-[rgb(var(--color-amber-rgb)/0.08)]">
-      {/* Header row */}
-      <div className="px-4 py-3 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+    <div data-testid="permission-banner" className="border border-line rounded-lg overflow-hidden bg-surface">
+      <div className="px-4 pt-3 pb-3 flex flex-col gap-2.5">
+        <div className="flex items-center gap-2 min-w-0">
+          <ShieldAlert size={15} className="text-amber-400 shrink-0" />
+          <span className="text-sm font-medium text-fg">{permissionQuestion(permission.toolName)}</span>
+        </div>
+
+        {escalation && (
+          <div data-testid="permission-escalation" className="text-[13px] text-fg-2">
+            <span className="text-fg">The coordinator passed this to you:</span> {escalation.why}
+          </div>
+        )}
+        {permission.reason && (
+          <div className="text-xs text-fg-3">{permission.reason}</div>
+        )}
+
         <button
+          type="button"
           onClick={() => setIsExpanded(!isExpanded)}
-          className="flex items-start gap-3 flex-1 min-w-0 text-left"
-          disabled={isLoading}
+          className="text-left rounded-md bg-bg border border-line px-3 py-2 min-w-0"
+          aria-expanded={isExpanded}
+          title={isExpanded ? 'Show less' : 'Show all'}
         >
           {isExpanded ? (
-            <ChevronDown size={14} className="text-fg-3 shrink-0 mt-0.5" />
+            <ExpandedToolInput toolName={permission.toolName} toolInput={permission.toolInput} />
           ) : (
-            <ChevronRight size={14} className="text-fg-3 shrink-0 mt-0.5" />
+            <span className="font-mono text-[12.5px] text-fg-2 break-all line-clamp-2">{summary}</span>
           )}
-          <ShieldAlert size={16} className="text-amber-400 shrink-0 mt-0.5" />
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2 min-w-0 flex-wrap">
-              <span className="text-sm font-medium text-amber-400 shrink-0">
-                {permission.toolName}
-              </span>
-              <span className="text-fg-3 shrink-0">·</span>
-              <span className={`text-[13px] text-fg-2 font-mono ${isExpanded ? 'break-all' : 'line-clamp-2 break-all sm:line-clamp-1'}`}>
-                {summary}
-              </span>
-            </div>
-          </div>
         </button>
-        <div className="flex flex-wrap items-center gap-2 shrink-0 sm:justify-end">
+
+        <div className="flex items-center gap-2">
           <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onDeny();
-            }}
+            onClick={() => onDeny()}
             disabled={isLoading}
-            className="group flex min-h-9 items-center gap-1.5 px-3 py-1.5 text-xs font-medium ui-action-btn disabled:opacity-50 disabled:cursor-not-allowed"
+            className="flex min-h-9 items-center gap-1.5 px-3 py-1.5 text-xs font-medium ui-action-btn disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <X size={12} />
             Deny
           </button>
           <button
             data-testid="permission-allow-button"
-            onClick={(e) => {
-              e.stopPropagation();
-              onApprove();
-            }}
+            onClick={() => onApprove()}
             disabled={isLoading}
-            className="group flex min-h-9 items-center gap-1.5 px-3 py-1.5 text-xs font-medium ui-action-btn disabled:opacity-50 disabled:cursor-not-allowed ui-action-btn--accent"
+            className="flex min-h-9 items-center gap-1.5 px-3 py-1.5 text-xs font-medium ui-action-btn ui-action-btn--accent disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <Check size={12} />
             Allow
           </button>
           <button
-            onClick={(e) => {
-              e.stopPropagation();
-              setShowAlwaysPanel(!showAlwaysPanel);
-            }}
+            onClick={() => setShowAlwaysPanel(!showAlwaysPanel)}
             disabled={isLoading}
-            className={`group flex min-h-9 items-center gap-1.5 px-3 py-1.5 text-xs font-medium ui-action-btn disabled:opacity-50 disabled:cursor-not-allowed ${showAlwaysPanel ? 'bg-surface-2 text-fg' : ''}`}
+            aria-expanded={showAlwaysPanel}
+            className="ml-auto flex min-h-9 items-center gap-1 px-2 text-xs text-fg-3 hover:text-fg-2 transition-colors disabled:opacity-50"
           >
+            Always allow
             {showAlwaysPanel ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-            Allow always
           </button>
         </div>
       </div>
-
-      {/* Expanded details - show full tool input */}
-      {isExpanded && !showAlwaysPanel && (
-        <div className="border-t border-line px-4 py-3 bg-bg">
-          <ExpandedToolInput toolName={permission.toolName} toolInput={permission.toolInput} />
-        </div>
-      )}
 
       {/* Allow Always panel - inline expansion */}
       {showAlwaysPanel && (

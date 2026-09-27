@@ -312,6 +312,8 @@ export function registerUnifiedConversationTransportRoutes(
         sessionId: resolved.startsWith('conv-') ? resolved : null,
         status: request.status,
         toolName: request.toolName,
+        // An escalated worker request is also asked in its coordinator's thread.
+        coordinator: request.escalation ? request.coordinator ?? null : null,
         timestamp: Date.now(),
       })}\n\n`);
     };

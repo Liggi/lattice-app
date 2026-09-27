@@ -21,12 +21,15 @@ import {
   PROJECT_NUDGED_EVENT,
   PROJECT_FOLD_EVENT_TYPES,
   foldProjectState,
+  formatAgo,
+  staleProjectItems,
   unaddressedAfterTurn,
   type ProjectNotedData,
   type ProjectState,
 } from '../../types/project-state.js';
 import { SERVER_NOTE_END, SERVER_NOTE_PREFIX } from '../../types/worker-events.js';
 import { onProjectOutcomeChanged } from './project-name.js';
+import { userName } from '../user-profile.js';
 
 const logger = createLogger('ProjectState');
 
@@ -111,4 +114,65 @@ export function buildProjectStateNudge(coordinatorConversationId: string, cli: s
   }
   lines.push(SERVER_NOTE_END, '');
   return lines.join('\n');
+}
+
+/**
+ * The line put in front of a coordinator's input listing what nothing has
+ * touched for a day — open threads and a priority that is stale or bound to
+ * no thread — or '' when there is none. It repeats every turn until each
+ * entry is closed, parked or touched: that is the return trigger a thread
+ * waiting on real use never otherwise gets.
+ */
+export function buildStaleProjectLine(coordinatorConversationId: string, cli: string, now = Date.now()): string {
+  const conversation = ConversationService.getInstance().getConversation(coordinatorConversationId);
+  if (!conversation?.coordinator) return '';
+  const stale = staleProjectItems(readProjectState(coordinatorConversationId), now);
+  if (stale.threads.length === 0 && !stale.priority) return '';
+  const conv = coordinatorConversationId;
+  const lines: string[] = [];
+  if (stale.threads.length > 0) {
+    lines.push(
+      `${SERVER_NOTE_PREFIX} Nothing has touched these open threads for over a day. For each, decide one of: close it with the evidence`,
+      `if its outcome is met (\`${cli} session note ${conv} --close <id> --with "…"\`), park it if nobody is working it`,
+      `(\`--park <id> --with "<why, and what would bring it back>"\`), or update it if it is genuinely still moving.`,
+    );
+    for (const { thread, idleMs } of stale.threads) {
+      const waiting = thread.waitingOn ? `; waiting on ${thread.waitingOn.text}` : '';
+      lines.push(`- [${thread.seq}] ${thread.text} (untouched ${formatAgo(idleMs)}${waiting})`);
+    }
+  }
+  if (stale.priority) {
+    const lead = lines.length === 0 ? `${SERVER_NOTE_PREFIX} ` : '';
+    lines.push(lead + (stale.priority.reason === 'unbound'
+      ? `The priority "${stale.priority.text}" names no thread, so nothing clears it when its work ends: bind it (\`--priority "…" --thread <id>\`) or replace it.`
+      : `The priority "${stale.priority.text}" is on one of those threads; if the project has moved on, set the priority to what it is on now.`));
+  }
+  lines[lines.length - 1] += ']';
+  lines.push(SERVER_NOTE_END, '');
+  logger.info('Stale project items shown', {
+    coordinator: conv,
+    threads: stale.threads.map((entry) => entry.thread.seq),
+    priority: stale.priority?.reason ?? null,
+  });
+  return lines.join('\n');
+}
+
+/**
+ * For a worker report landing on an open thread: the thread's outcome and the
+ * question to settle now, whether the report means that outcome is met.
+ * Threads that do not close at the report were found never to close at all,
+ * so the moment the report arrives is when this is asked. '' when the report
+ * is on no open thread.
+ */
+export function reportThreadPrompt(coordinatorConversationId: string, reportSeq: number | null | undefined, cli: string): string {
+  if (typeof reportSeq !== 'number') return '';
+  const state = readProjectState(coordinatorConversationId);
+  const thread = state.open.find((candidate) => (candidate.events ?? []).some((event) => event.seq === reportSeq));
+  if (!thread) return '';
+  return (
+    `[This report is on thread [${thread.seq}]: "${thread.text}". If it means that outcome is met, close the thread now ` +
+    `(\`${cli} session note ${coordinatorConversationId} --close ${thread.seq} --addresses ${reportSeq} --with "<the evidence>"\`) ` +
+    'and put anything still unverified in that evidence. Leftover work gets a thread of its own only if it has been agreed; ' +
+    `a follow-up that needs ${userName()}'s go is a question to them, not a reason to keep this one open.]`
+  );
 }

@@ -221,6 +221,42 @@ export function reportSummaryPoints(text: string): string[] {
 }
 
 /**
+ * The title and facts a writer produced, before any length bound is applied,
+ * or null when there is no title or no fact to bound.
+ */
+export function reportSummaryDraft(raw: string): { title: string; points: string[] } | null {
+  const lines = raw.split('\n');
+  const titleIdx = lines.findIndex((line) => line.trim().length > 0);
+  if (titleIdx < 0) return null;
+  const title = lines[titleIdx].trim().replace(/^#+\s*/, '').replace(/[*_`]/g, '').replace(/[.:]+$/, '').trim();
+  const points = reportSummaryPoints(lines.slice(titleIdx + 1).join('\n'));
+  if (!title || points.length === 0) return null;
+  return { title, points };
+}
+
+/**
+ * What in a draft is over the card's bounds, each named in words the writer
+ * can act on — "Line 2 is 214 characters; the most is 180" — so a draft that
+ * is only too long can be sent back to be shortened rather than lost. Empty
+ * when it fits.
+ */
+export function reportSummaryOverLimits(draft: { title: string; points: string[] }): string[] {
+  const problems: string[] = [];
+  if (draft.title.length > MAX_SUMMARY_TITLE_CHARS) {
+    problems.push(`The first line is ${draft.title.length} characters; the most is ${MAX_SUMMARY_TITLE_CHARS}.`);
+  }
+  if (draft.points.length > MAX_SUMMARY_POINTS) {
+    problems.push(`There are ${draft.points.length} lines under the first; the most is ${MAX_SUMMARY_POINTS}.`);
+  }
+  draft.points.forEach((point, i) => {
+    if (point.length > MAX_SUMMARY_POINT_CHARS) {
+      problems.push(`Line ${i + 1} under the first is ${point.length} characters; the most is ${MAX_SUMMARY_POINT_CHARS}.`);
+    }
+  });
+  return problems;
+}
+
+/**
  * The title and body a writer produced, or null when what came back does not
  * fit the card. Null is not an error worth showing: the card falls back to
  * the report itself, which was always readable.
@@ -230,16 +266,9 @@ export function reportSummaryPoints(text: string): string[] {
  * bound is what stops that reaching the card as a block of prose.
  */
 export function usableReportSummary(raw: string): { title: string; text: string } | null {
-  const lines = raw.split('\n');
-  const titleIdx = lines.findIndex((line) => line.trim().length > 0);
-  if (titleIdx < 0) return null;
-  const title = lines[titleIdx].trim().replace(/^#+\s*/, '').replace(/[*_`]/g, '').replace(/[.:]+$/, '').trim();
-  const points = reportSummaryPoints(lines.slice(titleIdx + 1).join('\n'));
-  if (!title || points.length === 0) return null;
-  if (title.length > MAX_SUMMARY_TITLE_CHARS) return null;
-  if (points.length > MAX_SUMMARY_POINTS) return null;
-  if (points.some((point) => point.length > MAX_SUMMARY_POINT_CHARS)) return null;
-  return { title, text: points.join('\n') };
+  const draft = reportSummaryDraft(raw);
+  if (!draft || reportSummaryOverLimits(draft).length > 0) return null;
+  return { title: draft.title, text: draft.points.join('\n') };
 }
 
 /**

@@ -8,6 +8,7 @@ import { useSession } from '@liggi/agent-ui-harness/client';
 import type { ActionTraceEntry, HydrationPhase } from '@liggi/agent-ui-harness/client';
 import type {
   ContextCompactionData,
+  InputSentData,
   SessionEvent,
   TurnEndData,
   RunEndData,
@@ -19,13 +20,13 @@ import type { PendingMessage, ConsumedMessage } from '@liggi/agent-ui-harness/pr
 import { foldInbox, type InboxFold, type InboxQueuedData } from '@/types/inbox';
 import { foldAgentReactions, foldReactions } from '@/types/message-reactions';
 import type { CollapsedGroup } from '@liggi/agent-ui-harness/protocol';
-import type { ChatMessage, DisplayContentBlock, MessageAttribution, QuickAnswerDelivery } from '../types/index.js';
+import type { ChatMessage, DisplayContentBlock, MessageAttribution } from '../types/index.js';
 import type { CollapsedGroupData, ToolCallData } from '@liggi/agent-ui-toolkit';
 import { useHydrationTrace } from './useHydrationTrace.js';
 import type { Provider } from '@/types/unified-messages';
 import type { CodexThreadGoal } from '@/services/process/codex-app-server-types';
 import { PROJECT_NOTED_EVENT } from '@/types/project-state';
-import { COORDINATOR_REPLIED_EVENT, type CoordinatorRepliedData } from '@/types/coordinator-reply';
+import { FEEDBACK_PROPOSED_EVENT, type FeedbackProposedData } from '@/types/feedback';
 import {
   isWorkerEventType,
   isWorkerInput,
@@ -93,6 +94,10 @@ export interface UseHarnessSessionReturn {
   codexGoalEventSeen: boolean;
   /** Latest provider-neutral context compaction lifecycle. */
   compaction: ContextCompactionData | null;
+  /** The latest compaction is its own turn, started by the compact command
+   *  after a reply finished (automatically or from the compact control),
+   *  rather than one the provider ran inside a turn that is still going. */
+  compactionAfterReply: boolean;
   /** Timestamp (ms, this browser's clock) when the current active interval
    *  began — derived from server-stamped event timestamps, so it's stable
    *  across page refresh. Null when the session is idle. */
@@ -158,11 +163,7 @@ export function useHarnessSession(
   const eventContext = useMemo(() => deriveEventContext(events), [events]);
 
   // Transform harness events → ChatMessage[] (for data derivation)
-  // `windowComplete`: during hydration the window is still being assembled, so
-  // a missing `input:read` is not evidence that no turn has been handed the
-  // item — see `inboxDeliveryStates`.
-  const windowComplete = hydrationPhase === 'ready';
-  const messages = useMemo(() => eventsToMessages(events, eventContext.providerBySeq, windowComplete), [events, eventContext.providerBySeq, windowComplete]);
+  const messages = useMemo(() => eventsToMessages(events, eventContext.providerBySeq), [events, eventContext.providerBySeq]);
 
   // Group events → render items + subagent children (for rendering).
   // `isStreaming` feeds CollapsedToolGroup.isActive — gate on hydrationPhase
@@ -171,8 +172,8 @@ export function useHarnessSession(
   // historical tool cards flashing their active spinner.
   const isStreaming = status === 'streaming' && hydrationPhase === 'ready';
   const { renderItems, childrenMessages } = useMemo(
-    () => eventsToRenderItems(events, isStreaming, eventContext.providerBySeq, pendingMessages, consumedMessages, inbox.hiddenInputSeqs, windowComplete),
-    [events, isStreaming, eventContext.providerBySeq, pendingMessages, consumedMessages, inbox.hiddenInputSeqs, windowComplete],
+    () => eventsToRenderItems(events, isStreaming, eventContext.providerBySeq, pendingMessages, consumedMessages, inbox.hiddenInputSeqs),
+    [events, isStreaming, eventContext.providerBySeq, pendingMessages, consumedMessages, inbox.hiddenInputSeqs],
   );
 
   // Map harness status → Lattice status.
@@ -313,6 +314,7 @@ export function useHarnessSession(
     codexGoal: eventContext.codexGoal,
     codexGoalEventSeen: eventContext.codexGoalEventSeen,
     compaction: eventContext.compaction,
+    compactionAfterReply: eventContext.compactionAfterReply,
     activeStartTime,
     pendingWork,
     backgroundTaskStates,
@@ -409,15 +411,8 @@ export function placeWaitingMessages(events: SessionEvent[], inbox: InboxFold): 
     consumed.push(c);
   }
   const inputBySeq = new Map<number, SessionEvent>();
-  // An item the fast responder answered sits above its answer, where it
-  // was asked, not at the later batch that carried it to the coordinator.
-  const repliedByInboxId = new Map<string, SessionEvent>();
   for (const event of events) {
     if (event.type === 'input:sent') inputBySeq.set(event.seq, event);
-    if ((event.type as string) === COORDINATOR_REPLIED_EVENT) {
-      const { inboxId } = event.data as Partial<CoordinatorRepliedData>;
-      if (inboxId && !repliedByInboxId.has(inboxId)) repliedByInboxId.set(inboxId, event);
-    }
   }
   for (const item of inbox.items) {
     // Another agent's message goes where the user's would: it is a message to
@@ -427,11 +422,6 @@ export function placeWaitingMessages(events: SessionEvent[], inbox: InboxFold): 
     const attribution = item.source === 'agent'
       ? { sender: item.sender, passedOn: item.passedOn }
       : undefined;
-    const replied = repliedByInboxId.get(item.id);
-    if (replied) {
-      consumed.push({ inputEvent: item.event, consumedByEvent: replied });
-      continue;
-    }
     if (item.readBySeq === null) {
       pending.push({ inputEvent: item.event, text: item.text, undeliverable: item.undeliverable, attribution });
       continue;
@@ -472,48 +462,6 @@ function reportSummariesBySeq(events: readonly SessionEvent[]): Map<number, Work
   return summaries;
 }
 
-/**
- * What the loaded events establish about each quick answer reaching a turn.
- * The card says this rather than leaving the user to guess.
- *
- * Keyed by the message the answer belongs to, but answering about the answer.
- * Since 2026-09-22 the message itself usually goes into the running turn the
- * moment it arrives, so its own receipt says nothing about whether the
- * session has been told what the user was already told: the answer is written
- * afterwards and handed over as a row of its own. Where such a row exists it
- * is the one this reports on; where none does — the message waited for its
- * answer and the two drain together — the message's own row still answers it.
- *
- * `seen` is the delivery receipt the drain already writes (`input:read` names
- * the row) — not evidence the session acted on it, and never inferred from the
- * session having written something since.
- *
- * `waiting` is a claim about the row too, so it is only made when the row is
- * in the window and the window is known to be complete. A row the fold never
- * saw — scrolled past the start of the loaded window — and a window still
- * being assembled both leave the answer out of this map, and an absent entry
- * reads as `unknown` at the card. A receipt is positive evidence, so `seen`
- * does not depend on completeness; only the negative does.
- */
-function inboxDeliveryStates(
-  events: readonly SessionEvent[],
-  windowComplete: boolean,
-): ReadonlyMap<string, QuickAnswerDelivery> {
-  const states = new Map<string, QuickAnswerDelivery>();
-  const items = foldInbox(events).items;
-  const answerFor = new Map<string, (typeof items)[number]>();
-  for (const item of items) {
-    if (item.source === 'quick-answer' && item.answersId) answerFor.set(item.answersId, item);
-  }
-  for (const item of items) {
-    if (item.source === 'quick-answer') continue;
-    const reports = answerFor.get(item.id) ?? item;
-    if (reports.readBySeq !== null) states.set(item.id, 'seen');
-    else if (windowComplete) states.set(item.id, 'waiting');
-  }
-  return states;
-}
-
 function eventsToRenderItems(
   events: readonly SessionEvent[],
   isStreaming: boolean,
@@ -521,8 +469,6 @@ function eventsToRenderItems(
   pendingMessages: PendingMessage[] = [],
   consumedMessages: ConsumedMessage[] = [],
   hiddenInputSeqs: ReadonlySet<number> = new Set(),
-  /** Whether the loaded events are known to be the whole log; see `inboxDeliveryStates`. */
-  windowComplete: boolean = true,
 ): { renderItems: RenderItem[]; childrenMessages: Record<string, ChatMessage[]> } {
   // Build a set of input:sent event seqs that should be suppressed from
   // inline rendering (they're either pending, will be placed at the
@@ -533,7 +479,6 @@ function eventsToRenderItems(
   for (const c of consumedMessages) suppressedInputSeqs.add(c.inputEvent.seq)
 
   const reportSummaries = reportSummariesBySeq(events)
-  const delivery = inboxDeliveryStates(events, windowComplete)
 
   // Build a map: consuming event seq → consumed input:sent events to insert before it
   const insertBeforeSeq = new Map<number, ConsumedMessage[]>()
@@ -625,7 +570,7 @@ function eventsToRenderItems(
       // user messages). Skip them to avoid empty wrapper divs.
       if (item.type === 'result') continue;
 
-      coalescer.onEvent(item, eventToMessage(item, providerBySeq, reportSummaries, delivery));
+      coalescer.onEvent(item, eventToMessage(item, providerBySeq, reportSummaries));
     }
   }
 
@@ -742,8 +687,6 @@ function eventToMessage(
   providerBySeq: ReadonlyMap<number, Provider>,
   /** Report summaries by the seq of the report they belong to; see `reportSummariesBySeq`. */
   reportSummaries: ReadonlyMap<number, WorkerReportSummaryData> = new Map(),
-  /** Delivery state per inbox id; see `inboxDeliveryStates`. */
-  delivery: ReadonlyMap<string, QuickAnswerDelivery> = new Map(),
 ): ChatMessage | null {
   const provider = providerBySeq.get(event.seq) ?? 'claude';
 
@@ -899,20 +842,18 @@ function eventToMessage(
     }
 
     default: {
-      // The fast responder answered for a busy coordinator: shown as the
-      // coordinator's message, marked as a quick answer.
-      if ((event.type as string) === COORDINATOR_REPLIED_EVENT) {
-        const data = event.data as Partial<CoordinatorRepliedData>;
-        if (typeof data.text !== 'string') return null;
+      // An agent's feedback proposal, written by the server into the chat the
+      // user reads (a worker's goes to its coordinator's). A card to act on.
+      if ((event.type as string) === FEEDBACK_PROPOSED_EVENT) {
         return {
           id: `h-${event.seq}`,
           messageId: `h-${event.seq}`,
-          type: 'assistant',
-          content: [{ type: 'text', text: data.text } as DisplayContentBlock],
+          type: 'system',
+          content: '',
           timestamp: new Date(event.timestamp).toISOString(),
           provider,
-          responder: 'fast',
-          responderDelivery: (data.inboxId !== undefined && delivery.get(data.inboxId)) || 'unknown',
+          systemSubtype: 'feedback',
+          feedbackProposal: event.data as FeedbackProposedData,
         };
       }
       // Worker events, written by the server into a coordinator's log. Started,
@@ -949,6 +890,7 @@ function deriveEventContext(events: readonly SessionEvent[]): {
   codexGoal: CodexThreadGoal | null;
   codexGoalEventSeen: boolean;
   compaction: ContextCompactionData | null;
+  compactionAfterReply: boolean;
   configuredModel: string | null;
   servingModel: string | null;
 } {
@@ -957,6 +899,8 @@ function deriveEventContext(events: readonly SessionEvent[]): {
   let codexGoal: CodexThreadGoal | null = null;
   let codexGoalEventSeen = false;
   let compaction: ContextCompactionData | null = null;
+  let compactionAfterReply = false;
+  let lastInputIsCompactCommand = false;
   let configuredModel: string | null = null;
   let servingModel: string | null = null;
 
@@ -984,8 +928,12 @@ function deriveEventContext(events: readonly SessionEvent[]): {
     } else if (eventType === 'goal:cleared') {
       codexGoal = null;
       codexGoalEventSeen = true;
+    } else if (eventType === 'input:sent') {
+      const data = event.data as InputSentData;
+      lastInputIsCompactCommand = data.source === 'command' && data.text === '/compact';
     } else if (eventType === 'context:compaction') {
       compaction = event.data as ContextCompactionData;
+      if (compaction.phase === 'started') compactionAfterReply = lastInputIsCompactCommand;
     } else if ((eventType === 'run:end' || eventType === 'run:error')
       && compaction?.phase === 'started') {
       compaction = {
@@ -995,7 +943,7 @@ function deriveEventContext(events: readonly SessionEvent[]): {
     }
   }
 
-  return { providerBySeq, codexGoal, codexGoalEventSeen, compaction, configuredModel, servingModel };
+  return { providerBySeq, codexGoal, codexGoalEventSeen, compaction, compactionAfterReply, configuredModel, servingModel };
 }
 
 function mergeDisplayContent(
@@ -1054,15 +1002,12 @@ function chatMessageCoalescer(append: (msg: ChatMessage) => void) {
 export function eventsToMessages(
   events: readonly SessionEvent[],
   providerBySeq: ReadonlyMap<number, Provider>,
-  /** Whether the loaded events are known to be the whole log; see `inboxDeliveryStates`. */
-  windowComplete: boolean = true,
 ): ChatMessage[] {
   const messages: ChatMessage[] = [];
   const reportSummaries = reportSummariesBySeq(events);
-  const delivery = inboxDeliveryStates(events, windowComplete);
   const coalescer = chatMessageCoalescer((msg) => messages.push(msg));
   for (const event of events) {
-    coalescer.onEvent(event, eventToMessage(event, providerBySeq, reportSummaries, delivery));
+    coalescer.onEvent(event, eventToMessage(event, providerBySeq, reportSummaries));
   }
   return messages;
 }

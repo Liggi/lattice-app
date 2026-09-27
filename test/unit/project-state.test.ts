@@ -12,6 +12,8 @@ import request from 'supertest';
 import {
   foldProjectState,
   renderProjectState,
+  staleProjectItems,
+  STALE_AFTER_MS,
   turnLeftStateStale,
   unaddressedAfterTurn,
   type ProjectEventLike,
@@ -351,6 +353,52 @@ describe('stripContextRestore', () => {
   });
 });
 
+describe('parking and staleness', () => {
+  it('parks a thread out of the remaining work and the priority, and unparks it as it was', () => {
+    const thread = note('open', 'measure search quality', { owner: { kind: 'user' }, waitingOn: { kind: 'decision', text: 'Alex reopening it' } });
+    const priority = note('priority', 'measure it', { ref: thread.seq });
+    const parked = foldProjectState([thread, priority, note('park', 'Alex parked it until the fixes are live', { ref: thread.seq })]);
+    expect(parked.open[0].parked?.reason).toBe('Alex parked it until the fixes are live');
+    expect(parked.priority).toBeNull();
+    const text = renderProjectState(parked);
+    expect(text).toContain('Open threads: none.');
+    expect(text).toContain(`- [${thread.seq}] measure search quality — Alex parked it until the fixes are live`);
+
+    const back = foldProjectState([thread, note('park', 'later', { ref: thread.seq }), note('unpark', '', { ref: thread.seq })]);
+    expect(back.open[0].parked).toBeUndefined();
+    expect(back.open[0].waitingOn?.text).toBe('Alex reopening it');
+    expect(renderProjectState(back)).toContain('Open threads:\n- [1] measure search quality');
+  });
+
+  it('ages threads and the priority only when given a clock', () => {
+    const thread = note('open', 'Z', { owner: { kind: 'coordinator' } });
+    const state = foldProjectState([thread, note('priority', 'do Z', { ref: thread.seq })]);
+    const now = thread.timestamp + 5 * 3_600_000;
+    const text = renderProjectState(state, { now });
+    expect(text).toContain('Priority: do Z (thread [1]) · set 4h ago');
+    expect(text).toContain('owner you · no next action noted · ready · touched 5h ago');
+    expect(renderProjectState(state)).not.toContain('touched');
+  });
+
+  it('lists threads nothing has touched for a day, counting a worker report as a touch, and skips parked ones', () => {
+    const idle = note('open', 'idle work', { owner: { kind: 'coordinator' } });
+    const reportedOn = note('open', 'reported work', { owner: { kind: 'coordinator' } });
+    const parkedOne = note('open', 'parked work', { owner: { kind: 'coordinator' } });
+    const events = [idle, reportedOn, parkedOne, accounting(), dispatched('conv-w', { thread: reportedOn.seq }),
+      note('park', 'nobody on it', { ref: parkedOne.seq })];
+    const report = { ...reported('conv-w'), timestamp: idle.timestamp + STALE_AFTER_MS };
+    events.push(report);
+    const state = foldProjectState([...events, note('priority', 'something unbound')]);
+    const stale = staleProjectItems(state, idle.timestamp + STALE_AFTER_MS + 60_000);
+    expect(stale.threads.map((entry) => entry.thread.seq)).toEqual([idle.seq]);
+    expect(stale.priority).toEqual({ text: 'something unbound', reason: 'unbound' });
+
+    const bound = foldProjectState([...events, note('priority', 'the idle one', { ref: idle.seq })]);
+    expect(staleProjectItems(bound, idle.timestamp + STALE_AFTER_MS + 60_000).priority?.reason).toBe('stale');
+    expect(staleProjectItems(bound, idle.timestamp + 60_000)).toEqual({ threads: [], priority: null });
+  });
+});
+
 describe('session note flags', () => {
   it('takes one value per flag and refuses a repeat instead of keeping the last', () => {
     const note = SESSION_VERBS_BY_NAME.get('note')!;
@@ -392,6 +440,7 @@ describe('project routes', () => {
     expect((await request(server).post(`/api/conv/${coordinator.conversationId}/project/note`).send({ kind: 'bogus', text: 'x' })).status).toBe(400);
     expect((await request(server).post(`/api/conv/${coordinator.conversationId}/project/note`).send({ kind: 'decision', text: '  ' })).status).toBe(400);
     expect((await request(server).post(`/api/conv/${coordinator.conversationId}/project/note`).send({ kind: 'close', ref: 99 })).status).toBe(400);
+    expect((await request(server).post(`/api/conv/${coordinator.conversationId}/project/note`).send({ kind: 'park', text: 'why', ref: 99 })).status).toBe(400);
     const empty = await request(server).get(`/api/conv/${coordinator.conversationId}/project`);
     expect(empty.status).toBe(200);
     expect(empty.body).toEqual({

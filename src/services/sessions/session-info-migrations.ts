@@ -301,16 +301,12 @@ class SessionInfoSchemaBootstrapRunner {
       -- coordinator's turns). Drained into one turn when the session is idle;
       -- read_at is null until that turn took the row. attempts counts
       -- drains that reached the send, so a row still unread after a restart
-      -- can be flagged as possibly seen. reply is the fast responder's
-      -- provisional answer to a user item (services/sessions/coordinator-fast-reply.ts);
-      -- reply_pending holds the row out of the drain while that answer is
-      -- being written. sender is the conversation that declared itself the
+      -- can be flagged as possibly seen. sender is the conversation that declared itself the
       -- author (session send --from), null when none did; passed_on is the
       -- sender's declaration that the text relays the user's decision; source_seq
       -- is the event in this session's log the item was made from (the
       -- worker:asked / worker:reported / coordination:review event); delivery_id
       -- is a caller-chosen key so re-enqueueing the same delivery is a no-op.
-      -- answers_id, on a quick-answer row, is the row it answers.
       -- reserved_by holds the batch id of a delivery in flight: a reserved
       -- row is out of the ordinary drain, which is what stops a turn ending
       -- mid-handover from sending it a second time. reservation_state says
@@ -335,13 +331,10 @@ class SessionInfoSchemaBootstrapRunner {
         last_error TEXT,
         read_at TEXT,
         read_seq INTEGER,
-        reply TEXT,
-        reply_pending INTEGER NOT NULL DEFAULT 0,
         sender TEXT,
         passed_on INTEGER NOT NULL DEFAULT 0,
         source_seq INTEGER,
         delivery_id TEXT,
-        answers_id TEXT,
         reserved_by TEXT,
         reserved_at TEXT,
         reservation_state TEXT,
@@ -464,7 +457,6 @@ class SessionInfoSchemaBootstrapRunner {
     this.migrateToSessionMarks();
     this.migrateRecommendationsColumns();
     this.migrateQueuesToInbox();
-    this.migrateInboxReplyColumns();
     this.migrateInboxProvenanceColumns();
     this.migrateInboxReservationColumns();
     this.migrateKmMapsDefaultConvColumn();
@@ -1083,19 +1075,6 @@ class SessionInfoSchemaBootstrapRunner {
     if (tables.size > 0) this.logger.info('Folded queued_user_messages and worker_deliveries into session_inbox');
   }
 
-  /** Inboxes created before the fast responder: add its two columns. */
-  private migrateInboxReplyColumns(): void {
-    const columns = (this.db.pragma('table_info(session_inbox)') as Array<{ name: string }>).map((column) => column.name);
-    if (!columns.includes('reply')) {
-      this.db.exec('ALTER TABLE session_inbox ADD COLUMN reply TEXT');
-      this.logger.info('Added reply column to session_inbox');
-    }
-    if (!columns.includes('reply_pending')) {
-      this.db.exec('ALTER TABLE session_inbox ADD COLUMN reply_pending INTEGER NOT NULL DEFAULT 0');
-      this.logger.info('Added reply_pending column to session_inbox');
-    }
-  }
-
   /**
    * Migration: who an inbox item is from and which event it was made from
    * (see the session_inbox comment). The unique index is created here, after
@@ -1118,11 +1097,10 @@ class SessionInfoSchemaBootstrapRunner {
       ON session_inbox(session_id, delivery_id) WHERE delivery_id IS NOT NULL`);
   }
 
-  /** Inboxes created before delivery into a running turn: the reservation, answer and after-turn columns. */
+  /** Inboxes created before delivery into a running turn: the reservation and after-turn columns. */
   private migrateInboxReservationColumns(): void {
     const columns = (this.db.pragma('table_info(session_inbox)') as Array<{ name: string }>).map((column) => column.name);
     const added: Array<[string, string]> = [
-      ['answers_id', 'TEXT'],
       ['reserved_by', 'TEXT'],
       ['reserved_at', 'TEXT'],
       ['reservation_state', 'TEXT'],

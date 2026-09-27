@@ -116,11 +116,12 @@ export async function rerunCutOffCompactions(): Promise<void> {
   const owed = [...compactionsOwed];
   compactionsOwed.clear();
   if (owed.length === 0) return;
-  const { host, port } = ConfigService.getInstance().getConfig().server;
+  const { host, port, authToken } = ConfigService.getInstance().getConfig().server;
   const dialHost = host === '0.0.0.0' ? '127.0.0.1' : host;
+  const headers: Record<string, string> = authToken ? { authorization: `Bearer ${authToken}` } : {};
   await Promise.all(owed.map(async (sessionId) => {
     try {
-      const res = await fetch(`http://${dialHost}:${port}/api/harness/${sessionId}/compact`, { method: 'POST' });
+      const res = await fetch(`http://${dialHost}:${port}/api/harness/${sessionId}/compact`, { method: 'POST', headers });
       if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
       logger.info('Compaction a restart cut off is running again', { sessionId });
     } catch (err) {

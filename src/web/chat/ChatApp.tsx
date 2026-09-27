@@ -11,11 +11,10 @@ import { DevHub } from './components/DevHub/DevHub';
 import { ChangelogPage } from './components/Changelog/ChangelogPage';
 import { CollapsedGroupLab } from './components/CollapsedGroupCard/CollapsedGroupLab';
 import { QueuedMessagesLab } from './components/ConversationView/QueuedMessagesLab';
-import { QuickAnswerLab } from './components/MessageList/QuickAnswerLab';
 import { AnnotatedMessageLab } from './components/MessageList/AnnotatedMessageLab';
-import { VoiceRoute } from './components/Voice/VoiceRoute';
 import { MapIndexPage } from './components/LearningMap/MapIndexPage';
 import { MapCanvasPage } from './components/LearningMap/MapCanvasPage';
+import { FeedbackInboxPage } from './components/Feedback/FeedbackInboxPage';
 
 import { ConversationsProvider } from './contexts/ConversationsContext';
 import { ActivityStreamProvider } from './contexts/ActivityStreamContext';
@@ -185,6 +184,24 @@ function NewSessionWrapper(): JSX.Element {
   );
 }
 
+function FeedbackInboxWrapper(): JSX.Element {
+  useSessionTabNavigation(undefined);
+
+  const { sidebarOpen, openSidebar, closeSidebar, toggleSidebar } = useSessionsSidebarState();
+
+  return (
+    <div className="h-full flex overflow-hidden">
+      <CrossSessionSidebar
+        currentSessionId={undefined}
+        isOpen={sidebarOpen}
+        onClose={closeSidebar}
+        onOpen={openSidebar}
+      />
+      <FeedbackInboxPage sidebarOpen={sidebarOpen} onToggleSidebar={toggleSidebar} />
+    </div>
+  );
+}
+
 function ChatApp(): JSX.Element {
   return (
     <QueryClientProvider client={queryClient}>
@@ -211,6 +228,11 @@ function ChatApp(): JSX.Element {
                           <NewSessionWrapper />
                         </Layout>
                       } />
+                      <Route path="/feedback" element={
+                        <Layout>
+                          <FeedbackInboxWrapper />
+                        </Layout>
+                      } />
                       <Route path="/c/:conversationId" element={
                         <Layout>
                           <ConversationViewWrapper />
@@ -234,9 +256,6 @@ function ChatApp(): JSX.Element {
                       <Route path="/lab/annotated-message" element={
                         <AnnotatedMessageLab />
                       } />
-                      <Route path="/lab/quick-answer" element={
-                        <QuickAnswerLab />
-                      } />
                       {/* Learning map */}
                       <Route path="/map" element={
                         <MapIndexPage />
@@ -246,9 +265,6 @@ function ChatApp(): JSX.Element {
                       } />
                       <Route path="/map/:mapId/article/:articleId" element={
                         <MapCanvasPage />
-                      } />
-                      <Route path="/voice" element={
-                        <VoiceRoute />
                       } />
                       <Route path="/dev" element={
                         <DevHub />

@@ -58,13 +58,13 @@ To work on Lattice itself, build it from a clone instead; see [Development](#dev
 
 1. **Sign in.** The start screen shows whether Claude and Codex are signed in. Click one that isn't to open **Settings → Providers**. For Claude, **Connect** opens Claude Code's own sign-in in a terminal inside the page: tap the link it prints, sign in to Claude, then paste the code back at its prompt. The CLI does the exchange and keeps the login; Lattice only carries what you type, like a web terminal. Signing in from a terminal with `claude` or `codex login` works too, and **Sign in again** renews an expired login the same way. You need one provider; Lattice works with just Claude or just Codex.
 
-   Claude conversations run on that sign-in, that is, your Claude subscription. If you would rather be billed per token by Anthropic, choose **API key** under the Claude card and save a key; it is stored on this machine and never shown again. The same key powers summaries and quick answers, and saving it for those does not switch conversations to it unless you choose that.
-2. **Choose the folder.** Under the session type, click the folder name and pick the folder your project lives in. Agents read and change files there. Lattice remembers the last folder you used.
-3. **Start a coordinator.** Choose **Coordinator**, then pick whether it runs on Claude or Codex. Describe the outcome you want and send it.
+   Claude conversations run on that sign-in, that is, your Claude subscription. If you would rather be billed per token by Anthropic, choose **API key** under the Claude card and save a key; it is stored on this machine and never shown again. The same key powers summaries and other background features, and saving it for those does not switch conversations to it unless you choose that.
+2. **Set the folder.** Every session starts in one launch folder, your home folder until you change it under **Settings → General → Launch folder**. Point it at the folder your projects live in; a coordinator finds the repositories under it. Agents read and change files there.
+3. **Start a project.** Click **New project** in the sidebar, pick whether its coordinator runs on Claude or Codex, describe the outcome you want and send it.
 
 The coordinator is the conversation you talk to. It agrees the goal with you, starts worker sessions (Claude or Codex) to do the work, and reports back in the same thread. It starts workers with a `lattice` command that the server writes to `~/.lattice-app/bin/lattice` each time it starts, so you don't need to install anything on your PATH.
 
-To run a single agent without a coordinator, choose **Claude**, **Codex** or **OpenCode** instead.
+To run a single agent without a coordinator, click **New session** and choose **Claude** or **Codex**.
 
 > [!WARNING]
 > Agents run with permission prompts off by default (Claude's `bypassPermissions` mode; Codex runs with full access). They can run any command your user account can, in any folder. Point them only at work you're happy for an agent to do unattended.
@@ -102,8 +102,16 @@ Anyone on your tailnet who can open that address can run agents as you, so check
 | `server.defaultModel` | Claude model for new Claude sessions |
 | `server.defaultPermissionMode` | Claude permission mode: `default` (ask), `acceptEdits`, `bypassPermissions`, `plan` |
 | `coordinator.provider` | `claude` or `codex`: which one the Coordinator choice starts on |
+| `feedback.enabled` | Whether you can send feedback about Lattice (default on; the switch in Settings → General) |
+| `feedback.collectorUrl` | Where feedback goes; a fork running its own feedback collector points this at it |
 
 Asking for permission (`default` mode) needs Lattice to register hooks in `~/.claude/settings.json`. It only does that for the instance you allow; see [docs/host-integration-marker.md](docs/host-integration-marker.md).
+
+## Feedback
+
+Feedback is on by default and nothing is sent until you press Send. The first send runs one check that you are a person; after that each message sends with one click. Switch it off in Settings → General. The Feedback button on a session, the phone menu and Settings → General open a form that shows exactly what will be sent. Agents can propose feedback with `lattice feedback "…" --session <conv-id>`; that only saves a draft, which appears as a card in your chat (a worker's in its project's chat) for you to send, edit or reject.
+
+Whoever runs the collector reads what arrives in their own Lattice: put `{"collectorUrl": "https://…", "readToken": "…"}` in `~/.lattice-app/feedback-inbox.json` with mode 600, and a Feedback inbox appears in the sidebar. Without that file there is no inbox.
 
 ## Personal settings
 

@@ -319,7 +319,6 @@ export class ConfigService {
       'gemini',
       'anthropic',
       'messageLifecycle',
-      'elevenlabs',
       'plugins',
     ]);
     const passthroughUpdates = Object.fromEntries(

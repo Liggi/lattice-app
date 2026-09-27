@@ -9,7 +9,8 @@
  * - input:sent / task:notification / run:ready → push session-started to SSE
  *   listeners (each is a way a turn can begin: a send, a background task
  *   finishing, a scheduled-wakeup revival)
- * - turn:end → push session-idle to SSE listeners
+ * - turn:end → push session-idle to SSE listeners (session-started when a
+ *   message held through a compaction begins its own turn there)
  * - turn:end → trigger insights recomputation
  * - turn:end → deliver a worker's final message to the coordinator it was picked up from
  * - content / input:sent / turn:end / stop:requested → reassess what a worker is doing, for its card
@@ -37,6 +38,7 @@ import { noteRunEnd } from '../services/sessions/restart-carry-on.js';
 import { settleHeldDeliveries } from '../services/sessions/held-delivery-settlement.js';
 import { maybeAutoCompact } from '../services/sessions/context-compaction.js';
 import { noteStatusChanged } from '../services/sessions/session-status-changes.js';
+import { getHarnessSessionManager } from './setup.js';
 import type { ActiveConversationRegistry } from '../services/process/active-conversation-registry.js';
 
 const logger = createLogger('HarnessEventSideEffects');
@@ -79,7 +81,14 @@ export function createEventSideEffectsCallback(
         break;
       }
       case 'turn:end': {
-        registry.notifyIdle(event.sessionId);
+        // A message held through a compaction starts its own turn as the
+        // compaction's turn ends (deriveStatus reads the incorporation), so
+        // that turn:end is not the session going idle.
+        if (getHarnessSessionManager()?.inspect(event.sessionId)?.status === 'streaming') {
+          registry.notifyActive(event.sessionId);
+        } else {
+          registry.notifyIdle(event.sessionId);
+        }
         void InsightsEngine.getInstance().onTurnEnd(event.sessionId);
         void deliverWorkerReport(event.sessionId);
         noteWorkerActivity(event.sessionId);

@@ -12,7 +12,7 @@ import { NextStepsPrompt } from '../NextSteps';
 import { ConversationHeader } from '../ConversationHeader/ConversationHeader';
 import { InsightsPanel, type SyncState } from '../InsightsPanel';
 import { CoordinatorPanel } from '../InsightsPanel/CoordinatorPanel';
-import { PermissionBanner } from '../PermissionBanner';
+import { PermissionBanner, PermissionWaitingLine } from '../PermissionBanner';
 import { AnnotationSelectionLayer, AnnotationSpanIcons, AnnotationStatusBadge } from '../MessageAnnotations';
 import { useMessageAnnotations } from '../../hooks/useMessageAnnotations';
 import { Import } from 'lucide-react';
@@ -157,6 +157,7 @@ export function ConversationView({ sidebarOpen, onToggleSidebar }: ConversationV
     codexGoal: harnessCodexGoal,
     codexGoalEventSeen,
     compaction: harnessCompaction,
+    compactionAfterReply: harnessCompactionAfterReply,
     activeStartTime: harnessActiveStartTime,
     pendingWork,
     backgroundTaskStates,
@@ -264,6 +265,11 @@ export function ConversationView({ sidebarOpen, onToggleSidebar }: ConversationV
   // Derived state
   const isCompacting = harnessHydrationPhase === 'ready'
     && harnessCompaction?.phase === 'started';
+  // Compaction that runs once a reply has finished (the server's automatic
+  // one, or the compact control) is not the agent working: the composer
+  // shows it as a quiet 'Compacting context' with no timer or Stop, and a
+  // message sent meanwhile is held and answered as soon as it ends.
+  const isCompactingAfterReply = isCompacting && harnessCompactionAfterReply;
   const isActive = harnessStatus !== 'idle' || isCompacting;
   const isIdle = harnessStatus === 'idle' && !isCompacting;
   const isInitializing = harnessStatus === 'initializing';
@@ -1092,7 +1098,10 @@ export function ConversationView({ sidebarOpen, onToggleSidebar }: ConversationV
     : detailsFetching ? null  // Suppress errors while retrying
     : (sessionFailureError || sessionError || queryError);
 
-  const inlinePermissionPrompt = permissionRequest ? (
+  // A worker's request is its coordinator's to decide until it escalates.
+  const inlinePermissionPrompt = permissionRequest?.coordinator && !permissionRequest.escalation ? (
+    <PermissionWaitingLine permission={permissionRequest} />
+  ) : permissionRequest ? (
     <PermissionBanner
       permission={permissionRequest}
       streamingId={undefined}
@@ -1297,7 +1306,7 @@ export function ConversationView({ sidebarOpen, onToggleSidebar }: ConversationV
                   renderStatusExtra={renderComposerStatusControls}
                   renderActionsExtra={renderComposerGoalAction}
                   runtimeConfig={{
-                    isSessionActive: isProviderBusy,
+                    isSessionActive: isProviderBusy && !isCompactingAfterReply,
                     // While hydrating, status is gated to 'idle' (see
                     // useHarnessSession) but processAlive derives from the
                     // partial event log — the pair reads alive+idle, which the

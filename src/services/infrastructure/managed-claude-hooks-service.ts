@@ -68,6 +68,12 @@ export class ManagedClaudeHooksService {
         managedHeaderName: 'X-Lattice-PreToolUse-Hook',
         authToken: runtime.authToken,
       },
+      {
+        eventName: 'PermissionDenied',
+        url: `${runtime.baseUrl}/api/permissions/hooks/permission-denied`,
+        managedHeaderName: 'X-Lattice-PermissionDenied-Hook',
+        authToken: runtime.authToken,
+      },
     ]);
 
     const permissionRequestChanged = batchResults['PermissionRequest'] ?? false;

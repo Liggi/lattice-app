@@ -26,6 +26,13 @@ describe('user settings in agent instructions', () => {
     expect(worker()).toContain("shows only the user's messages");
   });
 
+  it("gives a worker the standing rules with none of the user's own guidance set", () => {
+    delete config.user;
+    expect(worker()).toContain('do not commit, push, deploy or publish unless the user or front has said you may');
+    expect(worker()).toContain('Before you say something works, run it');
+    expect(worker()).toContain('give each one a time limit');
+  });
+
   it('uses the configured name and appends each role its own guidance', () => {
     config.user = { name: 'Sam', coordinatorGuidance: 'Coordinator rule.', workerGuidance: 'Worker rule.' };
     expect(coordinator()).toContain('the conversation Sam talks to about the work');

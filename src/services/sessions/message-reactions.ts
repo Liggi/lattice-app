@@ -126,7 +126,7 @@ export async function reactToMessage(request: ReactionRequest): Promise<Reaction
 /**
  * The user's messages in a thread, with the ids the page gives them (`h-<seq>`
  * of the event that shows each one) and whether the agent has read it yet.
- * Same reading of the log as the thread fold in `coordinator-thread.ts`: a
+ * Same reading of the log as the client's thread (`foldInbox`): a
  * message they typed is its own `input:sent`, or its `input:queued` when it
  * went through the inbox, whose carrying batch is then hidden.
  */

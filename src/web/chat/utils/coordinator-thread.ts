@@ -160,8 +160,8 @@ function asActive(item: FoldedItem): FoldedItem {
 }
 
 /**
- * Something the coordinator did not write in this turn: the user's own message,
- * a worker block the server appended, or the fast responder's quick answer.
+ * Something the coordinator did not write in this turn: the user's own message
+ * or a worker block the server appended.
  * These land between the coordinator's tool calls without ending its turn, so
  * they must not turn work that is still running into history.
  */
@@ -169,8 +169,7 @@ function isInterruption(item: RenderItem): boolean {
   if (item.kind !== 'message') return false;
   const message = item.message;
   if (message.type === 'user') return true;
-  if (message.type === 'system') return true;
-  return message.type === 'assistant' && message.responder === 'fast';
+  return message.type === 'system';
 }
 
 function isBlankText(block: DisplayContentBlock): boolean {
@@ -181,7 +180,7 @@ function isBlankText(block: DisplayContentBlock): boolean {
  * Fold a coordinator's render items. While `isStreaming`, the fold the
  * coordinator is still working in is marked active and says so in the present
  * tense. That fold is the last one with none of the coordinator's own
- * conversation after it — a quick answer or a worker report arriving mid-turn
+ * conversation after it — a worker report arriving mid-turn
  * is not the coordinator speaking, so it leaves the work where it is.
  */
 export function foldCoordinatorMachinery(items: readonly RenderItem[], isStreaming: boolean): RenderItem[] {

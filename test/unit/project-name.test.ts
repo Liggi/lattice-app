@@ -89,10 +89,10 @@ describe('what counts as a project name', () => {
     )).toBeNull();
   });
 
-  it('never returns more than one sidebar line', () => {
-    const name = normalizeProjectName('Detector platform alignment datasets and automation coverage everywhere');
-    expect(name).not.toBeNull();
-    expect(name!.length).toBeLessThanOrEqual(PROJECT_NAME_MAX_CHARS);
+  it('never cuts a long name; fitting it is the model\'s job', () => {
+    const long = 'Detector platform alignment datasets and automation coverage everywhere';
+    expect(long.length).toBeGreaterThan(PROJECT_NAME_MAX_CHARS);
+    expect(normalizeProjectName(long)).toBe(long);
   });
 
   it('has nothing to say about an empty answer', () => {
@@ -118,6 +118,24 @@ describe('generating and storing a project name', () => {
     const prompt = messagesCreate.mock.calls[0][0].messages[0].content as string;
     expect(prompt).toContain('Make canary reports useful for release decisions');
     expect(prompt).toContain('outcome');
+  });
+
+  it('asks again for a name too long for its line, and stores the second answer whole', async () => {
+    messagesCreate
+      .mockResolvedValueOnce({ content: [{ type: 'text', text: 'Detector platform alignment datasets and automation coverage' }], usage: { input_tokens: 90, output_tokens: 9 } })
+      .mockResolvedValueOnce({ content: [{ type: 'text', text: 'Detector platform alignment' }], usage: { input_tokens: 120, output_tokens: 5 } });
+    const name = await generateProjectName('conv-proj', 'Own detector platform alignment datasets and automation coverage');
+    expect(name).toBe('Detector platform alignment');
+    const followUp = messagesCreate.mock.calls[1][0].messages[2].content as string;
+    expect(followUp).toContain(`has to fit in ${PROJECT_NAME_MAX_CHARS}`);
+  });
+
+  it('drops a name that keeps naming something the outcome does not', async () => {
+    replies('Lattice Opus 5 migration');
+    const name = await generateProjectName('conv-proj', 'Move Lattice onto Opus 5.5');
+    expect(messagesCreate).toHaveBeenCalledTimes(2);
+    expect(name).toBeNull();
+    expect(updateSessionInfo).not.toHaveBeenCalled();
   });
 
   it('stores nothing when the model returns an unusable name', async () => {

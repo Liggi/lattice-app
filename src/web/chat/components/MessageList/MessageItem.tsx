@@ -1,14 +1,14 @@
 /* oxlint-disable react-doctor/no-cascading-set-state, react-doctor/no-giant-component, react-doctor/prefer-useReducer, react-doctor/no-render-in-render, react-doctor/no-effect-event-handler, react-doctor/no-array-index-as-key */
 import React, { useMemo, useState, useCallback, useRef } from 'react';
 import { SkillHeading } from './SkillHeading';
-import { Code, Lightbulb, AlertTriangle, Minimize2, Maximize2, Copy, Check, FileText, Image, Loader2, ExternalLink, FlaskConical, LayoutDashboard, MessageCircle, Wrench, Brain, Zap } from 'lucide-react';
+import { Code, Lightbulb, AlertTriangle, Minimize2, Maximize2, Copy, Check, FileText, Image, Loader2, ExternalLink, FlaskConical, LayoutDashboard, MessageCircle, Wrench, Brain } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { AgentMessage } from './AgentMessage';
 import { JsonViewer } from '../JsonViewer/JsonViewer';
 import { ToolUseRenderer, type BackgroundTaskState } from '@liggi/agent-ui-toolkit';
 import { LazyCodeHighlight } from '../CodeHighlight';
-import type { ChatMessage, ToolResult, QuestionRequest, DisplayContentBlock, QuickAnswerDelivery } from '../../types';
+import type { ChatMessage, ToolResult, QuestionRequest, DisplayContentBlock } from '../../types';
 import { preserveThinkingBreaks } from '../../utils/thinking-text';
 import { AddReactionButton, AgentReactionChips, ReactionChips, firstLine, useRegisterMessageActions, type ReactionTarget } from '../MessageReactions/MessageReactions';
 import { copyText } from '../../utils/copy-text';
@@ -444,33 +444,34 @@ export const markdownComponents: Record<string, React.ComponentType<MarkdownComp
         {children}
       </code>
     );
+  },
+  img({ src, alt }: MarkdownComponentProps & { src?: string; alt?: string }) {
+    const url = localImageUrl(src);
+    return (
+      <a href={url} target="_blank" rel="noopener noreferrer" className="not-prose inline-block my-1 max-w-full">
+        <img
+          src={url}
+          alt={alt ?? ''}
+          loading="lazy"
+          className="block max-w-full h-auto max-h-[70vh] rounded-md border border-line"
+        />
+      </a>
+    );
   }
 };
 
-
 /**
- * The delivery line under a quick answer. Amber is the transient state, the
- * one that changes on its own; the two settled readings are quiet. "Unknown"
- * is a real answer here, not a fallback: it is what the thread can honestly
- * say when the answer's own inbox row is outside the events it has loaded.
+ * An agent embeds a screenshot as `![alt](/tmp/shot.png)`: an absolute path on
+ * the Lattice host. Point it at the server's image route so it renders from any
+ * browser, including a phone. URLs and relative paths are left alone.
  */
-const QUICK_ANSWER_DELIVERY: Record<QuickAnswerDelivery, { label: string; tone: string; title: string }> = {
-  seen: {
-    label: 'Seen by main agent',
-    tone: 'text-fg-3',
-    title: 'A turn of the main agent was handed this answer.',
-  },
-  waiting: {
-    label: 'Waiting for main agent',
-    tone: 'text-amber-400/80',
-    title: 'The main agent has not been handed this answer yet. It goes in when it can be taken.',
-  },
-  unknown: {
-    label: 'Delivery unknown',
-    tone: 'text-fg-3/70',
-    title: 'This thread is not loaded far enough back to hold this message\'s inbox row, so whether a turn was handed it cannot be told from here. Scroll up to load more.',
-  },
-};
+export function localImageUrl(src: string | undefined): string | undefined {
+  if (!src || !src.startsWith('/') || src.startsWith('//') || src.startsWith('/api/')) return src;
+  let decoded = src;
+  try { decoded = decodeURI(src); } catch { /* keep as written */ }
+  return `/api/images?path=${encodeURIComponent(decoded)}`;
+}
+
 
 export function MessageItem({
   message,
@@ -631,13 +632,12 @@ export function MessageItem({
   // Handle assistant messages with timeline
   if (message.type === 'assistant') {
     const mergedToolResults = toolResults || {};
-    // A quick answer is the fast responder's, not the agent's, so it takes no reaction.
     const messageText = typeof message.content === 'string'
       ? message.content
       : Array.isArray(message.content)
         ? message.content.map((block) => (block.type === 'text' && typeof block.text === 'string' ? stripNextStepsBlock(block.text) : '')).filter(Boolean).join('\n\n')
         : '';
-    const reaction: ReactionTarget | undefined = reactable && message.responder !== 'fast' && messageText.trim()
+    const reaction: ReactionTarget | undefined = reactable && messageText.trim()
       ? { messageId: message.messageId, excerpt: firstLine(messageText) }
       : undefined;
 
@@ -858,37 +858,7 @@ export function MessageItem({
 
     return (
       <div className={`group/message relative w-full flex flex-col gap-1.5${mountedWhileStreaming.current ? ' streaming-message' : ''}`} data-testid="assistant-message">
-        {message.responder === 'fast' ? (
-          // A quick answer is an aside: label and the whole answer inside one
-          // bounded box, so where it ends and the coordinator's own reply
-          // begins is visible without reading. The box is capped at the
-          // reading measure the answer itself uses, like the error block
-          // below; left full width it drew a border 136px past its own text.
-          <div className="rounded-lg border border-line bg-surface px-3.5 pt-2.5 pb-3 mb-1 max-w-[calc(68ch+1.75rem)] flex flex-col gap-1.5" data-testid="fast-reply-aside">
-            <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-amber-400/80" data-testid="fast-reply-marker">
-              <Zap size={10} className="flex-shrink-0" />
-              Quick answer · automatic
-            </div>
-            {renderContent()}
-            {/* Whether the session this answered for has been handed this
-                answer. Straight off the inbox's `input:read` receipt, so
-                "seen" means a turn was given it — never that it has acted on
-                it, which nothing here can know. The message itself usually
-                went in the moment it arrived and has its own receipt; this
-                line is about the answer. Where the thread is not loaded far
-                enough back to hold the relevant inbox row, the missing
-                receipt proves nothing and the line says so rather than
-                claiming it is still waiting. */}
-            <div
-              className={`mt-0.5 border-t border-line/60 pt-2 text-[10px] uppercase tracking-wider ${QUICK_ANSWER_DELIVERY[message.responderDelivery ?? 'unknown'].tone}`}
-              data-testid="fast-reply-delivery"
-              data-delivery={message.responderDelivery ?? 'unknown'}
-              title={QUICK_ANSWER_DELIVERY[message.responderDelivery ?? 'unknown'].title}
-            >
-              {QUICK_ANSWER_DELIVERY[message.responderDelivery ?? 'unknown'].label}
-            </div>
-          </div>
-        ) : renderContent()}
+        {renderContent()}
         {messageText.trim() && <MessageActions messageId={message.messageId} text={messageText} reaction={reaction} />}
       </div>
     );

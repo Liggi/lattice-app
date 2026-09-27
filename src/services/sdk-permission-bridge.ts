@@ -27,6 +27,7 @@ import { PermissionTracker } from '@/services/permission-tracker.js';
 import { isToolAllowed } from '@/routes/session/permission.routes.js';
 import { getPermissionEventLog } from '@/services/permission-event-log.js';
 import { createLogger } from '@/services/infrastructure/logger.js';
+import { addRoutedPermissionRequest } from '@/services/sessions/worker-permission-delivery.js';
 
 interface PermissionUpdateEvent {
   id: string;
@@ -151,16 +152,20 @@ export function setupSdkPermissionBridge(
 
     // Slow path: surface as a permission request. The PermissionBanner
     // renders this via the existing SSE stream + reconciliation polling
-    // (see permission-delivery.md memory). UI changes: none needed.
-    const request = tracker.addPermissionRequest(
+    // (see permission-delivery.md memory). A worker's request goes to its
+    // coordinator instead, which decides or escalates it to the user.
+    const request = addRoutedPermissionRequest(
+      tracker,
       event.toolName,
       event.toolInput,
       event.streamingId,
+      { reason: typeof event.decisionReason === 'string' ? event.decisionReason : undefined },
     );
     permissionLog.request({
       toolName: event.toolName,
       toolInput: event.toolInput,
       streamingId: event.streamingId,
+      sessionId: request.sessionId,
       permissionRequestId: request.id,
     });
 

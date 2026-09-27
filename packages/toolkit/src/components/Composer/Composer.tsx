@@ -240,6 +240,27 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
   const [queueDialogOpen, setQueueDialogOpen] = useState(false);
   const [isModelMenuOpen, setIsModelMenuOpen] = useState(false);
   const modelMenuRef = useRef<HTMLDivElement>(null);
+  // True while the foot's badge strip has more to scroll to on its right.
+  const [badgesClipped, setBadgesClipped] = useState(false);
+  const badgesElRef = useRef<HTMLDivElement | null>(null);
+  const badgesObserverRef = useRef<ResizeObserver | null>(null);
+  const measureBadges = useCallback((el: HTMLElement) => {
+    setBadgesClipped(el.scrollLeft + el.clientWidth < el.scrollWidth - 1);
+  }, []);
+  const badgesRef = useCallback((el: HTMLDivElement | null) => {
+    badgesObserverRef.current?.disconnect();
+    badgesObserverRef.current = null;
+    badgesElRef.current = el;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(() => measureBadges(el));
+    observer.observe(el);
+    badgesObserverRef.current = observer;
+  }, [measureBadges]);
+  // A badge appearing inside an already-full strip does not resize the strip,
+  // so re-measure after every render as well.
+  useEffect(() => {
+    if (badgesElRef.current) measureBadges(badgesElRef.current);
+  });
   const modelMenuListRef = useRef<HTMLDivElement>(null);
   const modelTriggerRef = useRef<HTMLButtonElement>(null);
   const [modelMenuFocusIndex, setModelMenuFocusIndex] = useState(-1);
@@ -969,9 +990,12 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
             {/* Foot: attach + state on the left, model / context / send on the right */}
             <div
               data-testid="composer-status-bar"
-              className="flex items-center justify-between gap-2 px-1.5 pb-1.5 pt-0.5 min-h-[36px]"
+              className="flex items-center justify-between gap-1 px-1.5 pb-1.5 pt-0.5 min-h-[36px]"
             >
-              <div className="flex items-center gap-1 min-w-0 shrink">
+              {/* On a phone the foot is narrower than its contents. The status and
+                  the send/stop buttons never give up space; the model label
+                  truncates first, then the badges between them scroll sideways. */}
+              <div className="flex items-center gap-1 shrink-0">
                 {enableAttachments && (
                   <button
                     type="button"
@@ -990,11 +1014,11 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
                 {renderLeadingActions?.()}
 
                 {showStatusBar && (
-                  <div className="flex items-center gap-2 pl-1.5 min-w-0">
+                  <div className="flex items-center gap-2 pl-1.5">
                     {isStatusSpinning && (
                       <Loader2 size={12} className="shrink-0 animate-spin text-composer-caution" />
                     )}
-                    <span className="text-xs text-composer-text-secondary truncate">{statusLabel}</span>
+                    <span className="text-xs text-composer-text-secondary whitespace-nowrap">{statusLabel}</span>
                     {isSessionActive && hasSessionStartTime && (
                       <span className="hidden sm:inline text-xs tabular-nums text-composer-text-faint">{elapsedTime}</span>
                     )}
@@ -1004,9 +1028,18 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
 
               <div className="flex items-center gap-1 min-w-0 shrink">
                 {showStatusBar && (
-                  <>
+                  // py-2/-my-2 keeps the badges' 44px tap areas inside the scroll clip.
+                  <div
+                    ref={badgesRef}
+                    onScroll={(e) => measureBadges(e.currentTarget)}
+                    data-testid="composer-status-badges"
+                    className={cn(
+                      'flex items-center gap-1 min-w-0 overflow-x-auto py-2 -my-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden',
+                      badgesClipped && '[mask-image:linear-gradient(to_right,black_calc(100%-20px),transparent)]',
+                    )}
+                  >
                     {isModelSelectorEnabled ? (
-                      <div className="relative" ref={modelMenuRef} data-testid="model-selector">
+                      <div className="relative flex min-w-[72px] shrink" ref={modelMenuRef} data-testid="model-selector">
                         <button
                           ref={modelTriggerRef}
                           type="button"
@@ -1014,7 +1047,7 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
                           className={cn(
                             'composer-model-badge',
                             footBadge,
-                            'gap-1 cursor-pointer hover:bg-composer-surface-elevated hover:text-composer-text',
+                            'min-w-0 gap-1 cursor-pointer hover:bg-composer-surface-elevated hover:text-composer-text',
                             sessionModelFallback && 'text-amber-400',
                             isModelMenuOpen && 'bg-composer-surface-elevated text-composer-text',
                           )}
@@ -1024,6 +1057,7 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
                           title={sessionModelFallback && sessionModel ? `Select model. Serving model differs from the session's configured model (${sessionModel})` : 'Select model'}
                         >
                           <span
+                            className="truncate"
                             data-model={selectedModel ?? undefined}
                             data-effort={selectedEffort ?? undefined}
                           >
@@ -1032,17 +1066,17 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
                           </span>
                           <ChevronDown
                             size={12}
-                            className={cn('transition-transform', isModelMenuOpen && 'rotate-180')}
+                            className={cn('shrink-0 transition-transform', isModelMenuOpen && 'rotate-180')}
                           />
                         </button>
                       </div>
                     ) : sessionModel ? (
                       <div
-                        className={cn(footBadge, sessionModelFallback && 'text-amber-400')}
+                        className={cn(footBadge, 'min-w-[72px] shrink', sessionModelFallback && 'text-amber-400')}
                         data-testid="session-model"
                         title={sessionModelFallback ? `Serving model differs from the session's configured model (${sessionModel})` : sessionModel}
                       >
-                        <span data-model={sessionModel}>{formatModelName(sessionModel)}</span>
+                        <span className="truncate" data-model={sessionModel}>{formatModelName(sessionModel)}</span>
                       </div>
                     ) : null}
                     {/* Host-app status content, adjacent to the model badge. */}
@@ -1051,7 +1085,7 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
                       const tokens = sessionUsage.contextTokens ?? (sessionUsage.inputTokens + sessionUsage.cacheCreationInputTokens + sessionUsage.cacheReadInputTokens);
                       const tokenColor = tokens >= 500_000 ? 'text-composer-danger' : tokens >= 200_000 ? 'text-amber-400' : undefined;
                       return (
-                        <div className={cn(footBadge, tokenColor)} data-testid="token-usage">
+                        <div className={cn(footBadge, 'shrink-0', tokenColor)} data-testid="token-usage">
                           <span data-tokens={tokens}>{formatTokenCount(tokens)}<span className="hidden sm:inline"> tokens</span></span>
                         </div>
                       );
@@ -1062,7 +1096,7 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
                           <button
                             type="button"
                             onClick={() => setQueueDialogOpen(true)}
-                            className={cn(footBadge, 'cursor-pointer text-composer-caution hover:bg-composer-surface-elevated')}
+                            className={cn(footBadge, 'shrink-0 cursor-pointer text-composer-caution hover:bg-composer-surface-elevated')}
                           >
                             Queued {queuedMessages.length}
                           </button>
@@ -1072,7 +1106,7 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
                         </TooltipContent>
                       </Tooltip>
                     )}
-                  </>
+                  </div>
                 )}
 
                 {/* Menu toggle */}

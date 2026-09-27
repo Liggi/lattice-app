@@ -200,6 +200,7 @@ const STATUS_WINDOW_EVENT_TYPES = [
   'task:started',
   'task:updated',
   'task:notification',
+  'input:incorporated',
 ] as const;
 
 export function getStatusWindow(conversationId: string, limit = 200): SessionEvent[] {

@@ -62,7 +62,7 @@ export function createInsightsRoutes(): Router {
       sessionId: sessionId.slice(0, 8),
       hasInsights: !!insights,
       hasMission: !!insights.context?.mission,
-      missionPreview: insights.context?.mission?.slice(0, 50),
+      mission: insights.context?.mission,
       theme: insights.theme
     });
 

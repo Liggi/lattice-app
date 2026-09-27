@@ -106,20 +106,6 @@ describe('what goes into the batch', () => {
     expect(sent).toContain('delivered into the turn you are running');
   });
 
-  it('leaves an exchange held for a quick answer where it is, unsent and unchanged', async () => {
-    const waiting = inbox.enqueueInboxItem({
-      sessionId: 'conv-c', source: 'user', text: 'what is the status?', replyPending: true,
-    });
-    const latest = inbox.enqueueInboxItem({ sessionId: 'conv-c', source: 'user', text: 'use PEACH' });
-
-    const fake = manager({ outcome: { status: 'accepted' }, duringCall: [HANDED, ACCEPTED] });
-    const result = await deliver(fake.manager, 'conv-c', latest);
-
-    expect(result).toMatchObject({ status: 'delivered', items: 1 });
-    expect(fake.input()).not.toContain('what is the status?');
-    expect(inbox.getInboxItem(waiting)).toMatchObject({ read_at: null, reply_pending: 1, reserved_by: null });
-  });
-
   it('says a message arrived during a compaction, and who sent it, rather than describing a running tool call', async () => {
     // The provider holds it until the compaction ends and shows it inside the
     // compaction's output; the running-turn note there read as an injection.
@@ -370,46 +356,5 @@ describe('settling a held batch by hand', () => {
 
     expect(inbox.resolveUncertainReservation('res-1', 'delivered')).toBe(0);
     expect(inbox.getInboxItem(id)?.read_at).toBeNull();
-  });
-});
-
-describe('the quick answer handed over on its own', () => {
-  it('reads as the automatic answer to the message it answers, not as the user', async () => {
-    const question = inbox.enqueueInboxItem({
-      sessionId: 'conv-c', source: 'user', text: 'what is the status?',
-    });
-    const answer = inbox.enqueueInboxItem({
-      sessionId: 'conv-c', source: 'quick-answer', text: 'The migration is applied.', answersId: question,
-    });
-    inbox.markInboxItemsRead([question], 9);
-
-    const rows = inbox.unreadInboxItems('conv-c');
-    expect(rows.map((r) => r.id)).toEqual([answer]);
-    const composed = inbox.composeInboxInput(rows, 'lattice', { midTurn: true });
-
-    expect(composed).toContain('Automatic quick answer');
-    expect(composed).toContain('The migration is applied.');
-    // The original went in when it arrived; repeating it here would be the
-    // coordinator reading the same message twice.
-    expect(composed).not.toContain('what is the status?');
-    // And it is tied to the message it answers, by the time that arrived.
-    expect(composed).toContain('to their message of');
-    expect(composed).not.toContain('[From the user');
-  });
-
-  it('carries its own delivery status, separate from the message it answers', async () => {
-    const question = inbox.enqueueInboxItem({ sessionId: 'conv-c', source: 'user', text: 'what is the status?' });
-    inbox.markInboxItemsRead([question], 9);
-    const answer = inbox.enqueueInboxItem({
-      sessionId: 'conv-c', source: 'quick-answer', text: 'The migration is applied.', answersId: question,
-    });
-
-    const fake = manager({ outcome: { status: 'uncertain', reason: 'no acknowledgement' }, duringCall: [HANDED] });
-    const result = await deliver(fake.manager, 'conv-c', answer);
-
-    // The question was delivered; the answer was not. Two facts, two rows.
-    expect(result.status).toBe('uncertain');
-    expect(inbox.getInboxItem(question)?.read_at).not.toBeNull();
-    expect(inbox.getInboxItem(answer)).toMatchObject({ read_at: null, reservation_state: 'uncertain' });
   });
 });

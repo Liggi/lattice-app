@@ -41,17 +41,17 @@ import { INPUT_DELIVERED_EVENT, type InputDeliveredData } from './immediate-deli
  * `session send --from` (or with no declaration at all). `worker-report` and
  * `worker-question`: a dispatched worker's turn-ending message, delivered by
  * the server. `coordination-review`: the server's own orientation review of
- * a coordinator's project (see `coordination-review.ts`). `quick-answer`:
- * an answer the fast responder already gave the user, handed over so the
- * coordinator does not answer the same thing again
- * (see `coordinator-fast-reply.ts`). `reaction`: the user put an emoji on (or
+ * a coordinator's project (see `coordination-review.ts`). `reaction`: the user put an emoji on (or
  * took one off) one of the session's messages, as one attributed line
  * (see `message-reactions.ts`); the thread shows it as the reaction, not as
  * a message. `worker-stopped`: the user pressed Stop on one of the
  * coordinator's workers, as one attributed line in place of a report (see
- * `worker-report-delivery.ts`).
+ * `worker-report-delivery.ts`). `worker-permission`: a worker's permission
+ * prompt for the coordinator to decide (see `worker-permission-delivery.ts`).
+ * Logs from before 2026-09-26 may also hold `quick-answer` items from a
+ * removed feature; the thread skips them like any source it does not show.
  */
-export type InboxSource = 'user' | 'agent' | 'worker-report' | 'worker-question' | 'coordination-review' | 'quick-answer' | 'reaction' | 'worker-stopped';
+export type InboxSource = 'user' | 'agent' | 'worker-report' | 'worker-question' | 'coordination-review' | 'reaction' | 'worker-stopped' | 'worker-permission';
 
 export const INBOX_QUEUED_EVENT = 'input:queued';
 export const INBOX_READ_EVENT = 'input:read';
@@ -72,8 +72,6 @@ export interface InboxQueuedData {
   passedOn?: boolean;
   /** The event in this session's log the item was made from (worker:asked, worker:reported, coordination:review). */
   sourceSeq?: number;
-  /** On a `quick-answer` item: the item whose message it answers. */
-  answersId?: string;
   /** The sender asked for it to wait for the running turn to end (`send --after-turn`). */
   afterTurn?: boolean;
 }
@@ -108,8 +106,6 @@ export interface InboxItem {
   sender: string | null;
   passedOn: boolean;
   sourceSeq: number | null;
-  /** On a `quick-answer` item: the item whose message it answers. */
-  answersId: string | null;
   /** The `input:queued` event (or, for a pre-inbox log, the `input:sent`) that shows this item. */
   event: SessionEvent;
   /** Seq of the `input:sent` whose turn read this item; null while it waits. */
@@ -156,7 +152,6 @@ export function foldInbox(events: readonly SessionEvent[]): InboxFold {
             sender: data.sender ?? null,
             passedOn: data.passedOn === true,
             sourceSeq: typeof data.sourceSeq === 'number' ? data.sourceSeq : null,
-            answersId: data.answersId ?? null,
             event,
             readBySeq: null,
             undeliverable: null,
@@ -174,7 +169,6 @@ export function foldInbox(events: readonly SessionEvent[]): InboxFold {
           sender: null,
           passedOn: false,
           sourceSeq: null,
-          answersId: null,
           event: unpairedInput,
           readBySeq: null,
           undeliverable: null,

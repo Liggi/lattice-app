@@ -20,17 +20,17 @@ export type LLMOperationType =
   | 'TURN_CAPTURE'
   | 'PERMISSION_PATTERNS'
   | 'SESSION_SUMMARY'
-  | 'COORDINATOR_FAST_REPLY'
   | 'WORKER_ACTIVITY'
   | 'WORKER_REPORT_SUMMARY'
   | 'PROJECT_NAME'
   // Non-Anthropic spenders, added 2026-08-28. These billed real money for
   // months while writing nothing here, which is why every cost figure Lattice
   // produced before today was Anthropic-only and read like the whole bill.
-  | 'VOICE_ACT'
   | 'GEMINI_CONSULT'
   | 'GEMINI_IMAGE'
-  | 'AMBIENT_SCAN';
+  | 'AMBIENT_SCAN'
+  | 'NEEDS_YOU'
+  | 'MISSION_FIT';
 
 // Canonical trigger vocabulary
 export type InsightTrigger =

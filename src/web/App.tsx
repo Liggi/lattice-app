@@ -2,6 +2,7 @@ import React from 'react';
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import ChatApp from './chat/ChatApp';
 import { ErrorBoundary, AppErrorFallback } from './chat/components/ErrorBoundary';
+import { AuthGate } from './chat/components/AuthGate/AuthGate';
 
 function App(): JSX.Element {
   return (
@@ -18,7 +19,7 @@ function App(): JSX.Element {
         }}
       >
         <Routes>
-          <Route path="/*" element={<ChatApp />} />
+          <Route path="/*" element={<AuthGate><ChatApp /></AuthGate>} />
         </Routes>
       </Router>
     </ErrorBoundary>
