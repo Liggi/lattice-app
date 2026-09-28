@@ -21,12 +21,15 @@ export function writeStderrSafely(text: string): void {
  * reports how many lines were lost. Nothing is buffered, so a long outage costs
  * no memory and logging resumes as soon as writes succeed. A file is closed on
  * failure and reopened on the next write, so deleting it to free space works.
+ * A line cut off by the failure is ended before the next one is written.
  */
 export class FailSafeLogWriter {
   private fd: number | null;
   private readonly label: string;
   private failingSince: string | null = null;
   private droppedLines = 0;
+  /** A failed write left part of a line in the file; the next line starts on a new one. */
+  private endsMidLine = false;
 
   constructor(private readonly target: string | number) {
     this.fd = typeof target === 'number' ? target : null;
@@ -34,13 +37,17 @@ export class FailSafeLogWriter {
   }
 
   write(line: string): void {
+    const text = Buffer.from(this.endsMidLine ? `\n${line}` : line);
+    let pending = text;
     try {
       this.fd ??= fs.openSync(this.target as string, 'a');
-      let pending = Buffer.from(line);
       while (pending.length > 0) {
         pending = pending.subarray(fs.writeSync(this.fd, pending));
       }
+      this.endsMidLine = false;
     } catch (err) {
+      const written = text.length - pending.length;
+      if (written > 0) this.endsMidLine = !(this.endsMidLine && written === 1);
       this.droppedLines += 1;
       if (typeof this.target === 'string' && this.fd !== null) {
         try {

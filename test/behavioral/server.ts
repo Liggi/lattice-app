@@ -19,7 +19,9 @@ import * as os from 'os';
 
 const TEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'lattice-behavioral-'));
 const TEST_PORT = Number(process.env.TEST_PORT ?? '4200');
-const TEST_DAEMON_SOCKET = path.join(TEST_HOME, 'lattice-daemon.sock');
+// The server picks <config dir>/daemon.sock (see resolve-socket-path.ts); the
+// in-process daemon below must listen there, or the server spawns a real one.
+const TEST_DAEMON_SOCKET = path.join(TEST_HOME, '.lattice', 'daemon.sock');
 
 process.env.HOME = TEST_HOME;
 // An inherited LATTICE_CONFIG_DIR (every agent shell on a live Lattice has one)

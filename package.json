@@ -1,6 +1,6 @@
 {
   "name": "lattice-app",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "type": "module",
   "description": "Lattice - a self-hosted workspace for running Claude Code and Codex agents on projects",
   "main": "dist/lattice-server.js",
@@ -131,7 +131,7 @@
     "sharp": "^0.35.5",
     "shiki": "^4.0.2",
     "tailwind-merge": "^3.3.1",
-    "undici": "^7.12.0",
+    "undici": "^8.11.2",
     "web-push": "^3.6.7",
     "ws": "^8.19.0"
   },

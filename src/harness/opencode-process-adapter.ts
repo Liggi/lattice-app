@@ -20,7 +20,7 @@
  */
 
 import type { ProcessAdapter, ProcessHandle, SpawnConfig } from '@liggi/agent-ui-harness/server';
-import { Agent } from 'undici';
+import { Agent, fetch as undiciFetch } from 'undici';
 import { createLogger } from '../services/infrastructure/logger.js';
 import { parseJson } from '../utils/json.js';
 import { createStdoutQueue } from './stdout-queue.js';
@@ -420,10 +420,10 @@ class OpencodeProcessHandle implements ProcessHandle {
       ? `${base}?after=${encodeURIComponent(this.lastEventId)}`
       : base;
 
-    const res = await fetch(url, {
+    // undici's own fetch: its Agent does not work with Node's bundled fetch across major versions.
+    const res = await undiciFetch(url, {
       headers: { Accept: 'text/event-stream' },
       signal: this.abort.signal,
-      // @ts-expect-error -- undici-specific option, not in the DOM fetch types.
       dispatcher: SSE_DISPATCHER,
     });
     if (!res.ok || !res.body) {
