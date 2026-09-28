@@ -23,13 +23,13 @@ import { currentResumeModel } from '../services/sessions/resume-model.js';
 import { currentCodexReasoningEffort, knownCodexReasoningEffort } from '../services/sessions/codex-effort.js';
 import { parseAttachmentBlocks } from './attachment-blocks.js';
 import { ConversationService } from '../services/sessions/conversation-service.js';
-import { appendWorkerEvent, currentWorkerTask, isWorkerQuestionSeq, openQuestion } from '../services/sessions/worker-events.js';
+import { appendWorkerEvent, isWorkerQuestionSeq, openQuestion, readWorkerStates } from '../services/sessions/worker-events.js';
 import { reopenArchivedWorker } from '../session-history/repository.js';
 import { buildCoordinatorRestore } from '../services/sessions/context-compaction.js';
 import { buildProjectOrientation } from '../services/sessions/project-orientation.js';
 import { buildWorkerDriftNote } from '../services/sessions/worker-drift.js';
 
-import { buildProjectStateNudge, buildStaleProjectLine } from '../services/sessions/project-state.js';
+import { buildProjectStateNudge, buildStaleProjectLine, readProjectState } from '../services/sessions/project-state.js';
 import { latticeCli } from '../services/sessions/pickup-prompts.js';
 import {
   drainHeld,
@@ -439,6 +439,10 @@ export function createHarnessRoutes(sessionManager: SessionManager, resolvers: H
     // out of every message it relays. Sent on the same call as the work, so
     // the name and the brief cannot land apart.
     const task = typeof body.task === 'string' && body.task.trim() ? body.task.trim() : null;
+    // `--thread <seq>` with it: the open thread the new work is. Without one
+    // the worker leaves the thread it was on, so dismissing that thread does
+    // not stop it and the panel does not count it as carrying that thread.
+    const taskThread = typeof body.thread === 'number' ? body.thread : null;
     const recordWorkerAnswer = (): void => {
       if (!from || !input) return;
       const target = ConversationService.getInstance().getConversation(sessionId);
@@ -452,12 +456,15 @@ export function createHarnessRoutes(sessionManager: SessionManager, resolvers: H
       // brief that goes with it. Nothing is written when the name is already
       // right: a follow-up on the same task is the ordinary case and it must
       // not fill the history with rows saying nothing changed.
-      const previousTask = currentWorkerTask(from, sessionId);
-      if (task && task !== previousTask) {
+      const current = readWorkerStates(from).find((candidate) => candidate.worker === sessionId);
+      const previousTask = current?.task?.trim() || null;
+      const moves = taskThread !== null && taskThread !== current?.thread;
+      if (task && (task !== previousTask || moves)) {
         appendWorkerEvent(from, 'worker:reassigned', {
           worker: sessionId,
           task,
           previousTask: previousTask ?? '',
+          ...(taskThread !== null ? { thread: taskThread } : {}),
         } satisfies WorkerReassignedData);
       }
       appendWorkerEvent(from, 'worker:answered', {
@@ -476,6 +483,17 @@ export function createHarnessRoutes(sessionManager: SessionManager, resolvers: H
       const target = ConversationService.getInstance().getConversation(sessionId);
       if (!from || target?.pickedUpFrom !== from) {
         res.status(400).json({ error: 'task needs --from <the coordinator that dispatched this worker>' });
+        return;
+      }
+    }
+    if (body.thread !== undefined) {
+      if (task === null || taskThread === null) {
+        res.status(400).json({ error: 'thread goes with --task: it names the open thread the new assignment is' });
+        return;
+      }
+      const open = readProjectState(from!).open.filter((candidate) => !candidate.parked);
+      if (!open.some((candidate) => candidate.seq === taskThread)) {
+        res.status(400).json({ error: `thread must be an open thread of ${from}: ${open.map((candidate) => candidate.seq).join(', ') || 'none open'}` });
         return;
       }
     }

@@ -26,6 +26,7 @@ const project = foldProjectState([
   note({ kind: 'open', text: 'Scenes can be judged in context', owner: { kind: 'user' }, nextAction: 'Walk through the pack', waitingOn: { kind: 'decision', text: 'your notes on the pack' } }), // 3
   note({ kind: 'open', text: 'Finished earlier' }), // 4
   note({ kind: 'open', text: 'Finished last' }), // 5
+  note({ kind: 'update', ref: 1, text: 'Built and checked on a clean machine; the changelog still names two fixes' }),
   note({ kind: 'close', text: 'done', ref: 4 }),
   note({ kind: 'close', text: 'done', ref: 5 }),
 ]);
@@ -56,6 +57,14 @@ describe('StateOfPlaySection', () => {
   it('says what an unlabelled Needs you item is asking for', () => {
     draw();
     expect(screen.getByTestId('play-needs-you').textContent).toContain('Waiting on your notes on the pack');
+  });
+
+  it('shows a labelled Needs you item as its ask alone, with the summary a tap away', () => {
+    draw();
+    const section = screen.getByTestId('play-needs-you');
+    expect(section.textContent).not.toContain('Built and checked');
+    fireEvent.click(screen.getByText('Publish 0.4.1?'));
+    expect(screen.getByTestId('play-needs-you-detail').textContent).toBe('Built and checked on a clean machine; the changelog still names two fixes');
   });
 
   it('asks the server to dismiss, and keeps the row in place saying so, with Undo', async () => {

@@ -46,12 +46,23 @@ describe('deriveStateOfPlay', () => {
     expect(play.needsYou.map((item) => item.label)).toEqual(['Publish 0.4.1?', 'Choose a name']);
   });
 
-  it('puts carried and held threads under In progress, with a live worker on no thread as its own item', () => {
-    expect(play.inProgress.map((item) => item.label)).toEqual(['Panel restyle', 'A tester tries it', 'Waits on the usage window', 'Owned by a reused worker', 'task of conv-loose']);
-    expect(play.inProgress[0].workers.map((w) => w.worker)).toEqual(['conv-a']);
-    expect(play.inProgress[1].heldOn).toBe('Sam');
-    expect(play.inProgress[3].workers.map((w) => w.worker)).toEqual(['conv-reused']);
-    expect(play.inProgress[4].kind).toBe('worker');
+  it('lists every live worker by its task, and not the threads they carry', () => {
+    expect(play.workers.map((w) => w.worker)).toEqual(['conv-a', 'conv-loose', 'conv-reused']);
+    expect([...play.inProgress, ...play.next].map((item) => item.label)).not.toContain('Panel restyle');
+  });
+
+  it('puts held threads nobody is on under In progress', () => {
+    expect(play.inProgress.map((item) => item.label)).toEqual(['A tester tries it', 'Waits on the usage window']);
+    expect(play.inProgress[0].heldOn).toBe('Sam');
+  });
+
+  it('lists a worker sent on to other work while its thread waits on the user, and does not count it on that thread', () => {
+    const sentOn = worker('conv-sent-on', null, { task: 'Activity log for the detector', movedOn: true });
+    const withIt = foldProjectState([...events, note({ kind: 'update', ref: 6, text: 'still deciding', workers: ['conv-sent-on'] })]);
+    expect(withIt.open.find((thread) => thread.seq === 6)?.workers).toContain('conv-sent-on');
+    const moved = deriveStateOfPlay(withIt, [...workers, sentOn]);
+    expect(moved.workers.map((w) => w.task)).toContain('Activity log for the detector');
+    expect(moved.needsYou.find((item) => item.label === 'Choose a name')?.workers).toEqual([]);
   });
 
   it('leaves open work nobody has started under Next', () => {
@@ -60,7 +71,7 @@ describe('deriveStateOfPlay', () => {
 
   it('lists a parked thread apart, and not the worker that was stopped with it', () => {
     expect(play.parked.map((item) => item.label)).toEqual(['Dismissed work']);
-    expect([...play.needsYou, ...play.inProgress, ...play.next].flatMap((item) => item.workers).map((w) => w.worker)).not.toContain('conv-d');
+    expect(play.workers.map((w) => w.worker)).not.toContain('conv-d');
     expect(project.open.find((thread) => thread.seq === 7)?.parked?.by).toBe('user');
   });
 
@@ -68,7 +79,7 @@ describe('deriveStateOfPlay', () => {
     const ranked = foldProjectState([...events, note({ kind: 'rank', order: [6, 5] })]);
     const order = deriveStateOfPlay(ranked, workers);
     expect(order.needsYou.map((item) => item.label)).toEqual(['Choose a name', 'Publish 0.4.1?']);
-    expect(order.inProgress.map((item) => item.label).slice(0, 2)).toEqual(['Waits on the usage window', 'Panel restyle']);
+    expect(order.inProgress.map((item) => item.label)).toEqual(['Waits on the usage window', 'A tester tries it']);
   });
 });
 

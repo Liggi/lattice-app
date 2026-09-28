@@ -89,6 +89,10 @@ describe('which finished workers are archived', () => {
   it('archives a worker whose threads are all closed', () => {
     expect(archiveReason(waiting(null, { worker: w }), facts(), project({ closed: [thread(10, [w], true)] }))).toBe('threads-closed');
   });
+  it('does not archive a worker sent on to other work because the thread it left closed', () => {
+    // latestEventSeq null: it has not reported on the new work yet.
+    expect(archiveReason(waiting(null, { worker: w, thread: 11, movedOn: true }), facts({ latestEventSeq: null }), project({ open: [thread(11, [])], closed: [thread(10, [w], true)] }))).toBeNull();
+  });
   it('archives a worker whose latest report was dealt with, parked thread or not', () => {
     expect(archiveReason(waiting(null, { worker: w }), facts(), project({ open: [thread(10, [w])] }))).toBe('report-dealt-with');
   });

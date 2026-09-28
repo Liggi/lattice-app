@@ -1,16 +1,17 @@
 /**
  * The coordinator panel's to-do list as a state of play (2026-09-27, Jason:
- * "looks good, do it"): Needs you, In progress, Next, then the last thing
- * completed and a quiet Parked row. What goes where, and in what order, is
- * `deriveStateOfPlay` (`src/types/state-of-play.ts`); this draws it.
+ * "looks good, do it"): Needs you, Workers, In progress, Next, then the last
+ * thing completed and a quiet Parked row. What goes where, and in what order,
+ * is `deriveStateOfPlay` (`src/types/state-of-play.ts`); this draws it.
  *
- * - Needs you: amber cube, the brightest text in the panel, and a line under
- *   it saying what is asked (`needsYouLine`), because this is the only
- *   section that is the user's move. Amber appears nowhere else in the panel.
- * - In progress: the workers are folded in. An item carried by one worker is
- *   that worker's row titled with the item's label; by several, the label
- *   heads their rows. An item held on something outside the project has a
- *   ring and "Waiting", with what it waits on on hover or a tap.
+ * - Needs you: amber cube and the brightest text in the panel, because this
+ *   is the only section that is the user's move. The row is the ask alone;
+ *   the detail (`needsYouLines`) is on hover or a tap. Amber appears nowhere
+ *   else in the panel.
+ * - Workers: every live worker as its own row, named by its task (2026-09-28;
+ *   folding them into the threads hid one whose thread waited on the user).
+ * - In progress: threads nobody is on that are held on something outside the
+ *   project: a ring and "Waiting", with what on hover or a tap.
  * - Next: a ring and quieter text.
  *
  * Any thread can be dismissed: a × on hover on a desktop, a swipe left on a
@@ -22,9 +23,9 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { ChevronDown, ChevronRight, Circle, CircleCheck, CirclePause, Undo2, X } from 'lucide-react';
 import { SectionHeading } from './SectionHeading';
-import { WorkerRow, workerStateLine } from './WorkersSection';
+import { WorkerRow } from './WorkersSection';
 import type { WaitTextContext } from './WaitText';
-import { SessionStateIcon, type StateIconState } from '@/web/chat/components/shared/session-state-icon/SessionStateIcon';
+import { SessionStateIcon } from '@/web/chat/components/shared/session-state-icon/SessionStateIcon';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/web/chat/components/ui/tooltip';
 import { deriveStateOfPlay, type PlayItem } from '@/types/state-of-play';
 import type { ProjectState } from '@/types/project-state';
@@ -74,7 +75,7 @@ export function StateOfPlaySection({
   };
 
   const dismiss = async (item: PlayItem) => {
-    if (!coordinatorId || !item.thread) return;
+    if (!coordinatorId) return;
     const seq = item.thread.seq;
     const label = withoutThreadRefs(item.label);
     setDismissed((current) => [...current.filter((entry) => entry.seq !== seq), { seq, label }]);
@@ -97,8 +98,8 @@ export function StateOfPlaySection({
   };
 
   // A dismissed row keeps its place, saying so, until the Undo window closes.
-  const pendingFor = (item: PlayItem): Pending | undefined => item.thread ? dismissed.find((entry) => entry.seq === item.thread!.seq) : undefined;
-  const parkedNow = play.parked.filter((item) => !dismissed.some((entry) => entry.seq === item.thread?.seq && !entry.error));
+  const pendingFor = (item: PlayItem): Pending | undefined => dismissed.find((entry) => entry.seq === item.thread.seq);
+  const parkedNow = play.parked.filter((item) => !dismissed.some((entry) => entry.seq === item.thread.seq && !entry.error));
   // Remember which section each thread was drawn in, so a dismissed one's
   // Undo row stays where the user was looking.
   const lastSection = useLastSection(play);
@@ -111,11 +112,7 @@ export function StateOfPlaySection({
         key={item.key}
         item={item}
         section={section}
-        onDismiss={canDismiss && item.thread ? () => void dismiss(item) : undefined}
-        coordinatorRunning={coordinatorRunning}
-        onOpenWorker={onOpenWorker}
-        waitContext={waitContext}
-        pointedWorker={pointedWorker}
+        onDismiss={canDismiss ? () => void dismiss(item) : undefined}
       />
     );
   };
@@ -123,14 +120,14 @@ export function StateOfPlaySection({
   // Threads dismissed in this panel stay drawn in the section they were in
   // while the Undo lasts, though the state already has them parked.
   const held = (section: 'needs-you' | 'in-progress' | 'next'): PlayItem[] => play.parked.filter((item) => {
-    if (!item.thread || lastSection.get(item.thread.seq)?.section !== section) return false;
-    return dismissed.some((entry) => entry.seq === item.thread!.seq && !entry.error);
+    if (lastSection.get(item.thread.seq)?.section !== section) return false;
+    return dismissed.some((entry) => entry.seq === item.thread.seq && !entry.error);
   });
   const placed = (items: PlayItem[], section: 'needs-you' | 'in-progress' | 'next'): PlayItem[] => {
     const extra = held(section);
     if (extra.length === 0) return items;
     const out = [...items];
-    for (const item of extra) out.splice(Math.min(lastSection.get(item.thread!.seq)!.index, out.length), 0, item);
+    for (const item of extra) out.splice(Math.min(lastSection.get(item.thread.seq)!.index, out.length), 0, item);
     return out;
   };
 
@@ -139,7 +136,7 @@ export function StateOfPlaySection({
   const next = placed(play.next, 'next');
   const orphanErrors = dismissed.filter((entry) => entry.error && !entry.label);
 
-  if (needsYou.length + inProgress.length + next.length + parkedNow.length === 0 && !justDone) return null;
+  if (needsYou.length + play.workers.length + inProgress.length + next.length + parkedNow.length === 0 && !justDone) return null;
 
   return (
     <>
@@ -147,6 +144,24 @@ export function StateOfPlaySection({
         <section data-testid="play-needs-you">
           <SectionHeading>Needs you</SectionHeading>
           <div className="flex flex-col gap-px">{needsYou.map((item) => render(item, 'needs-you'))}</div>
+        </section>
+      )}
+      {play.workers.length > 0 && (
+        <section data-testid="workers-section">
+          <SectionHeading>Workers</SectionHeading>
+          <div className="flex flex-col gap-px">
+            {play.workers.map((worker) => (
+              <WorkerRow
+                key={worker.worker}
+                worker={worker}
+                coordinatorRunning={coordinatorRunning}
+                onOpen={onOpenWorker}
+                waitContext={waitContext}
+                pointed={pointedWorker === worker.worker}
+                pointing={Boolean(pointedWorker)}
+              />
+            ))}
+          </div>
         </section>
       )}
       {inProgress.length > 0 && (
@@ -191,10 +206,10 @@ export function StateOfPlaySection({
                 <div key={item.key} data-testid="play-parked-row" className="group flex items-start gap-2.5 rounded-sm px-2 py-1.5 hover:bg-surface-2">
                   <span className="w-7 shrink-0" />
                   <span className="min-w-0 flex-1 text-[12.5px] leading-[1.45] text-fg-3/70 break-words">{withoutThreadRefs(item.label)}</span>
-                  {canDismiss && item.thread && (
+                  {canDismiss && (
                     <button
                       type="button"
-                      onClick={() => void restore(item.thread!.seq)}
+                      onClick={() => void restore(item.thread.seq)}
                       className="shrink-0 text-[12px] font-medium text-fg-3 hover:text-fg [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100"
                     >
                       Bring back
@@ -223,7 +238,7 @@ const EMPTY_PROJECT: ProjectState = {
 function useLastSection(play: ReturnType<typeof deriveStateOfPlay>): Map<number, { section: 'needs-you' | 'in-progress' | 'next'; index: number }> {
   const ref = useRef(new Map<number, { section: 'needs-you' | 'in-progress' | 'next'; index: number }>());
   const note = (items: PlayItem[], section: 'needs-you' | 'in-progress' | 'next') => {
-    items.forEach((item, index) => { if (item.thread) ref.current.set(item.thread.seq, { section, index }); });
+    items.forEach((item, index) => ref.current.set(item.thread.seq, { section, index }));
   };
   note(play.needsYou, 'needs-you');
   note(play.inProgress, 'in-progress');
@@ -263,7 +278,7 @@ function DismissButton({ label, onClick }: { label: string; onClick: () => void 
           aria-label={label}
           data-testid="play-dismiss"
           onClick={(event) => { event.stopPropagation(); onClick(); }}
-          className="mr-1 mt-1 hidden h-6 w-6 shrink-0 items-center justify-center rounded-sm text-fg-3 opacity-0 transition-opacity hover:text-fg focus-visible:opacity-100 group-hover:opacity-100 [@media(hover:hover)]:flex"
+          className="absolute right-1 top-1 hidden h-6 w-6 items-center justify-center rounded-sm text-fg-3 opacity-0 transition-opacity hover:text-fg focus-visible:opacity-100 group-hover:opacity-100 [@media(hover:hover)]:flex"
         >
           <X size={14} strokeWidth={1.75} />
         </button>
@@ -326,75 +341,29 @@ function Swipeable({ onDismiss, children }: { onDismiss?: () => void; children: 
   );
 }
 
-function ItemRow({
-  item, section, onDismiss, coordinatorRunning, onOpenWorker, waitContext, pointedWorker,
-}: {
+function ItemRow({ item, section, onDismiss }: {
   item: PlayItem;
   section: 'needs-you' | 'in-progress' | 'next';
   onDismiss?: () => void;
-  coordinatorRunning: boolean;
-  onOpenWorker?: (conversationId: string) => void;
-  waitContext?: WaitTextContext;
-  pointedWorker?: string | null;
 }) {
   const label = withoutThreadRefs(item.label);
   const dismissLabel = item.workers.length === 0 ? 'Dismiss' : item.workers.length === 1 ? 'Dismiss and stop its worker' : 'Dismiss and stop its workers';
   const dismissControl = onDismiss ? <DismissButton label={dismissLabel} onClick={onDismiss} /> : null;
-  const rowProps = { coordinatorRunning, onOpen: onOpenWorker, waitContext, pointing: Boolean(pointedWorker) };
+  // The × sits over the row's right edge rather than taking a column, so the
+  // Waiting hairline runs as far as a worker row's; only the label keeps clear of it.
+  const clearDismiss = onDismiss ? '[@media(hover:hover)]:pr-6' : '';
 
   let body: React.ReactNode;
   if (section === 'needs-you') {
-    const summary = needsYouLine(item);
-    body = (
-      <div data-testid="play-item" className="group flex items-start rounded-sm bg-bg transition-colors hover:bg-surface-2">
-        <div className="flex min-w-0 flex-1 items-start gap-2.5 px-2 py-1.5">
-          <Marker tall><SessionStateIcon state={{ kind: 'needs-you' }} variant="session" /></Marker>
-          <div className="flex min-h-7 min-w-0 flex-1 flex-col justify-center">
-            <span className="text-[13px] font-medium leading-[1.45] text-fg break-words">{label}</span>
-            {summary && <span className="mt-0.5 text-[12.5px] leading-[1.4] text-fg-3 break-words">{summary}</span>}
-          </div>
-        </div>
-        {dismissControl}
-      </div>
-    );
-  } else if (item.workers.length === 1) {
-    const worker = item.workers[0];
-    body = (
-      <WorkerRow
-        worker={worker}
-        title={label}
-        trailing={dismissControl}
-        pointed={pointedWorker === worker.worker}
-        {...rowProps}
-      />
-    );
-  } else if (item.workers.length > 1) {
-    const anyWorking = item.workers.some((worker) => workerStateLine(worker, coordinatorRunning).state === 'Working');
-    const icon: StateIconState = anyWorking ? { kind: 'working', level: 1 } : { kind: 'idle' };
-    body = (
-      <div data-testid="play-item">
-        <div className="group flex items-start rounded-sm">
-          <div className="flex min-w-0 flex-1 items-start gap-2.5 px-2 py-1.5">
-            <Marker tall><span className="text-fg-3"><SessionStateIcon state={icon} variant="session" /></span></Marker>
-            <span className="flex min-h-7 min-w-0 flex-1 items-center text-[13px] leading-[1.45] text-fg-2 break-words">{label}</span>
-          </div>
-          {dismissControl}
-        </div>
-        <div className="pl-[38px]">
-          {item.workers.map((worker) => (
-            <WorkerRow key={worker.worker} worker={worker} pointed={pointedWorker === worker.worker} {...rowProps} />
-          ))}
-        </div>
-      </div>
-    );
+    body = <NeedsYouRow label={label} {...needsYouLines(item)} clearDismiss={clearDismiss} dismissControl={dismissControl} />;
   } else {
     const held = item.heldOn;
     body = (
-      <div data-testid="play-item" className="group flex items-start rounded-sm bg-bg transition-colors hover:bg-surface-2">
+      <div data-testid="play-item" className="group relative flex items-start rounded-sm bg-bg transition-colors hover:bg-surface-2">
         <div className="flex min-w-0 flex-1 items-start gap-2.5 px-2 py-1.5">
           <Marker><Circle size={12} strokeWidth={1.75} className="text-fg-3" aria-hidden /></Marker>
           <div className="flex min-w-0 flex-1 flex-col">
-            <span className={`text-[13px] leading-[1.45] break-words ${section === 'next' ? 'text-fg-3' : 'text-fg-2'}`}>{label}</span>
+            <span className={`text-[13px] leading-[1.45] break-words ${section === 'next' ? 'text-fg-3' : 'text-fg-2'} ${clearDismiss}`}>{label}</span>
             {held && <HeldLine on={held} />}
           </div>
         </div>
@@ -406,18 +375,74 @@ function ItemRow({
 }
 
 /**
- * The line under a Needs you item, so it is never an amber row the user
- * cannot act on. With a label, the label says what is asked and the summary
- * gives the context. Without one the row shows the thread's outcome, so the
- * line says what is asked: what the decision waits on, else the next step.
+ * A Needs you item shows its ask alone, so the section reads at a glance
+ * (2026-09-28, Jason: "this is way too much"). The detail is on hover or,
+ * on a touch screen, a tap on the row, which opens it in place: the worker
+ * rows' treatment for what they wait on.
  */
-function needsYouLine(item: PlayItem): string | null {
+function NeedsYouRow({ label, ask, detail, clearDismiss, dismissControl }: {
+  label: string;
+  ask: string | null;
+  detail: string | null;
+  clearDismiss: string;
+  dismissControl: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  // The detail opens beside the panel, never over it: the offset carries the
+  // tooltip from the label out past the panel's left border.
+  const headingRef = useRef<HTMLSpanElement | null>(null);
+  const [offset, setOffset] = useState(8);
+  const measure = (showing: boolean) => {
+    const node = headingRef.current;
+    const panel = node?.closest('[data-testid="coordinator-panel"]');
+    if (showing && node && panel) setOffset(node.getBoundingClientRect().left - panel.getBoundingClientRect().left + 8);
+  };
+  const heading = <span ref={headingRef} className={`text-[13px] font-medium leading-[1.45] text-fg break-words ${clearDismiss}`}>{label}</span>;
+  return (
+    <div
+      data-testid="play-item"
+      data-open={open || undefined}
+      className={`group relative flex items-start rounded-sm transition-colors ${open ? 'bg-surface-2' : 'bg-bg hover:bg-surface-2'}`}
+    >
+      <div
+        className="flex min-w-0 flex-1 items-start gap-2.5 px-2 py-1.5"
+        onClick={detail ? () => setOpen((value) => !value) : undefined}
+        aria-expanded={detail ? open : undefined}
+      >
+        <Marker tall><SessionStateIcon state={{ kind: 'needs-you' }} variant="session" /></Marker>
+        <div className="flex min-h-7 min-w-0 flex-1 flex-col justify-center">
+          {detail && !open ? (
+            <Tooltip delayDuration={200} onOpenChange={measure}>
+              <TooltipTrigger asChild>{heading}</TooltipTrigger>
+              <TooltipContent side="left" sideOffset={offset} className="max-w-[320px]" data-testid="play-needs-you-detail">{detail}</TooltipContent>
+            </Tooltip>
+          ) : heading}
+          {ask && <span className="mt-0.5 text-[12.5px] leading-[1.4] text-fg-3 break-words">{ask}</span>}
+          {detail && open && (
+            <span data-testid="play-needs-you-detail" className="mt-1 border-t border-line/35 pt-1 text-[12.5px] leading-[1.45] text-fg-3 break-words">
+              {detail}
+            </span>
+          )}
+        </div>
+      </div>
+      {dismissControl}
+    </div>
+  );
+}
+
+/**
+ * What a Needs you item says, so it is never an amber row the user cannot
+ * act on. With a label, the label is the ask and the summary is the detail.
+ * Without one the row shows the thread's outcome, so a line under it says
+ * what is asked (what the decision waits on, else the next step) and the
+ * summary is the detail.
+ */
+function needsYouLines(item: PlayItem): { ask: string | null; detail: string | null } {
   const thread = item.thread;
-  if (!thread) return null;
   const wait = thread.waitingOn?.kind === 'decision' ? `Waiting on ${thread.waitingOn.text}` : null;
-  const ask = wait ?? thread.nextAction ?? thread.summary;
-  const line = thread.label ? thread.summary ?? ask : ask;
-  return line ? withoutThreadRefs(line) : null;
+  const ask = thread.label ? null : wait ?? thread.nextAction ?? null;
+  const detail = thread.summary ?? (thread.label ? wait ?? thread.nextAction : null) ?? null;
+  return { ask: ask ? withoutThreadRefs(ask) : null, detail: detail ? withoutThreadRefs(detail) : null };
 }
 
 /** "Waiting", with what on hover or, on a touch screen, a tap: the worker rows' treatment. */

@@ -172,6 +172,20 @@ describe('agentReact', () => {
     expect(agentReact({ threadId: 'conv-front', emoji: '✅', action: 'add' })).toMatchObject({ status: 'added', messageId: `h-${typed}` });
   });
 
+  it('reacts to the user\'s answer to its question when that is the latest, and skips one taken back', () => {
+    userTyped('this is way too much');
+    write('input:queued', { id: 'row-d1', source: 'decision', text: '[Answer] Merge' });
+    const answered = write('decision:answered', { id: 'd-1', answer: 'Merge and restart', inboxId: 'row-d1' });
+    readBy(['row-d1']);
+    expect(agentReact({ threadId: 'conv-front', emoji: '👍', action: 'add' }))
+      .toMatchObject({ status: 'added', messageId: `h-${answered}`, text: 'Merge and restart' });
+
+    write('input:queued', { id: 'row-d2', source: 'decision', text: '[Answer] Wait' });
+    const takenBack = write('decision:answered', { id: 'd-2', answer: 'Wait', inboxId: 'row-d2' });
+    write('input:withdrawn', { ids: ['row-d2'] });
+    expect(agentReact({ threadId: 'conv-front', emoji: '👍', action: 'add', messageId: `h-${takenBack}` }).status).toBe('no-message');
+  });
+
   it('takes a reaction back, and changes nothing for a repeat', () => {
     const typed = userTyped('Build it.');
     agentReact({ threadId: 'conv-front', emoji: '👍', action: 'add' });

@@ -492,6 +492,7 @@ async function cmdSend(cmd: ParsedCommand): Promise<void> {
     from: str(cmd, 'from'),
     summary: str(cmd, 'summary'),
     task: str(cmd, 'task'),
+    thread: int(cmd, 'thread'),
     passedOn: bool(cmd, 'passed-on'),
     answers: int(cmd, 'answers'),
     interrupt: bool(cmd, 'interrupt'),

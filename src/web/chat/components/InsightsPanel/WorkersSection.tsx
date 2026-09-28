@@ -1,9 +1,9 @@
 /**
- * A worker's row in a coordinator's right panel. There is no Workers list
- * of its own any more (2026-09-27): each live worker is folded into the item
- * of the to-do list it is carrying (`StateOfPlaySection`), where the row is
- * titled with that item's label, and a worker on no open item is an item in
- * its own right, titled with its task. The row is the worker's persistent
+ * A worker's row in a coordinator's right panel, under Workers
+ * (`StateOfPlaySection`), titled with its current task. On 2026-09-27 the
+ * workers were folded into the to-do items they carried; that hid a worker
+ * sent on to new work while its old item waited on the user, so on
+ * 2026-09-28 they got their own list back. The row is the worker's persistent
  * object — the thread only logs its events (see `src/types/worker-events.ts`).
  *
  * State line meanings, which must stay distinct (2026-09-19 flow agreement):
@@ -122,14 +122,8 @@ export function WorkerRow({
   waitContext,
   pointed,
   pointing,
-  title,
-  trailing,
 }: {
   worker: WorkerCardState;
-  /** What the row is called: the to-do item's label when it carries one, else the worker's task. */
-  title?: string;
-  /** A control at the row's right edge, beside the open button rather than inside it (the item's dismiss). */
-  trailing?: React.ReactNode;
   coordinatorRunning: boolean;
   onOpen?: (conversationId: string) => void;
   waitContext?: WaitTextContext;
@@ -213,7 +207,7 @@ export function WorkerRow({
           <SessionStateIcon state={icon} variant="session" />
         </span>
         <span className="flex min-h-7 min-w-0 flex-1 flex-col justify-center">
-          <span className="text-[13px] leading-[1.45] text-fg-2 break-words">{title ?? worker.task}</span>
+          <span className="text-[13px] leading-[1.45] text-fg-2 break-words">{worker.task}</span>
           <span className="mt-1 border-t border-line/35 pt-1 text-[12.5px] leading-[1.4] break-words">{status}</span>
           {question && (
             <span
@@ -226,7 +220,6 @@ export function WorkerRow({
           )}
         </span>
       </button>
-      {trailing}
       </div>
       {question && (questionClipped || questionOpen) && (
         <button

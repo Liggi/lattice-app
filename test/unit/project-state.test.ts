@@ -205,6 +205,20 @@ describe('pending attention', () => {
     expect(state.attention.map((item) => [item.seq, item.thread])).toEqual([[back.seq, a.seq]]);
   });
 
+  it('attributes what a re-tasked worker writes to the thread its new task names, or to none', () => {
+    const a = note('open', 'the threshold', { workers: ['conv-w'] });
+    const b = note('open', 'the activity log');
+    const onB = reported('conv-w', 'log is in');
+    const onNothing = reported('conv-v', 'looked into it');
+    const state = foldProjectState([
+      accounting(), a, b, dispatched('conv-w', { thread: a.seq }), dispatched('conv-v', { thread: a.seq }),
+      event('worker:reassigned', { worker: 'conv-w', task: 'the activity log', previousTask: 'do the thing', thread: b.seq }),
+      event('worker:reassigned', { worker: 'conv-v', task: 'something else', previousTask: 'do the thing' }),
+      onB, onNothing,
+    ]);
+    expect(state.attention.map((item) => [item.seq, item.thread])).toEqual([[onB.seq, b.seq], [onNothing.seq, null]]);
+  });
+
   it('attributes a report to no thread when the worker was never put on one', () => {
     const report = reported('conv-loose');
     const state = foldProjectState([accounting(), dispatched('conv-loose'), report]);

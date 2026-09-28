@@ -33,6 +33,7 @@ import {
   type ReactionAddedData,
   type ReactionRemovedData,
 } from '../../types/message-reactions.js';
+import { DECISION_ANSWERED_EVENT, withdrawnDecisionAnswers, type DecisionAnsweredData } from '../../types/decisions.js';
 import { INBOX_QUEUED_EVENT, INBOX_READ_EVENT, INBOX_WITHDRAWN_EVENT, foldInbox, type InboxQueuedData } from '../../types/inbox.js';
 import { INPUT_DELIVERED_EVENT } from '../../types/immediate-delivery.js';
 import { isWorkerInput, stripContextRestore, stripPreamble } from '../../types/worker-events.js';
@@ -128,11 +129,15 @@ export async function reactToMessage(request: ReactionRequest): Promise<Reaction
  * of the event that shows each one) and whether the agent has read it yet.
  * Same reading of the log as the client's thread (`foldInbox`): a
  * message they typed is its own `input:sent`, or its `input:queued` when it
- * went through the inbox, whose carrying batch is then hidden.
+ * went through the inbox, whose carrying batch is then hidden. An answer to
+ * the agent's own question (`lattice ask`) is their message too: the page
+ * shows it from its `decision:answered` event, unless it was taken back.
  */
 export function usersMessages(events: readonly SessionEvent[]): Array<{ messageId: string; text: string; readAt: number | null }> {
   const inbox = foldInbox(events);
   const readBy = new Map(inbox.items.map((item) => [item.event.seq, item.readBySeq]));
+  const readById = new Map(inbox.items.map((item) => [item.id, item.readBySeq]));
+  const withdrawn = withdrawnDecisionAnswers(events);
   const messages: Array<{ messageId: string; text: string; readAt: number | null }> = [];
   for (const event of events) {
     if (event.type === 'input:sent') {
@@ -146,6 +151,10 @@ export function usersMessages(events: readonly SessionEvent[]): Array<{ messageI
       const data = event.data as Partial<InboxQueuedData>;
       if (data.source !== 'user' || !data.id || typeof data.text !== 'string') continue;
       messages.push({ messageId: `h-${event.seq}`, text: data.text, readAt: readBy.get(event.seq) ?? null });
+    } else if ((event.type as string) === DECISION_ANSWERED_EVENT) {
+      const data = event.data as Partial<DecisionAnsweredData>;
+      if (!data.inboxId || typeof data.answer !== 'string' || withdrawn.has(data.inboxId)) continue;
+      messages.push({ messageId: `h-${event.seq}`, text: data.answer, readAt: readById.get(data.inboxId) ?? null });
     }
   }
   return messages;
@@ -169,7 +178,7 @@ export function agentReact(request: AgentReactionRequest): AgentReactionOutcome 
   if (!manager) throw new Error('No harness session manager');
   // Only what the inbox fold and the reaction fold read, not the whole log.
   const events = getEvents(request.threadId, {
-    types: ['input:sent', 'input:resent', INBOX_QUEUED_EVENT, INBOX_READ_EVENT, INPUT_DELIVERED_EVENT, INBOX_WITHDRAWN_EVENT, AGENT_REACTION_EVENT],
+    types: ['input:sent', 'input:resent', INBOX_QUEUED_EVENT, DECISION_ANSWERED_EVENT, INBOX_READ_EVENT, INPUT_DELIVERED_EVENT, INBOX_WITHDRAWN_EVENT, AGENT_REACTION_EVENT],
   }) as unknown as SessionEvent[];
   const messages = usersMessages(events);
 

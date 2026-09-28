@@ -19,6 +19,8 @@ export async function sendSessionMessage(options: {
   summary?: string;
   /** A different assignment for a worker being reused; what its card is called from now on. */
   task?: string;
+  /** With `task`: the open thread the new assignment is. */
+  thread?: number;
   passedOn?: boolean;
   /** Seq of the worker's question this message answers; what clears it from the coordinator's pending list. */
   answers?: number;
@@ -47,6 +49,7 @@ export async function sendSessionMessage(options: {
         ...(options.from ? { from: options.from } : {}),
         ...(options.summary ? { summary: options.summary } : {}),
         ...(options.task ? { task: options.task } : {}),
+        ...(options.thread !== undefined ? { thread: options.thread } : {}),
         ...(options.passedOn ? { passedOn: true } : {}),
         ...(options.answers !== undefined ? { answers: options.answers } : {}),
         ...(options.interrupt ? { interrupt: true } : {}),

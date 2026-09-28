@@ -132,6 +132,7 @@ export const SESSION_VERBS: VerbSpec[] = [
       { name: 'from', kind: 'string', value: 'CONV', desc: 'Sender conversation. A coordinator sending to its own worker records the message in its thread.' },
       { name: 'summary', kind: 'string', value: 'TEXT', desc: 'With --from: one line, the substance of the message, for the coordinator\'s thread.' },
       { name: 'task', kind: 'string', value: 'TEXT', desc: 'With --from: a different assignment for an idle worker you are reusing. Renames its card from here on.' },
+      { name: 'thread', kind: 'int', value: 'ID', desc: 'With --task: the open thread the new assignment is (the id `session state` shows). Without it the worker leaves its old thread.' },
       { name: 'passed-on', kind: 'boolean', desc: 'With --from: the message carries the user\'s decision, not the coordinator\'s own.' },
       { name: 'answers', kind: 'int', value: 'SEQ', desc: 'With --from: this message answers that question event, clearing it from the coordinator\'s pending list.' },
       { name: 'interrupt', kind: 'boolean', desc: 'Cancel the session\'s current turn first, so it stops what it is doing and reads this.' },
@@ -156,7 +157,9 @@ export const SESSION_VERBS: VerbSpec[] = [
       'Reusing a worker on something else takes --task "<one line>", sent with the brief for the new work.\n' +
         '  Its card, the roster and its attribution read the new task from then on; the dispatch and everything\n' +
         '  it reported under the old one stay in the history. A follow-up on the same task needs no --task, and\n' +
-        '  passing the name it already has writes nothing. It is refused while the worker is in a turn unless\n' +
+        '  passing the name it already has writes nothing. Add --thread <id> when the new work is an open thread,\n' +
+        '  so the worker carries that thread; without it the worker leaves the thread it was on, and dismissing\n' +
+        '  that thread no longer stops it. It is refused while the worker is in a turn unless\n' +
         '  --interrupt comes with it: start a new worker instead, or send it once this one is idle.',
       'A worker\'s question stays on the coordinator\'s pending list until an answer names it: --answers SEQ,\n' +
         '  the seq `session state` shows beside it. Without the flag the message is delivered and the question\n' +

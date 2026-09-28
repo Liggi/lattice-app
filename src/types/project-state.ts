@@ -55,7 +55,7 @@ export const PROJECT_NUDGED_EVENT = 'project:nudged';
  */
 export const PROJECT_FOLD_EVENT_TYPES = [
   PROJECT_NOTED_EVENT, PROJECT_NUDGED_EVENT, 'turn:end',
-  'worker:started', 'worker:asked', 'worker:answered', 'worker:reported', 'worker:moved',
+  'worker:started', 'worker:reassigned', 'worker:asked', 'worker:answered', 'worker:reported', 'worker:moved',
 ] as const;
 
 export const PROJECT_NOTE_KINDS = [
@@ -448,6 +448,22 @@ export function foldProjectState(events: readonly ProjectEventLike[]): ProjectSt
           workerThread.set(data.worker, data.thread);
           if (!thread.workers.includes(data.worker)) thread.workers.push(data.worker);
         }
+      }
+      continue;
+    }
+
+    // New work for the worker: what it writes from here counts against the
+    // thread the reassignment named, or none, not the thread it left.
+    if (event.type === 'worker:reassigned') {
+      state.revision = event.seq;
+      const data = event.data as { worker?: string; thread?: unknown } | null;
+      if (!data?.worker) continue;
+      const thread = typeof data.thread === 'number' ? threads.get(data.thread) : undefined;
+      if (thread) {
+        workerThread.set(data.worker, thread.seq);
+        if (!thread.workers.includes(data.worker)) thread.workers.push(data.worker);
+      } else {
+        workerThread.delete(data.worker);
       }
       continue;
     }

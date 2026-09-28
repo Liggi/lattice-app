@@ -29,6 +29,7 @@ import { readWorkerActivity } from '@/services/sessions/worker-activity.js';
 import { readWorkerRuntime } from '@/services/sessions/worker-runtime.js';
 import { archiveFinishedWorkers } from '@/services/sessions/worker-auto-archive.js';
 import { appendProjectNote, readProjectState } from '@/services/sessions/project-state.js';
+import { isUsersMove } from '@/types/state-of-play.js';
 import { backfillProjectName } from '@/services/sessions/project-name.js';
 import { normalizeProjectName } from '@/services/insights/anthropic-service.js';
 import { moveThread, moveWorker, ProjectMoveError } from '@/services/sessions/project-move.js';
@@ -171,6 +172,9 @@ export interface UnifiedConversationQueryRoutesContext {
   findRuntimeActiveSegment: (conversation: Conversation) => ConversationSegment | null;
   getLatestSegmentForFallback: (conversation: Conversation) => ConversationSegment | null;
 }
+
+/** The longest summary a thread that needs the user may carry: one line in the panel's detail. */
+const NEEDS_YOU_SUMMARY_MAX = 160;
 
 export function registerUnifiedConversationQueryRoutes(
   router: Router,
@@ -780,6 +784,17 @@ export function registerUnifiedConversationQueryRoutes(
         }
         waitingOn = parsed;
       }
+    }
+
+    // A thread that needs the user shows its summary behind its label in the
+    // user's panel, so it is one line; the detail goes in evidence or the message.
+    if (kind === 'update' && thread && text.length > NEEDS_YOU_SUMMARY_MAX
+      && isUsersMove({ ...thread, owner: owner ?? thread.owner, waitingOn: waitingOn !== undefined ? waitingOn : thread.waitingOn })) {
+      res.status(400).json({
+        error: `thread [${thread.seq}] needs the user, so its summary is one line: ${text.length} characters, the most is ${NEEDS_YOU_SUMMARY_MAX}. `
+          + 'Say where it has got to in a sentence; put the detail in --evidence or in your message to the user.',
+      });
+      return;
     }
 
     const workers = Array.isArray(body.workers)

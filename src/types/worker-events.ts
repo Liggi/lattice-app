@@ -92,6 +92,13 @@ export interface WorkerReassignedData {
   task: string;
   /** What it was called until this event, so the history row can read as a change. */
   previousTask: string;
+  /**
+   * The open thread the new work is (`send --thread`). Absent means the new
+   * work is on no thread: the worker has left the one it was dispatched onto,
+   * so it no longer carries it, is not stopped when it is dismissed, and does
+   * not stand in for it on the panel.
+   */
+  thread?: number;
 }
 
 /** The worker's turn ended on a question for the coordinator. */
@@ -407,6 +414,12 @@ export interface WorkerState {
    * (`readWorkerStates`); the fold cannot see it. Absent means not checked.
    */
   workedSinceReport?: boolean;
+  /**
+   * The coordinator has given it a different assignment since its dispatch
+   * (`worker:reassigned`). From then on `thread` alone says which thread it
+   * carries: an older thread that still lists it is one it has left.
+   */
+  movedOn?: boolean;
 }
 
 export interface WorkerEventLike {
@@ -447,9 +460,12 @@ export function foldWorkerStates(events: readonly WorkerEventLike[]): WorkerStat
       case 'worker:reassigned': {
         const state = byWorker.get(data.worker);
         if (!state) break;
-        // Only the name. Everything else about where the worker stands was
-        // put there by an event that meant it.
-        state.task = (event.data as WorkerReassignedData).task;
+        // The name and the thread the new work is on. The lifecycle was put
+        // there by events that meant it, and stays.
+        const reassigned = event.data as WorkerReassignedData;
+        state.task = reassigned.task;
+        state.thread = typeof reassigned.thread === 'number' ? reassigned.thread : null;
+        state.movedOn = true;
         break;
       }
       case 'worker:asked': {

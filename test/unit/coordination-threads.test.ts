@@ -115,6 +115,18 @@ describe('the note route', () => {
     expect((await note({ kind: 'update', text: '', ref: id, workers: ['conv-does-not-exist'] })).status).toBe(400);
   });
 
+  it('holds a thread that needs the user to a one-line summary, and no other', async () => {
+    const id = (await note({ kind: 'open', text: 'the beta' })).body.seq as number;
+    const long = 'x'.repeat(161);
+    expect((await note({ kind: 'update', text: long, ref: id })).status).toBe(200);
+    const refused = await note({ kind: 'update', text: long, ref: id, waitingOn: { kind: 'decision', text: 'the go' } });
+    expect(refused.status).toBe(400);
+    expect(refused.body.error).toContain('--evidence');
+    await note({ kind: 'update', text: '', ref: id, owner: { kind: 'user' } });
+    expect((await note({ kind: 'update', text: long, ref: id })).status).toBe(400);
+    expect((await note({ kind: 'update', text: 'x'.repeat(160), ref: id })).status).toBe(200);
+  });
+
   it('expands --addresses <worker> only over that thread, so closing one does not account for another', async () => {
     await accounting();
     const first = (await note({ kind: 'open', text: 'the migration' })).body.seq as number;

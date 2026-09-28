@@ -63,9 +63,11 @@ export function archiveReason(state: WorkerState, facts: WorkerFacts, project: P
     const owed = [...project.attention, ...project.historical].some((item) => item.seq === facts.latestEventSeq);
     if (owed) return null;
   }
-  const threads = [...project.open, ...project.closed].filter((thread) =>
-    thread.workers.includes(state.worker) || thread.seq === state.thread
-    || (thread.owner?.kind === 'worker' && thread.owner.worker === state.worker));
+  // A reassigned worker is on the thread its reassignment named, if any; the
+  // threads it left closing says nothing about the work it is on now.
+  const threads = [...project.open, ...project.closed].filter((thread) => thread.seq === state.thread
+    || (!state.movedOn && (thread.workers.includes(state.worker)
+      || (thread.owner?.kind === 'worker' && thread.owner.worker === state.worker))));
   const openThreads = threads.filter((thread) => thread.closedAt === undefined);
   if (threads.length > 0 && openThreads.length === 0) return 'threads-closed';
   if (state.phase === 'reported' && facts.latestEventSeq !== null && !state.waitingOn) return 'report-dealt-with';

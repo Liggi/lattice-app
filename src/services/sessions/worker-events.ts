@@ -120,17 +120,6 @@ export function openQuestion(coordinatorConversationId: string, worker: string):
   return state?.phase === 'asked' && state.question ? state.question : null;
 }
 
-/**
- * What this worker is called now: the task from its dispatch, with any
- * reassignment since applied. Null when the coordinator has no card for it.
- * Read through the fold rather than off the last event so it gives the same
- * answer the card and the roster do.
- */
-export function currentWorkerTask(coordinatorConversationId: string, worker: string): string | null {
-  const state = readWorkerStates(coordinatorConversationId).find((candidate) => candidate.worker === worker);
-  return state?.task?.trim() || null;
-}
-
 /** Whether `seq` is a question this worker asked its coordinator: what `--answers` may name. */
 export function isWorkerQuestionSeq(coordinatorConversationId: string, worker: string, seq: number): boolean {
   const event = getEvents(coordinatorConversationId).find((candidate) => candidate.seq === seq);

@@ -43,7 +43,7 @@ describe('a worker its coordinator moves on to something else', () => {
     expect(state.task).toBe('Prepare a canary report preview');
   });
 
-  it('renames and nothing else: the rest of the card belongs to events that meant it', () => {
+  it('renames and moves it off its thread; the lifecycle belongs to events that meant it', () => {
     const asked = ev('worker:asked', 20, { worker: 'conv-w', text: 'Question for front: which chart?' });
     const before = only([dispatch, asked]);
     const after = only([dispatch, asked, ev('worker:reassigned', 30, { worker: 'conv-w', task: 'Something else', previousTask: 'Prepare a canary report preview' })]);
@@ -54,7 +54,15 @@ describe('a worker its coordinator moves on to something else', () => {
     expect(after.question).toBe(before.question);
     expect(after.since).toBe(before.since);
     expect(after.startedAt).toBe(at(10));
-    expect(after.thread).toBe(7);
+    // New work with no --thread is on no thread: it no longer carries 7, so
+    // dismissing 7 does not stop it and the panel does not count it there.
+    expect(after.thread).toBeNull();
+    expect(after.movedOn).toBe(true);
+  });
+
+  it('carries the thread its reassignment names', () => {
+    const after = only([dispatch, ev('worker:reassigned', 30, { worker: 'conv-w', task: 'Activity log', previousTask: 'Prepare a canary report preview', thread: 12 })]);
+    expect(after.thread).toBe(12);
   });
 
   it('does not invent a card for a worker that was never dispatched', () => {
