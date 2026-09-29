@@ -12,6 +12,7 @@ import { runSessionCommand } from './cli/session-commands.js';
 import { renderSessionUsageBlock } from './cli/session-cli-spec.js';
 import { FEEDBACK_USAGE, runFeedbackCommand } from './cli/feedback-command.js';
 import { ASK_USAGE, runAskCommand } from './cli/ask-command.js';
+import { DIAGRAM_USAGE, runDiagramCommand } from './cli/diagram-command.js';
 
 // The session block is generated from the verb spec rather than written out
 // here. Hand-maintained, it went stale: it hid `list --project/--tag` and
@@ -30,6 +31,7 @@ ${renderSessionUsageBlock()}
 
 ${FEEDBACK_USAGE}
 ${ASK_USAGE}
+${DIAGRAM_USAGE}
   lattice session <verb> --help        Flags and notes for one verb.
   lattice --help | -h                  Show this help.
 `;
@@ -59,6 +61,11 @@ export async function run(): Promise<void> {
 
   if (first === 'feedback') {
     await runFeedbackCommand(args.slice(1));
+    return;
+  }
+
+  if (first === 'diagram') {
+    await runDiagramCommand(args.slice(1));
     return;
   }
 

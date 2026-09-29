@@ -3,8 +3,8 @@
  *
  * Archives sessions that have been asleep for a week, so the sidebar stays a
  * working set rather than a scrollback. This is the tail end of the lifecycle
- * the sidebar shows: Working → Waiting → Idle → Sleeping (after 30 quiet
- * minutes, in the sidebar's Sleeping group) → archived a week later.
+ * the sidebar shows: Working → Waiting → Idle → Sleeping (after 3 quiet
+ * hours, in the sidebar's Sleeping group) → archived a week later.
  *
  * Archiving is reversible and non-destructive — it flips `sessions.archived`,
  * which hides the row from the sidebar and moves it into the archive list.
@@ -24,9 +24,7 @@ import { DatabaseProvider } from '../infrastructure/database-provider.js';
 import { createLogger, type Logger } from '../infrastructure/logger.js';
 import { getEventStorage } from '../../harness/event-message-reader.js';
 import { deriveSessionStatusFromEvents } from '../../harness/derive-session-status.js';
-
-/** The sidebar's SLEEP_AFTER_MS: quiet this long, a session is Sleeping. */
-const SLEEP_AFTER_MS = 30 * 60 * 1000;
+import { SLEEP_AFTER_MS } from '../../constants/session-sleep.js';
 
 /** How long a session must be quiet before it is archived: a week after it falls asleep. */
 export const AUTO_ARCHIVE_AFTER_MS = SLEEP_AFTER_MS + 7 * 24 * 60 * 60 * 1000;

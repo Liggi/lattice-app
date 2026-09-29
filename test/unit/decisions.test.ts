@@ -87,9 +87,38 @@ describe('placeDecisionsAtTurnEnd', () => {
     expect(placeDecisionsAtTurnEnd(events).map((e) => e.seq)).toEqual([1, 3, 4, 2, 5]);
   });
 
-  it('keeps a question last while its turn is still running', () => {
-    const events = [{ type: 'decision:asked', seq: 1 }, { type: 'content', seq: 2 }];
-    expect(placeDecisionsAtTurnEnd(events).map((e) => e.seq)).toEqual([2, 1]);
+  it('does not show a question while its turn is still running', () => {
+    // The order conv-oNjAHy-gnu7i logged: the card at 12, the message it leads to at 21.
+    const events = [
+      { type: 'content', seq: 11 },
+      { type: 'decision:asked', seq: 12 },
+      { type: 'result', seq: 13 },
+      { type: 'content', seq: 21 },
+    ];
+    expect(placeDecisionsAtTurnEnd(events).map((e) => e.seq)).toEqual([11, 13, 21]);
+    expect(placeDecisionsAtTurnEnd([...events, { type: 'turn:end', seq: 22 }]).map((e) => e.seq)).toEqual([11, 13, 21, 22, 12]);
+  });
+
+  it('shows a question whose turn ended in an error or with the process', () => {
+    for (const end of ['run:error', 'run:end']) {
+      const events = [{ type: 'decision:asked', seq: 1 }, { type: 'content', seq: 2 }, { type: end, seq: 3 }];
+      expect(placeDecisionsAtTurnEnd(events).map((e) => e.seq)).toEqual([2, 3, 1]);
+    }
+  });
+
+  it('does not treat a compaction boundary as the end of the asking turn', () => {
+    const events = [
+      { type: 'decision:asked', seq: 1 },
+      { type: 'turn:end', seq: 2, data: { compact: true } },
+      { type: 'content', seq: 3 },
+      { type: 'turn:end', seq: 4 },
+    ];
+    expect(placeDecisionsAtTurnEnd(events).map((e) => e.seq)).toEqual([2, 3, 4, 1]);
+  });
+
+  it('shows a question that holds its turn open at once', () => {
+    const events = [{ type: 'content', seq: 1 }, { type: 'decision:asked', seq: 2, data: { holdsTurn: true } }];
+    expect(placeDecisionsAtTurnEnd(events).map((e) => e.seq)).toEqual([1, 2]);
   });
 
   it('places a question answered mid-turn above its answer', () => {

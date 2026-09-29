@@ -3,7 +3,7 @@ import { Chrome, Globe, MousePointer, Monitor, Terminal, Network, Image, CheckCi
 import { CollapsibleToolCard } from '../CollapsibleToolCard.js';
 import { cn } from '../../utils/cn.js';
 import { tk, accent } from '../../tokens.js';
-import { unwrapContentBlocks, imageBlockToDataUrl } from '../../utils/content-blocks.js';
+import { unwrapContentBlocks, findImageBlock, imageBlockToDataUrl } from '../../utils/content-blocks.js';
 
 interface ChromeDevToolsToolProps {
   toolName: string;
@@ -111,7 +111,7 @@ function parseResult(action: string, raw: string): ParsedResult {
 
   // Screenshot: check for image content block
   if (action === 'take_screenshot' && unwrapped) {
-    const imageBlock = unwrapped.blocks.find(b => b.type === 'image' && b.source?.data);
+    const imageBlock = findImageBlock(unwrapped);
     const dataUrl = imageBlock ? imageBlockToDataUrl(imageBlock) : null;
     if (dataUrl) {
       return { kind: 'image', dataUrl, text: text || undefined };

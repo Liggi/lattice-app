@@ -4,6 +4,9 @@ import type { Status, Activity, TurnUsage } from '../protocol/derive.js'
 import type { SessionEvent } from '../protocol/events.js'
 import { SSEClient } from './sse-client.js'
 
+/** How many of the newest events a session opens with; older ones load on scroll-up. */
+const INITIAL_HISTORY_LIMIT = 100
+
 /**
  * Maximum number of events retained in the client-side events array.
  * Matches the server-side EventLog DEFAULT_MAX_SIZE (2000).
@@ -406,7 +409,7 @@ export function useSession(
 
               attemptedBackfill = true
               try {
-                const resp = await fetch(`${optionsRef.current.baseUrl}/${sessionId}/history?before=${Number.MAX_SAFE_INTEGER}&limit=200`)
+                const resp = await fetch(`${optionsRef.current.baseUrl}/${sessionId}/history?before=${Number.MAX_SAFE_INTEGER}&limit=${INITIAL_HISTORY_LIMIT}`)
                 if (resp.ok) {
                   const data = await resp.json() as { events: SessionEvent[]; hasMore: boolean }
                   if (data.events.length > 0) {
@@ -465,7 +468,7 @@ export function useSession(
         // This handles server restart (no_session) when storage has events.
         // Use before=MAX_SAFE_INTEGER to get the newest events (tail).
         try {
-          const resp = await fetch(`${optionsRef.current.baseUrl}/${sessionId}/history?before=${Number.MAX_SAFE_INTEGER}&limit=200`)
+          const resp = await fetch(`${optionsRef.current.baseUrl}/${sessionId}/history?before=${Number.MAX_SAFE_INTEGER}&limit=${INITIAL_HISTORY_LIMIT}`)
           if (resp.ok) {
             const data = await resp.json() as { events: SessionEvent[]; hasMore: boolean }
             if (data.events.length > 0) {
@@ -511,7 +514,7 @@ export function useSession(
         void (async () => {
           try {
             const resp = await fetch(
-              `${optionsRef.current.baseUrl}/${sessionId}/history?before=${Number.MAX_SAFE_INTEGER}&limit=200`,
+              `${optionsRef.current.baseUrl}/${sessionId}/history?before=${Number.MAX_SAFE_INTEGER}&limit=${INITIAL_HISTORY_LIMIT}`,
             )
             if (resp.ok) {
               const data = await resp.json() as { events: SessionEvent[]; hasMore: boolean }

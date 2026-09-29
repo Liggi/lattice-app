@@ -8,6 +8,7 @@
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
+import { agentEnv } from '../services/infrastructure/agent-env.js';
 import { createLogger } from '../services/infrastructure/logger.js';
 
 const logger = createLogger('OpencodeServer');
@@ -75,7 +76,7 @@ function spawnServer(binary: string): Promise<OpencodeServerHandle> {
   return new Promise<OpencodeServerHandle>((resolve, reject) => {
     const proc = spawn(binary, ['serve', '--hostname', '127.0.0.1'], {
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: process.env,
+      env: agentEnv(),
     });
     child = proc;
 

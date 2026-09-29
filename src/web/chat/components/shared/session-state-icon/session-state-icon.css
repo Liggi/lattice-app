@@ -21,6 +21,10 @@
 @keyframes ssi-shrink { 0% { transform: scale(1.15); opacity: 0; } 25% { opacity: 1; } 100% { transform: scale(.25); opacity: 0; } }
 @keyframes ssi-knock { 0%, 60%, 100% { transform: scale(1); } 15% { transform: scale(1.18); } 30% { transform: scale(.96); } 45% { transform: scale(1.1); } }
 
+/* Waiting: a slow fade in the icon's centre. */
+.ssi .ssi-wait { animation: ssi-breathe 4s ease-in-out infinite; --lo: .4; --hi: .7; opacity: .55; }
+.ssi .ssi-wait-core { animation: ssi-breathe 4s ease-in-out infinite; --lo: .45; --hi: 1; opacity: .75; }
+
 @media (prefers-reduced-motion: reduce) {
   .ssi, .ssi * { animation: none !important; }
 }

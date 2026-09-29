@@ -120,6 +120,19 @@ export interface CoordinatorConfig {
   reasoningEffort?: string;
 }
 
+export interface ClaudeEndpointConfig {
+  /** Stable handle the settings page edits by; the key is matched on it. */
+  id: string;
+  /** Where the Claude CLI sends requests, e.g. 'http://127.0.0.1:8080'. */
+  baseUrl: string;
+  /** The model the server serves. Picking it runs a session on this server; unique across endpoints. */
+  model: string;
+  /** Sent as a bearer token. Optional: many local servers take none. */
+  apiKey?: string;
+  /** Tokens the served model holds, passed as CLAUDE_CODE_MAX_CONTEXT_TOKENS so auto-compact runs in time. */
+  contextWindow?: number;
+}
+
 export interface AnthropicConfig {
   /**
    * Anthropic API key
@@ -255,6 +268,13 @@ export interface LatticeConfig {
    * Used for session insights extraction with Opus 4.5
    */
   anthropic?: AnthropicConfig;
+
+  /**
+   * Anthropic-compatible servers, such as a local llama.cpp, that a Claude
+   * session can run on instead of Anthropic by picking the server's model.
+   * Other sessions keep the Claude sign-in.
+   */
+  claudeEndpoints?: ClaudeEndpointConfig[];
 
   /**
    * TypeSafe (Jev) configuration: the coordinator router's judge.

@@ -15,6 +15,7 @@ const current = {
   interface: { colorScheme: 'dark', language: 'en' },
   anthropic: { apiKey: SAVED_KEY, models: { generation: 'claude-sonnet-5' } },
   gemini: { apiKey: 'MARKER-gemini' },
+  claudeEndpoints: [{ id: 'ep-a', baseUrl: 'http://127.0.0.1:8080', model: 'qwen3-coder', apiKey: 'MARKER-endpoint' }],
 } as unknown as LatticeConfig;
 
 describe('config secrets', () => {
@@ -46,5 +47,18 @@ describe('config secrets', () => {
   it('never lets the page set the bearer token', () => {
     const next = normalizeSecretUpdates({ server: { authToken: 'MARKER-new', claudeAuthMode: 'api-key' } } as Partial<LatticeConfig>, current);
     expect(next.server).toEqual({ claudeAuthMode: 'api-key' });
+  });
+
+  it('treats each endpoint key the same way, matched to the saved endpoint by id', () => {
+    expect(publicConfig(current).claudeEndpoints).toEqual([
+      { id: 'ep-a', baseUrl: 'http://127.0.0.1:8080', model: 'qwen3-coder', apiKeyConfigured: true },
+    ]);
+    const edit = (endpoint: Record<string, unknown>) =>
+      normalizeSecretUpdates({ claudeEndpoints: [endpoint] } as unknown as Partial<LatticeConfig>, current).claudeEndpoints;
+    const base = { id: 'ep-a', baseUrl: 'http://127.0.0.1:9090', model: 'qwen3-coder' };
+    expect(edit({ ...base, apiKeyConfigured: true })).toEqual([{ ...base, apiKey: 'MARKER-endpoint' }]);
+    expect(edit({ ...base, apiKey: ' new-key ' })).toEqual([{ ...base, apiKey: 'new-key' }]);
+    expect(edit({ ...base, apiKey: null })).toEqual([base]);
+    expect(edit({ ...base, id: 'ep-b' })).toEqual([{ ...base, id: 'ep-b' }]);
   });
 });

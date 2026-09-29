@@ -1,3 +1,5 @@
+import { LatticeError } from '../../types/index.js';
+import { contextWindowProblem, endpointModelProblem } from '../../constants/claude-endpoint.js';
 import fs from 'fs';
 import path from 'path';
 import { execFile } from 'child_process';
@@ -278,6 +280,12 @@ export class ConfigService {
       ])),
     });
 
+    // Checked here, not on load: a hand-edited mistake must not stop the server
+    // starting, and the daemon skips an endpoint it cannot use.
+    if (updates.claudeEndpoints !== undefined) {
+      this.assertClaudeEndpoints(updates.claudeEndpoints);
+    }
+
     // Pick up any write we missed before merging; merging over a stale in-memory
     // copy writes the other process's change back out.
     this.handleExternalChange();
@@ -415,6 +423,29 @@ export class ConfigService {
     }
     if (config.messageLifecycle) {
       this.assertMessageLifecycleConfig(config.messageLifecycle);
+    }
+  }
+
+  private assertClaudeEndpoints(endpoints: unknown): void {
+    if (!Array.isArray(endpoints)) throw new LatticeError('INVALID_CONFIG', 'claudeEndpoints must be a list', 400);
+    const models: string[] = [];
+    for (const endpoint of endpoints as Array<Record<string, unknown>>) {
+      for (const field of ['id', 'baseUrl', 'model'] as const) {
+        if (typeof endpoint?.[field] !== 'string' || !(endpoint[field] as string).trim()) {
+          throw new LatticeError('INVALID_CONFIG', `Each endpoint needs a ${field}`, 400);
+        }
+      }
+      if (endpoint.apiKey !== undefined && typeof endpoint.apiKey !== 'string') {
+        throw new LatticeError('INVALID_CONFIG', 'An endpoint key must be a string', 400);
+      }
+      const windowProblem = contextWindowProblem(endpoint.contextWindow);
+      if (windowProblem) throw new LatticeError('INVALID_CONFIG', windowProblem, 400);
+      if (!/^https?:\/\/[^/\s]+/.test((endpoint.baseUrl as string).trim())) {
+        throw new LatticeError('INVALID_CONFIG', `The server URL must start with http:// or https:// (got ${endpoint.baseUrl as string})`, 400);
+      }
+      const problem = endpointModelProblem(endpoint.model as string, models);
+      if (problem) throw new LatticeError('INVALID_CONFIG', problem, 400);
+      models.push((endpoint.model as string).trim());
     }
   }
 

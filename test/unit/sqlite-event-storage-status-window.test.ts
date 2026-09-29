@@ -75,4 +75,37 @@ describe('SqliteEventStorageAdapter.readStatusWindow', () => {
       db.close();
     }
   });
+  it('keeps a background subagent pending after its own output fills the window', () => {
+    const db = new Database(':memory:');
+    try {
+      const storage = new SqliteEventStorageAdapter(db);
+      const insert = db.prepare(`
+        INSERT INTO harness_events (session_id, seq, run_id, timestamp, type, data, meta)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `);
+      const add = (seq: number, type: string, data: unknown) =>
+        insert.run('conv-sub', seq, 'run-1', seq, type, JSON.stringify(data), null);
+
+      add(1, 'run:start', {});
+      add(2, 'run:ready', {});
+      add(3, 'content', { blocks: [{ type: 'tool_use', id: 'toolu_a', name: 'Agent', input: {} }], parentToolUseId: null });
+      add(4, 'task:started', { taskId: 'a1', toolUseId: 'toolu_a', taskType: 'local_agent' });
+      add(5, 'result', { blocks: [{ type: 'tool_result', tool_use_id: 'toolu_a', content: 'Async agent launched' }] });
+      add(6, 'content', { blocks: [{ type: 'text', text: 'Waiting on: one lookup' }], parentToolUseId: null });
+      add(7, 'turn:end', {});
+      for (let seq = 8; seq < 400; seq++) {
+        add(seq, 'content', { blocks: [{ type: 'text', text: `step ${seq}` }], parentToolUseId: 'toolu_a' });
+      }
+
+      expect(deriveSessionStatusFromEvents(storage.readStatusWindow('conv-sub', 200))).toMatchObject({
+        status: 'idle',
+        pendingWork: 'subagent',
+      });
+
+      add(400, 'task:updated', { taskId: 'a1', patch: { status: 'completed' } });
+      expect(deriveSessionStatusFromEvents(storage.readStatusWindow('conv-sub', 200)).pendingWork).toBeNull();
+    } finally {
+      db.close();
+    }
+  });
 });

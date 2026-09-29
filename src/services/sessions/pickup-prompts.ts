@@ -1,6 +1,7 @@
 import { userGuidance, userName, UserName } from '../user-profile.js';
 import { AGENT_CLI_PATH, shellQuote } from '../infrastructure/agent-cli.js';
 import type { AgentProvider } from './installed-providers.js';
+import { diagramGuidance } from './diagram-guidance.js';
 /**
  * First-message assembly for coordinator and worker conversations.
  *
@@ -76,6 +77,18 @@ export interface CoordinatorPreambleInput {
   cli: string;
   /** The agent CLIs installed on this machine; the routing below names both. */
   installedProviders?: readonly AgentProvider[];
+  /** Models served by the custom endpoints saved in Settings. */
+  claudeEndpointModels?: readonly string[];
+}
+
+/** Names the saved endpoints, which run only when asked for: they are not a cheaper Opus. */
+function endpointLine(models: readonly string[] | undefined): string[] {
+  if (!models || models.length === 0) return [];
+  const list = models.map((model) => `\`--provider claude --model ${model}\``).join(', ');
+  return [
+    `- A custom endpoint runs Claude Code on another server: ${list}. Use one only when ${userName()} asks for it`,
+    '  or the work names it; the routing above stays on Claude and Codex otherwise.',
+  ];
 }
 
 /** One line when only one provider is installed, so routing never names a CLI that is not there. */
@@ -123,7 +136,7 @@ export function buildCoordinatorPreamble(input: CoordinatorPreambleInput): strin
     `  \`${input.cli} ask "<question>" --session ${input.conversationId} --option "<label>" --because "<what choosing it sets in motion>" [--recommended] --option …\`.`,
     '  They answer with a tap, often from their phone, and the answer arrives as a message from them. Post the card',
     '  first, then write your message as you otherwise would, with the context, what you weighed and your',
-    '  recommendation, and end the turn: the card shows below the message. Write that message once, after the card,',
+    '  recommendation, and end the turn: the card shows below the message when the turn ends. Write that message once, after the card,',
     '  not before it as well. The card is the question: the message does not ask it again or mention the card. Keep it rare: one',
     '  card at most, only for a call that is really theirs, never for permission to carry on, a status update or',
     '  something you can decide yourself. An open question with no clear options stays in prose.',
@@ -176,6 +189,8 @@ export function buildCoordinatorPreamble(input: CoordinatorPreambleInput): strin
     '',
     ...messageShapeGuidance(),
     '',
+    ...diagramGuidance(input.cli),
+    '',
     'Working with workers',
     '- A worker is a capable colleague picking up a thread, not a tool you operate. Brief it the way you would brief a',
     '  peer: the situation, what we are trying to get to and why, what you already know, and what you are unsure of.',
@@ -211,6 +226,7 @@ export function buildCoordinatorPreamble(input: CoordinatorPreambleInput): strin
     '  escalate: diagnosing an ordinary bug is an Opus job. This governs who investigates. A finding that changes the plan is the separate case above, and',
     '  still gets the narrow Astra or Opus challenge or the one line or diff you read yourself.',
     ...singleProviderLine(input.installedProviders),
+    ...endpointLine(input.claudeEndpointModels),
     '- When the model a piece of work needs is not available to you, say so and let it be decided. Do not quietly',
     '  hand complex implementation to a model that will struggle with it, and do not answer a capacity limit by',
     '  switching accounts.',
@@ -486,6 +502,22 @@ export interface WorkerPreambleInput {
 }
 
 /**
+ * The preamble for a session started from the New screen, which is neither a
+ * coordinator nor a worker and used to get only the user's text: nothing told
+ * it how the chat draws diagrams, so it fell back to ASCII art.
+ */
+export function buildSessionPreamble(cli: string): string {
+  return [
+    'This session runs in Lattice, which renders your replies as markdown in a chat on desktop and phone.',
+    '',
+    ...diagramGuidance(cli),
+    '',
+    '---',
+    '',
+  ].join('\n');
+}
+
+/**
  * A worker's standing preamble. It names what the worker can reach, because
  * an audit from inside a live worker found it could already read front's
  * project state, its siblings' transcripts and the worker roster, and had
@@ -513,6 +545,8 @@ export function buildWorkerPreamble(input: WorkerPreambleInput): string {
     `Feedback: if something about Lattice itself got in your way or could be better, you can propose feedback with \`${input.cli} feedback "…" --session ${input.conversationId}\`. It is saved as a draft; ${userName()} reviews it before anything is sent.`,
     'Searching: keep recursive searches inside the repo or folder the work is in, never a home directory or a whole disk, and give each one a time limit (`timeout 60 …`). One unresponsive path can hang a search that prints nothing.',
     'Waiting: when you end a turn because you are waiting on something other than front — a restart, another worker\'s result, a run already in progress — make `Waiting on: <what>` the first line of your report, finishing the sentence in a few words ("Waiting on: the next quiet restart"). Your card then shows the wait instead of Reported, until you resume or report again. The line wakes nothing: before you end the turn, arm what will (a background command or Monitor that ends when the thing happens, or a ScheduleWakeup), unless the wait is on front, ' + userName() + ', another worker who will message you, or a restart. If nothing is armed, the server tells you so, and tells front if you answer that and still arm nothing.',
+    '',
+    ...diagramGuidance(input.cli),
     ...guidanceLines('worker'),
     '',
     '---',

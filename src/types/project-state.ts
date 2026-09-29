@@ -470,8 +470,9 @@ export function foldProjectState(events: readonly ProjectEventLike[]): ProjectSt
 
     if (event.type === 'worker:asked' || event.type === 'worker:reported') {
       state.revision = event.seq;
-      const data = event.data as { worker?: string; text?: unknown } | null;
-      if (!data?.worker) continue;
+      const data = event.data as { worker?: string; text?: unknown; quietRepeat?: boolean } | null;
+      // Never sent to the coordinator, so nothing is owed on it.
+      if (!data?.worker || data.quietRepeat) continue;
       const kind = event.type === 'worker:asked' ? 'question' : 'report';
       const firstLine = firstLineOf(data.text);
       // A copy a move carried over with its thread names that thread; the
@@ -721,7 +722,22 @@ export function unaddressedAfterTurn(events: readonly ProjectEventLike[]): TurnS
   for (let i = events.length - 1; i >= 0; i--) {
     if (events[i].type === 'input:sent') { lastInput = i; break; }
   }
-  const turn = events.slice(lastInput + 1);
+  const inputSeq = lastInput >= 0 ? events[lastInput].seq : Infinity;
+  return turnStaleness(events.slice(lastInput + 1), inputSeq, foldProjectState(events).attention);
+}
+
+/** The event types after the last input that `turnStaleness` looks at. */
+export const TURN_STALENESS_EVENT_TYPES = ['worker:started', 'worker:answered', PROJECT_NOTED_EVENT] as const;
+
+/**
+ * `unaddressedAfterTurn` from its parts, so a caller with a long log can read
+ * only the turn's events and the project state it already has.
+ */
+export function turnStaleness(
+  turn: readonly ProjectEventLike[],
+  inputSeq: number,
+  attention: readonly PendingAttention[],
+): TurnStaleness {
   // A worker moved in from another project was not this turn's doing.
   const changed = turn.some((event) => (event.type === 'worker:started' && !(event.data as { movedFrom?: unknown } | null)?.movedFrom)
     || event.type === 'worker:answered');
@@ -730,8 +746,7 @@ export function unaddressedAfterTurn(events: readonly ProjectEventLike[]): TurnS
 
   // Only what was already waiting when the turn started: a report that
   // arrived mid-turn has not had a turn to be handled in yet.
-  const inputSeq = lastInput >= 0 ? events[lastInput].seq : Infinity;
-  const pending = foldProjectState(events).attention.filter((item) => item.seq < inputSeq);
+  const pending = attention.filter((item) => item.seq < inputSeq);
   return { stale: unnoted || pending.length > 0, pending, unnoted };
 }
 

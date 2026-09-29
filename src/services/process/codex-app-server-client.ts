@@ -2,6 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { existsSync } from 'node:fs';
 import readline from 'node:readline';
+import { agentEnv } from '../infrastructure/agent-env.js';
 import { codexSkillsRoot } from '../infrastructure/agent-skills.js';
 import { createLogger } from '../infrastructure/logger.js';
 import { parseJson } from '../../utils/json.js';
@@ -274,7 +275,7 @@ export class CodexAppServerClient extends EventEmitter {
   }
 
   private async startAndInitialize(): Promise<void> {
-    const env = { ...process.env };
+    const env = agentEnv();
     delete env.OPENAI_API_KEY;
 
     this.child = spawn('codex', [

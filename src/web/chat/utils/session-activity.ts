@@ -1,3 +1,4 @@
+import { SLEEP_AFTER_MS } from '@/constants/session-sleep';
 import type { NeedsYouItem, UnifiedConversationSummary } from '../types';
 
 /**
@@ -8,12 +9,6 @@ import type { NeedsYouItem, UnifiedConversationSummary } from '../types';
 export function lastUsedAt(session: UnifiedConversationSummary): number {
   return new Date(session.lastActivityAt ?? session.updatedAt).getTime();
 }
-
-/**
- * Quiet for longer than this, a session is Sleeping rather than Idle. The
- * server's auto-archive (auto-archive-service.ts) archives it a week later.
- */
-export const SLEEP_AFTER_MS = 30 * 60 * 1000;
 
 /**
  * A project's ask lights Needs you for this long after it was made; after
@@ -61,16 +56,38 @@ export type SessionActivity =
   | { kind: 'failed'; message: string }
   | { kind: 'compacting' }
   | { kind: 'working'; level: WorkingLevel; busyWorkers: number }
-  | { kind: 'waiting' }
+  | { kind: 'waiting'; /** What it declared it is waiting on. */ waitingOn?: string; waitingWorkers: number }
   | { kind: 'idle' }
   | { kind: 'sleeping' };
 
 /** Every state the icon can draw. */
 export type SessionActivityKind = SessionActivity['kind'];
 
-/** A worker counts as busy while it runs or holds work that will report back. */
-function workerBusy(c: UnifiedConversationSummary): boolean {
-  return c.status === 'pending' || c.status === 'ongoing' || Boolean(c.pendingWork);
+/** Running a turn right now. */
+export function isRunning(c: UnifiedConversationSummary): boolean {
+  return c.status === 'pending' || c.status === 'ongoing';
+}
+
+/** What a worker declared it is waiting on, from its project's status, while it still is. */
+export function declaredWait(
+  c: UnifiedConversationSummary,
+  conversations: UnifiedConversationSummary[],
+): string | undefined {
+  if (!c.pickedUpFrom) return undefined;
+  return conversations.find(p => p.conversationId === c.pickedUpFrom)?.projectWorkerWaits?.[c.conversationId] || undefined;
+}
+
+/** Not running, but holding work that will report back or a wait it declared. */
+export function isWaiting(c: UnifiedConversationSummary, conversations: UnifiedConversationSummary[]): boolean {
+  return !isRunning(c) && (Boolean(c.pendingWork) || Boolean(declaredWait(c, conversations)));
+}
+
+/** A session's live workers: dispatched from it and not archived. */
+export function liveWorkers(
+  conversation: UnifiedConversationSummary,
+  conversations: UnifiedConversationSummary[],
+): UnifiedConversationSummary[] {
+  return conversations.filter(c => c.pickedUpFrom === conversation.conversationId && !c.archived);
 }
 
 /**
@@ -78,9 +95,10 @@ function workerBusy(c: UnifiedConversationSummary): boolean {
  * reports: an open permission prompt or question (including a running turn
  * held on its question card), a last run that ended in an
  * error, a project ask Jev judges needs the user made within the hour, compaction, whether the
- * session or any of its workers is running, work it armed that will report
- * back, and how long it has been quiet. Working has three levels by busy
- * workers — none or one, two or three, four or more.
+ * session or any of its workers is running a turn, work it armed that will report
+ * back or a wait it declared, and how long it has been quiet. Working has three
+ * levels by running workers — none or one, two or three, four or more. A
+ * project whose workers are all parked is Waiting, not Working.
  */
 export function deriveSessionActivity(
   conversation: UnifiedConversationSummary,
@@ -94,15 +112,17 @@ export function deriveSessionActivity(
   if (asks.length > 0) return { kind: 'needs-you', asks, strength: Math.max(...asks.map(item => needsYouStrength(item, now))) };
   if (conversation.compacting) return { kind: 'compacting' };
 
-  const busyWorkers = conversations.filter(c =>
-    c.pickedUpFrom === conversation.conversationId && !c.archived && workerBusy(c)).length;
-  const running = conversation.status === 'pending' || conversation.status === 'ongoing';
-
-  if (running || busyWorkers > 0) {
+  const workers = liveWorkers(conversation, conversations);
+  const busyWorkers = workers.filter(isRunning).length;
+  if (isRunning(conversation) || busyWorkers > 0) {
     const level: WorkingLevel = busyWorkers >= 4 ? 3 : busyWorkers >= 2 ? 2 : 1;
     return { kind: 'working', level, busyWorkers };
   }
-  if (conversation.pendingWork) return { kind: 'waiting' };
+  const waitingOn = declaredWait(conversation, conversations);
+  const waitingWorkers = workers.filter(w => isWaiting(w, conversations)).length;
+  if (conversation.pendingWork || waitingOn || waitingWorkers > 0) {
+    return { kind: 'waiting', ...(waitingOn ? { waitingOn } : {}), waitingWorkers };
+  }
   return now - lastUsedAt(conversation) > SLEEP_AFTER_MS ? { kind: 'sleeping' } : { kind: 'idle' };
 }
 
@@ -139,8 +159,10 @@ export function describeSessionActivity(
         ? 'Working'
         : `Working · ${activity.busyWorkers} worker${activity.busyWorkers === 1 ? '' : 's'}`;
     case 'waiting':
-      return conversation.pendingWork
-        ? `Waiting · ${PENDING_WORK_WORDS[conversation.pendingWork]}`
+      if (activity.waitingOn) return `Waiting on ${activity.waitingOn}`;
+      if (conversation.pendingWork) return `Waiting · ${PENDING_WORK_WORDS[conversation.pendingWork]}`;
+      return activity.waitingWorkers > 0
+        ? `Waiting · ${activity.waitingWorkers} worker${activity.waitingWorkers === 1 ? '' : 's'} waiting`
         : 'Waiting';
     case 'idle': return `Idle · ${quietFor(now - lastUsedAt(conversation))}`;
     case 'sleeping': return `Sleeping · idle ${quietFor(now - lastUsedAt(conversation))}`;

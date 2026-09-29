@@ -14,7 +14,8 @@
 import { getHarnessSessionManager } from '../../harness/setup.js';
 import { appendCustomHarnessEvent } from '../../harness/harness-custom-events.js';
 import { createLogger } from '../infrastructure/logger.js';
-import { getEvents } from '../../session-history/repository.js';
+import { getEvents, getEventsVersion } from '../../session-history/repository.js';
+import { cachedFold } from './fold-cache.js';
 import { ConversationService } from './conversation-service.js';
 import {
   PROJECT_NOTED_EVENT,
@@ -23,7 +24,8 @@ import {
   foldProjectState,
   formatAgo,
   staleProjectItems,
-  unaddressedAfterTurn,
+  TURN_STALENESS_EVENT_TYPES,
+  turnStaleness,
   type ProjectNotedData,
   type ProjectState,
 } from '../../types/project-state.js';
@@ -37,7 +39,7 @@ const logger = createLogger('ProjectState');
 const NUDGE_ITEMS = 3;
 
 export function readProjectState(coordinatorConversationId: string): ProjectState {
-  return foldProjectState(getEvents(coordinatorConversationId, { types: [...PROJECT_FOLD_EVENT_TYPES] }));
+  return cachedFold('projectState', coordinatorConversationId, PROJECT_FOLD_EVENT_TYPES, foldProjectState);
 }
 
 /** Append one note to the coordinator's log. Returns the event seq (the id an `open` note is closed by), or null. */
@@ -50,7 +52,7 @@ export function appendProjectNote(coordinatorConversationId: string, data: Proje
   // Read before appending: the project's name is regenerated when its outcome
   // actually changes, so the comparison needs the outcome this note replaces.
   const previousOutcome = data.kind === 'outcome'
-    ? foldProjectState(getEvents(coordinatorConversationId)).outcome
+    ? readProjectState(coordinatorConversationId).outcome
     : null;
   const appended = appendCustomHarnessEvent(manager, coordinatorConversationId, PROJECT_NOTED_EVENT, data);
   if (!appended) {
@@ -64,6 +66,15 @@ export function appendProjectNote(coordinatorConversationId: string, data: Proje
     onProjectOutcomeChanged(coordinatorConversationId, previousOutcome, data.text, data.name);
   }
   return appended.seq;
+}
+
+/** `unaddressedAfterTurn` over the log, reading only the last turn's events and the cached project state. */
+function unaddressedSinceLastInput(coordinatorConversationId: string) {
+  // Seqs start at 1, so 0 is a log with no input yet.
+  const lastInput = getEventsVersion(coordinatorConversationId, ['input:sent']).maxSeq;
+  const turn = getEvents(coordinatorConversationId, { fromSeq: lastInput + 1, types: TURN_STALENESS_EVENT_TYPES });
+  const attention = readProjectState(coordinatorConversationId).attention;
+  return turnStaleness(turn, lastInput > 0 ? lastInput : Infinity, attention);
 }
 
 /**
@@ -80,7 +91,7 @@ export function appendProjectNote(coordinatorConversationId: string, data: Proje
 export function buildProjectStateNudge(coordinatorConversationId: string, cli: string): string {
   const conversation = ConversationService.getInstance().getConversation(coordinatorConversationId);
   if (!conversation?.coordinator) return '';
-  const { stale, pending, unnoted } = unaddressedAfterTurn(getEvents(coordinatorConversationId));
+  const { stale, pending, unnoted } = unaddressedSinceLastInput(coordinatorConversationId);
   if (!stale) return '';
   const manager = getHarnessSessionManager();
   if (manager) appendCustomHarnessEvent(manager, coordinatorConversationId, PROJECT_NUDGED_EVENT, {});

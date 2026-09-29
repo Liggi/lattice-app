@@ -317,6 +317,8 @@ export interface UnifiedConversationSummary {
   projectWorkingOn?: string | null;
   /** On a project: each worker's task, the name its right-panel card carries. Merged from the status poll. */
   projectWorkerTasks?: Record<string, string> | null;
+  /** On a project: what each worker declared it is waiting on, while it still is. Merged from the status poll. */
+  projectWorkerWaits?: Record<string, string> | null;
   /** When a scheduled wake-up fires, epoch ms. Merged from the status poll. */
   wakeAt?: number | null;
   streamingId: string | null;

@@ -24,7 +24,8 @@ import { currentCodexReasoningEffort, knownCodexReasoningEffort } from '../servi
 import { parseAttachmentBlocks } from './attachment-blocks.js';
 import { ConversationService } from '../services/sessions/conversation-service.js';
 import { appendWorkerEvent, isWorkerQuestionSeq, openQuestion, readWorkerStates } from '../services/sessions/worker-events.js';
-import { reopenArchivedWorker } from '../session-history/repository.js';
+import { getEvent, reopenArchivedWorker } from '../session-history/repository.js';
+import { externalizeEventImages, findEventImage } from './event-images.js';
 import { buildCoordinatorRestore } from '../services/sessions/context-compaction.js';
 import { buildProjectOrientation } from '../services/sessions/project-orientation.js';
 import { buildWorkerDriftNote } from '../services/sessions/worker-drift.js';
@@ -204,7 +205,9 @@ function receiptForImmediate(result: ImmediateDeliveryResult, inboxId: string): 
 
 export function createHarnessRoutes(sessionManager: SessionManager, resolvers: HarnessRouteResolvers): Router {
   const router = Router();
-  const sseHandler = createSSEHandler(sessionManager);
+  const sseHandler = createSSEHandler(sessionManager, {
+    transformEvent: (sessionId, event) => externalizeEventImages(sessionId, event),
+  });
 
   /**
    * Compact by spawning a fresh run against the persisted provider session,
@@ -1162,8 +1165,25 @@ export function createHarnessRoutes(sessionManager: SessionManager, resolvers: H
       hasMore,
     });
 
-    res.json({ events: page, hasMore });
+    res.json({ events: page.map((event) => externalizeEventImages(sessionId, event)), hasMore });
   }));
+
+  // An image a served event names by URL (event-images.ts). An event never
+  // changes once written, so the browser may keep the answer.
+  router.get('/:sessionId/events/:seq/images/:index', (req: Request, res: Response) => {
+    const { sessionId } = req.params;
+    const seq = Number(req.params.seq);
+    const index = Number(req.params.index);
+    const event = Number.isInteger(seq) && Number.isInteger(index) ? getEvent(sessionId, seq) : null;
+    const image = event ? findEventImage(event.data, index) : null;
+    if (!image) {
+      res.status(404).json({ error: 'No such image' });
+      return;
+    }
+    res.setHeader('Content-Type', image.mediaType);
+    res.setHeader('Cache-Control', 'private, max-age=31536000, immutable');
+    res.send(image.bytes);
+  });
 
   // Status snapshot
   router.get('/:sessionId/status', (req: Request, res: Response) => {

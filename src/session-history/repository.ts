@@ -536,6 +536,15 @@ export function getEvents(conversationId: string, opts: EventQueryOptions = {}):
   return rows.map(rowToEvent);
 }
 
+/** The newest seq and the number of events of these types: what a fold over them depends on. */
+export function getEventsVersion(conversationId: string, types: ReadonlyArray<string>): { maxSeq: number; count: number } {
+  const row = getDb().prepare(
+    `SELECT MAX(seq) AS maxSeq, COUNT(*) AS count FROM harness_events
+      WHERE session_id = ? AND type IN (${types.map(() => '?').join(',')})`,
+  ).get(conversationId, ...types) as { maxSeq: number | null; count: number };
+  return { maxSeq: row.maxSeq ?? 0, count: row.count };
+}
+
 /** Events of the given types, newest first, read lazily so a caller that stops early parses only what it read. */
 export function* iterateEventsNewestFirst(conversationId: string, types: readonly string[]): Generator<RawEvent> {
   const rows = getDb()

@@ -1,3 +1,4 @@
+import type { ReleaseNote, UpdateStatus } from '@/types/update';
 import type {
   CommandsResponse,
   FileSystemListQuery,
@@ -93,5 +94,17 @@ export class ConfigApi extends TeamsApi {
 
   exportLogs(minutes = 10): void {
     window.open(`/api/logs/export?minutes=${minutes}`, '_blank');
+  }
+
+  async getUpdateStatus(): Promise<UpdateStatus> {
+    return this.apiCall('/api/update');
+  }
+
+  async getReleaseNotes(): Promise<{ notes: ReleaseNote[] }> {
+    return this.apiCall('/api/update/notes', { timeout: 20_000 });
+  }
+
+  async startUpdate(): Promise<UpdateStatus> {
+    return this.apiCall('/api/update', { method: 'POST', body: '{}' });
   }
 }

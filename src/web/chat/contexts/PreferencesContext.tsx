@@ -3,6 +3,7 @@ import React, { createContext, useContext, useState, useEffect, useCallback, use
 import { api } from '../services/api';
 import type { Preferences, Theme } from '../types';
 import type { CoordinatorConfig } from '@/types/config';
+import { claudeEndpoints as endpointsIn, type ClaudeEndpoint } from '@/constants/claude-endpoint';
 
 interface ServerConfig {
   host?: string;
@@ -25,6 +26,10 @@ export interface PreferencesContextType {
   serverConfig: ServerConfig | null;
   /** The config's `coordinator` section, for the defaults a new coordinator starts on. */
   coordinatorConfig: CoordinatorConfig | null;
+  /** Saved servers a Claude session can run on instead of Anthropic, picked by model. */
+  claudeEndpoints: ClaudeEndpoint[];
+  /** Takes a config the server returned, after Settings saves the endpoints. */
+  setClaudeEndpointsFrom: (config: unknown) => void;
   theme: Theme;
   updatePreferences: (updates: Partial<Preferences>) => Promise<void>;
   setServerConfig: (config: ServerConfig | null) => void;
@@ -47,6 +52,7 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
   const [preferences, setPreferences] = useState<Preferences | null>(null);
   const [serverConfig, setServerConfig] = useState<ServerConfig | null>(null);
   const [coordinatorConfig, setCoordinatorConfig] = useState<CoordinatorConfig | null>(null);
+  const [claudeEndpoints, setClaudeEndpoints] = useState<ClaudeEndpoint[]>([]);
   const [devMode, setDevMode] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
@@ -58,6 +64,7 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
         setPreferences((config.interface as Preferences | undefined) ?? null);
         setServerConfig((config.server as ServerConfig | undefined) ?? null);
         setCoordinatorConfig(config.coordinator ?? null);
+        setClaudeEndpoints(endpointsIn(config));
         setDevMode(config.interface?.devMode === true);
       } catch (err) {
         setError(err instanceof Error ? err : new Error('Failed to load preferences'));
@@ -79,6 +86,10 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
     }
   }, []);
 
+  const setClaudeEndpointsFrom = useCallback((config: unknown) => {
+    setClaudeEndpoints(endpointsIn(config));
+  }, []);
+
   const handleSetServerConfig = useCallback((config: ServerConfig | null) => {
     setServerConfig(config);
   }, []);
@@ -87,6 +98,8 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
     preferences,
     serverConfig,
     coordinatorConfig,
+    claudeEndpoints,
+    setClaudeEndpointsFrom,
     theme: fixedTheme,
     updatePreferences,
     setServerConfig: handleSetServerConfig,
@@ -97,6 +110,8 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
     preferences,
     serverConfig,
     coordinatorConfig,
+    claudeEndpoints,
+    setClaudeEndpointsFrom,
     updatePreferences,
     handleSetServerConfig,
     isLoading,

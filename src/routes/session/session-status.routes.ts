@@ -10,7 +10,7 @@ import { deriveSessionStatusFromEvents, type RunFailure } from '@/harness/derive
 import type { PendingWork } from '@/harness/derive-pending-work.js';
 import { deriveScheduledWakeup } from '@liggi/agent-ui-harness/protocol';
 import { foldDecisions, isOpenDecision } from '@/types/decisions.js';
-import { projectNeedsYou, projectWorkerTasks, projectWorkingOn, type NeedsYouItem } from '@/services/sessions/project-needs-you.js';
+import { projectNeedsYou, projectWorkerTasks, projectWorkerWaits, projectWorkingOn, type NeedsYouItem } from '@/services/sessions/project-needs-you.js';
 
 interface SessionStatusRoutesDeps {
   activeConversationRegistry: ActiveConversationRegistry;
@@ -59,6 +59,8 @@ interface SessionStatusInfo {
   /** On a coordinator: the project's Working on line, without thread references. */
   workingOn?: string | null;
   workerTasks?: Record<string, string> | null;
+  /** On a coordinator: what each of its workers declared it is waiting on, while it still is. */
+  workerWaits?: Record<string, string> | null;
   lastTurnUsage?: {
     input_tokens: number;
     output_tokens: number;
@@ -178,7 +180,7 @@ function deriveCached(
     compacting: derived.compacting,
     failure: derived.failure,
     awaitingAnswer: derived.status === 'ongoing'
-      && [...foldDecisions(storage.readDecisionEvents(conversationId)).values()].some(isOpenDecision),
+      && [...foldDecisions(storage.readDecisionEvents(conversationId)).values()].some((decision) => decision.asked.holdsTurn && isOpenDecision(decision)),
   };
   eventStatusCache.set(conversationId, entry);
   return entry;
@@ -267,6 +269,7 @@ export function createSessionStatusRoutes(deps: SessionStatusRoutesDeps): Router
           responseSessions[conversationId].needsYou = needsYou;
           responseSessions[conversationId].workingOn = projectWorkingOn(conversationId);
           responseSessions[conversationId].workerTasks = projectWorkerTasks(conversationId);
+          responseSessions[conversationId].workerWaits = projectWorkerWaits(conversationId);
         }
       } catch (err) {
         logger.warn('failed to read whether a project needs the user', {

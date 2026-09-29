@@ -7,6 +7,9 @@ import { PROVIDER_SIGN_IN_QUERY_KEY } from '../../hooks/useProviderSignIn';
 import { api } from '../../services/api';
 import { ClaudeLoginTerminal, type LoginAttemptState } from './ClaudeLoginTerminal';
 import { SecretKeyField } from './SecretKeyField';
+import { ClaudeEndpointsCard, type ClaudeEndpointUpdate } from './ClaudeEndpointsCard';
+import { usePreferencesContext } from '../../contexts/PreferencesContext';
+import type { ClaudeEndpointSetting } from '../../services/api/types';
 
 type ClaudeStatusResponse =
   | { available: false; installed: boolean; error: string }
@@ -101,6 +104,8 @@ export function ProviderAuthTab(): JSX.Element {
   const [claudeAuthMode, setClaudeAuthMode] = useState<'cli' | 'api-key'>('cli');
   const [anthropicKeyConfigured, setAnthropicKeyConfigured] = useState(false);
   const [billingError, setBillingError] = useState<string | null>(null);
+  const [endpoints, setEndpoints] = useState<ClaudeEndpointSetting[]>([]);
+  const { setClaudeEndpointsFrom } = usePreferencesContext();
 
   // Codex device-code state (CLI polls OpenAI; we poll the CLI)
   const [codexStatus, setCodexStatus] = useState<CodexStatusResponse | null>(null);
@@ -153,6 +158,7 @@ export function ProviderAuthTab(): JSX.Element {
     api.getConfig().then((config) => {
       setClaudeAuthMode(config.server?.claudeAuthMode === 'api-key' ? 'api-key' : 'cli');
       setAnthropicKeyConfigured(config.anthropic?.apiKeyConfigured === true);
+      setEndpoints(config.claudeEndpoints ?? []);
     }).catch((err) => {
       setBillingError(err instanceof Error ? err.message : 'Could not read the billing setting');
     });
@@ -197,6 +203,12 @@ export function ProviderAuthTab(): JSX.Element {
       throw err;
     }
   }, [claudeAuthMode]);
+
+  const saveEndpoints = useCallback(async (list: ClaudeEndpointUpdate[]) => {
+    const config = await api.updateConfig({ claudeEndpoints: list });
+    setEndpoints(config.claudeEndpoints ?? []);
+    setClaudeEndpointsFrom(config);
+  }, [setClaudeEndpointsFrom]);
 
   const claudeLogout = useCallback(async () => {
     setClaudeError(null);
@@ -373,6 +385,8 @@ export function ProviderAuthTab(): JSX.Element {
           </div>
         )}
       </ProviderCard>
+
+      <ClaudeEndpointsCard endpoints={endpoints} onSave={saveEndpoints} />
 
       <ProviderCard
         name="Codex"

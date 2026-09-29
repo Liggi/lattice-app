@@ -85,6 +85,7 @@ Debug logs go to `~/.lattice-app/logs/`.
 - `pnpm deploy:quick` skips lint for faster iteration.
 - For harness or toolkit changes: rebuild them with `pnpm build:packages`, then `pnpm deploy`.
 - Dev-mode UI changes: restart the dev server if behavior looks stale.
+- A source checkout started with `LATTICE_CLIENT=built` serves `dist/web` instead of Vite's dev client. A client-only change goes live with `pnpm build:web:live` (staged build, swapped into `dist/web`, no restart) and a page reload; for a toolkit change, run `pnpm build:packages` first (the build reads the toolkit's `dist` unless `LATTICE_TOOLKIT_SRC` points it at the source). Server, harness and daemon changes still need a restart.
 
 ### Concurrent deploys can trample each other
 

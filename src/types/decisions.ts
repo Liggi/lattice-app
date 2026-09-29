@@ -53,6 +53,12 @@ export interface DecisionAskedData {
   options: DecisionOptionData[];
   /** The coordinator's project thread this question is about, when it named one. */
   thread?: number;
+  /**
+   * The asking turn stays open until the user answers (Codex's
+   * request_user_input_async), so the card shows at once rather than at the
+   * turn's end.
+   */
+  holdsTurn?: boolean;
 }
 
 export interface DecisionAnsweredData {
@@ -168,20 +174,31 @@ export function withdrawnDecisionAnswers(events: readonly DecisionEventLike[]): 
 }
 
 /**
- * The thread's events with each question moved to the end of the turn that
- * asked it. An agent asks from a tool call and usually writes its message
- * after, so in log order the card would sit above the message that leads up
- * to it. It goes after the turn's `turn:end` (or `run:end`), or last while
- * that turn is still running. A Codex question is answered while its turn is
- * still running, so an answer, or a message that settles it, also places the
- * card, just above itself.
+ * Whether an event ends the turn a question was asked in, which is when its
+ * card shows. A compaction's own `turn:end` falls mid-turn, so it does not.
  */
-export function placeDecisionsAtTurnEnd<E extends { type: string }>(events: readonly E[]): readonly E[] {
+export function endsAskingTurn(event: { type: string; data?: unknown }): boolean {
+  if (event.type === 'run:end' || event.type === 'run:error') return true;
+  return event.type === 'turn:end' && !(event.data as { compact?: boolean } | undefined)?.compact;
+}
+
+/**
+ * The thread's events with each question moved to the end of the turn that
+ * asked it. An agent asks from a tool call and writes its message after, so
+ * the card goes after the turn's end (`turn:end`, `run:end` or `run:error`),
+ * below that message. While the turn is still running the card is not shown
+ * at all: shown last, it would appear before the message that explains it
+ * has been written (2026-09-29: the user was answering cards without their
+ * context). A question that holds its turn open (`holdsTurn`) shows at once,
+ * as nothing more comes until it is answered. An answer, or a message that
+ * settles a question, also places the card, just above itself.
+ */
+export function placeDecisionsAtTurnEnd<E extends { type: string; data?: unknown }>(events: readonly E[]): readonly E[] {
   if (!events.some((event) => event.type === DECISION_ASKED_EVENT)) return events;
   const placed: E[] = [];
   let held: E[] = [];
   for (const event of events) {
-    if (event.type === DECISION_ASKED_EVENT) {
+    if (event.type === DECISION_ASKED_EVENT && !(event.data as DecisionAskedData | undefined)?.holdsTurn) {
       held.push(event);
       continue;
     }
@@ -190,10 +207,10 @@ export function placeDecisionsAtTurnEnd<E extends { type: string }>(events: read
       held = [];
     }
     placed.push(event);
-    if (held.length > 0 && (event.type === 'turn:end' || event.type === 'run:end')) {
+    if (held.length > 0 && endsAskingTurn(event)) {
       placed.push(...held);
       held = [];
     }
   }
-  return [...placed, ...held];
+  return placed;
 }

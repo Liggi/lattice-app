@@ -6,6 +6,7 @@ import type { Logger } from './services/infrastructure/logger.js';
 import { parseArgs } from './cli-parser.js';
 import { rotateOversizedLogs } from './services/infrastructure/structured-log-files.js';
 import { getEventJournal } from './services/infrastructure/event-journal.js';
+import { getUpdateService } from './services/updates/update-service.js';
 
 let globalServer: LatticeServer | null = null;
 let logger: Logger | null = null;
@@ -42,12 +43,28 @@ export async function main(): Promise<void> {
   process.on('SIGTERM', () => void shutdown('SIGTERM'));
   process.on('SIGINT', () => void shutdown('SIGINT'));
   
+  // An installed update restarts into the new code in this same process, so
+  // whatever launched Lattice (a terminal, tmux, a service manager) keeps it.
+  const updates = getUpdateService();
+  updates.setRestartHandler(async () => {
+    serverLogger.info('Restarting into the updated Lattice');
+    updates.stop();
+    if (globalServer) await globalServer.stop();
+    try {
+      process.execve!(process.execPath, [process.execPath, ...process.execArgv, ...process.argv.slice(1)], process.env);
+    } catch (error) {
+      serverLogger.error('Could not restart into the updated Lattice; start it again by hand', error);
+      process.exit(1);
+    }
+  });
+
   try {
     await globalServer.start();
   } catch (error) {
     serverLogger.error('Failed to start server:', error);
     process.exit(1);
   }
+  updates.start();
 }
 
 // Start the server only when this file is the entry point (e.g. node dist/server.js).

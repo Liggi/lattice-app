@@ -84,7 +84,7 @@ vi.mock('../../src/services/infrastructure/config-service.js', () => ({
 }));
 vi.mock('../../src/session-history/repository.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
-  getEvents: (conversationId: string) => storedEvents.get(conversationId) ?? [],
+  ...(await import('./fake-event-reads.js')).fakeEventReads((conversationId) => storedEvents.get(conversationId) ?? []),
   iterateEventsNewestFirst: (conversationId: string, types: readonly string[]) =>
     (storedEvents.get(conversationId) ?? []).filter((event) => types.includes(event.type)).reverse(),
 }));

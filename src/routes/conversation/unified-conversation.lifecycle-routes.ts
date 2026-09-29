@@ -29,8 +29,8 @@ import {
   knownCodexReasoningEffort,
   resolveCodexReasoningEffort,
 } from '@/services/sessions/codex-effort.js';
-import { buildCoordinatorPreamble, buildWorkerPreamble, latticeCli } from '@/services/sessions/pickup-prompts.js';
-import { installedProviders } from '@/services/sessions/installed-providers.js';
+import { buildCoordinatorPreamble, buildSessionPreamble, buildWorkerPreamble, latticeCli } from '@/services/sessions/pickup-prompts.js';
+import { claudeEndpointModels, installedProviders } from '@/services/sessions/installed-providers.js';
 import { appendWorkerEvent } from '@/services/sessions/worker-events.js';
 import { readProjectState } from '@/services/sessions/project-state.js';
 import { buildProjectOrientation } from '@/services/sessions/project-orientation.js';
@@ -300,8 +300,8 @@ export function registerUnifiedConversationLifecycleRoutes(
               thread: threadAssignment ? { seq: threadAssignment.seq, text: threadAssignment.text } : null,
             }) + message
           : body.coordinator
-            ? buildCoordinatorPreamble({ conversationId, workingDirectory, cli: latticeCli(), installedProviders: installedProviders() }) + message
-            : message;
+            ? buildCoordinatorPreamble({ conversationId, workingDirectory, cli: latticeCli(), installedProviders: installedProviders(), claudeEndpointModels: claudeEndpointModels() }) + message
+            : buildSessionPreamble(latticeCli()) + (message ?? '');
 
         // Prime conversation metadata
         await sessionInfoService.updateSessionInfo(conversationId, {

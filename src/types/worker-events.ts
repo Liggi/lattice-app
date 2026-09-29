@@ -17,6 +17,7 @@
 
 import type { ProjectState } from './project-state.js';
 import type { UnreadInboxSummary } from './inbox.js';
+import type { PendingWork } from '../harness/derive-pending-work.js';
 
 export const WORKER_EVENT_TYPES = [
   'worker:started',
@@ -157,6 +158,14 @@ export interface WorkerReportedData {
   movedFrom?: MovedEventOrigin;
   /** The thread it counts against here, when a move carried it with its thread. */
   thread?: number;
+  /**
+   * A turn its own finished task woke, which only repeated that it is still
+   * waiting (`isBareWaitRepeat`). Recorded so the card shows the current wait,
+   * but not sent to the coordinator, so it is not owed a disposition and the
+   * thread does not show it. On 2026-09-29 one worker's four subagents sent
+   * its coordinator five reports saying only how many were left.
+   */
+  quietRepeat?: boolean;
 }
 
 /**
@@ -326,6 +335,33 @@ export function workerWaitPhrase(text: string): string | null {
   return phrase || null;
 }
 
+/** Whether the text is a `Waiting on:` line and nothing more: no findings, no body under it. */
+export function isBareWait(text: string): boolean {
+  if (!workerWaitPhrase(text)) return false;
+  const lines = text.split('\n').filter((line) => line.trim().length > 0);
+  if (lines.length === 1) return true;
+  // The marker alone on its line, the phrase on the next.
+  return lines.length === 2 && /^[#*_\s]*waiting on\s*:[*_\s]*$/i.test(lines[0]);
+}
+
+/**
+ * Whether a reply from a turn the worker's own task started tells the
+ * coordinator nothing its last report did not: a bare wait after a wait, or
+ * the last report word for word. A finished subagent wakes its parent twice,
+ * for the handback and for the task notice, and both turns end on the same
+ * reply (2026-09-29: a final report reached front twice, two seconds apart).
+ * `last` is the worker's standing in the coordinator's log and the text of
+ * its latest report; only a worker still at 'reported' counts, since a
+ * message or new assignment since then makes any reply news again.
+ */
+export function isQuietRepeat(
+  reply: string,
+  last: { phase: WorkerPhase; waitingOn?: string | null; text: string | null } | null,
+): boolean {
+  if (last?.phase !== 'reported') return false;
+  return (isBareWait(reply) && Boolean(last.waitingOn)) || reply === last.text;
+}
+
 /**
  * Prefixes of the messages the server delivers into a coordinator on a
  * worker's behalf. The coordinator's thread hides these inputs — the worker
@@ -372,12 +408,12 @@ export function stripContextRestore(text: string): string {
 }
 
 /**
- * A coordinator's or worker's first input carries the server-written
+ * A coordinator's, worker's or New-screen session's first input carries the server-written
  * preamble from `pickup-prompts.ts` ahead of the caller's own text, ending in
  * a `---` line the preamble itself never contains. The thread shows only the
  * text the caller wrote; `conversations.initial_prompt` already does.
  */
-export const PREAMBLE_OPENINGS = ['You are `front`:', 'Picked up from '] as const;
+export const PREAMBLE_OPENINGS = ['You are `front`:', 'Picked up from ', 'This session runs in Lattice, '] as const;
 export const PREAMBLE_END = '\n---\n';
 
 /** The input without a coordinator or worker preamble in front of it. */
@@ -548,6 +584,12 @@ export interface WorkerCardState extends WorkerState {
    */
   queued?: boolean;
   /**
+   * Work the worker armed that is still running after its turn ended: its own
+   * subagents, a workflow, a background command or Monitor, a scheduled
+   * wake-up. Served only while `runtime` is `idle`; null otherwise.
+   */
+  pendingWork?: PendingWork | null;
+  /**
    * One short phrase for what the worker is doing now ("Testing the
    * composer"), written from its own work evidence — see
    * `services/sessions/worker-activity.ts`. Null whenever there is none to
@@ -570,11 +612,37 @@ export interface WorkerCardState extends WorkerState {
  * as a running worker would flip every reported card to Working the moment
  * the runtime could not be asked.
  */
-export function workerResumedAfterReport(worker: Pick<WorkerCardState, 'phase' | 'runtime' | 'queued'>): boolean {
+export function workerResumedAfterReport(worker: Pick<WorkerCardState, 'phase' | 'runtime' | 'queued' | 'pendingWork'>): boolean {
   if (worker.phase !== 'reported') return false;
   return worker.runtime === 'working' || worker.runtime === 'starting' || worker.runtime === 'stopping'
-    || worker.queued === true;
+    || worker.queued === true || workerPendingState(worker) === 'working';
 }
+
+/**
+ * What work a worker armed before its turn ended says about it while no turn
+ * runs. Its own subagents or workflow running are the worker working; a
+ * background command, Monitor or scheduled wake-up is the worker waiting on
+ * it. On 2026-09-29 a worker whose four subagents were still reading code
+ * showed as Reported, which reads as finished.
+ */
+export function workerPendingState(worker: Pick<WorkerCardState, 'runtime' | 'pendingWork'>): 'working' | 'waiting' | null {
+  if (worker.runtime !== 'idle') return null;
+  switch (worker.pendingWork) {
+    case 'subagent':
+    case 'workflow':
+      return 'working';
+    case 'background_task':
+    case 'scheduled_wakeup':
+      return 'waiting';
+    default:
+      return null;
+  }
+}
+
+const PENDING_WAIT_WORDS: Record<'background_task' | 'scheduled_wakeup', string> = {
+  background_task: 'a background command',
+  scheduled_wakeup: 'a scheduled wake-up',
+};
 
 /**
  * What a reported worker is waiting on, while it still is. Resuming clears it
@@ -582,9 +650,14 @@ export function workerResumedAfterReport(worker: Pick<WorkerCardState, 'phase' |
  * which stays true after that turn ends — and the next report replaces it. Shared by the panel and the CLI
  * roster for the same reason as `workerRuntimeWord`.
  */
-export function workerWaitingOn(worker: Pick<WorkerCardState, 'phase' | 'runtime' | 'queued' | 'waitingOn' | 'workedSinceReport'>): string | null {
-  if (worker.phase !== 'reported' || workerResumedAfterReport(worker) || worker.workedSinceReport) return null;
-  return worker.waitingOn ?? null;
+export function workerWaitingOn(worker: Pick<WorkerCardState, 'phase' | 'runtime' | 'queued' | 'waitingOn' | 'workedSinceReport' | 'pendingWork'>): string | null {
+  if (worker.phase === 'asked' || workerResumedAfterReport(worker)) return null;
+  if (worker.phase === 'reported' && !worker.workedSinceReport && worker.waitingOn) return worker.waitingOn;
+  // Armed work stands in for a wait the worker did not declare, or one its
+  // later output cleared: the command is still running, so it is waiting.
+  const pending = worker.pendingWork;
+  if (worker.runtime === 'idle' && (pending === 'background_task' || pending === 'scheduled_wakeup')) return PENDING_WAIT_WORDS[pending];
+  return null;
 }
 
 /**
@@ -600,7 +673,8 @@ export function workerWaitingOn(worker: Pick<WorkerCardState, 'phase' | 'runtime
  * Callers own their own casing and their own handling of archived, asked and
  * reported — this answers only the unfinished case.
  */
-export function workerRuntimeWord(worker: Pick<WorkerCardState, 'runtime' | 'queued'>): string {
+export function workerRuntimeWord(worker: Pick<WorkerCardState, 'runtime' | 'queued' | 'pendingWork'>): string {
+  if (workerPendingState(worker) === 'working') return 'Working';
   switch (worker.runtime) {
     case 'working':
     case 'starting':
@@ -642,6 +716,12 @@ export interface WorkersResponse {
    * rather than as nothing waiting.
    */
   unread?: Record<string, UnreadInboxSummary>;
+  /**
+   * The newest seq in the conversation's log when the server began reading
+   * it: everything up to here is reflected. A client that has seen nothing
+   * newer need not ask again.
+   */
+  asOfSeq?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -714,6 +794,7 @@ export function foldWorkerHistory(events: readonly WorkerEventLike[]): WorkerHis
         break;
       }
       case 'worker:reported': {
+        if ((event.data as WorkerReportedData).quietRepeat) break;
         const { text } = event.data as WorkerReportedData;
         rows.push({ tag: 'report', worker: data.worker, text: `Worker reported: ${firstLine(text)}`, at });
         break;

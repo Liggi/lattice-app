@@ -88,22 +88,23 @@ describe('sidebarLists', () => {
 });
 
 describe('sleeping', () => {
-  const asleep = { lastActivityAt: ago(31 * MINUTE) };
+  const asleep = { lastActivityAt: ago(3 * HOUR + MINUTE) };
   const ids = (list: UnifiedConversationSummary[]) => list.map(s => s.conversationId);
 
-  it('moves sleeping sessions and projects into their Sleeping groups, still newest-created first', () => {
+  it('moves sleeping sessions and projects into their Sleeping groups, most recently used first', () => {
     const lists = sidebarLists([
       session('conv-awake', 5),
       session('conv-asleep-old', 40, asleep),
-      session('conv-asleep-new', 3, asleep),
+      session('conv-asleep-new', 3, { lastActivityAt: ago(3 * HOUR + 30 * MINUTE) }),
       session('conv-project-awake', 8, { coordinator: true }),
       session('conv-project-asleep', 6, { coordinator: true, ...asleep }),
+      session('conv-project-asleep-new', 2, { coordinator: true, lastActivityAt: ago(3 * HOUR + 30 * MINUTE) }),
     ]);
 
     expect(ids(lists.sessions)).toEqual(['conv-awake']);
-    expect(ids(lists.sleepingSessions)).toEqual(['conv-asleep-new', 'conv-asleep-old']);
+    expect(ids(lists.sleepingSessions)).toEqual(['conv-asleep-old', 'conv-asleep-new']);
     expect(ids(lists.projects)).toEqual(['conv-project-awake']);
-    expect(ids(lists.sleepingProjects)).toEqual(['conv-project-asleep']);
+    expect(ids(lists.sleepingProjects)).toEqual(['conv-project-asleep', 'conv-project-asleep-new']);
   });
 
   it('never moves a pinned session', () => {
@@ -138,10 +139,10 @@ describe('sidebarOrderedIds', () => {
   // Ctrl+Tab walks this list, so it has to match the sidebar's render order.
   it('lists projects, sleeping projects, pinned, sessions, then sleeping sessions', () => {
     expect(sidebarOrderedIds(sidebarLists([
-      session('conv-sleeping-session', 0.5, { lastActivityAt: ago(HOUR) }),
+      session('conv-sleeping-session', 0.5, { lastActivityAt: ago(4 * HOUR) }),
       session('conv-session', 1),
       session('conv-pinned', 2, { pinned: true }),
-      session('conv-sleeping-project', 2.5, { coordinator: true, lastActivityAt: ago(HOUR) }),
+      session('conv-sleeping-project', 2.5, { coordinator: true, lastActivityAt: ago(4 * HOUR) }),
       session('conv-project', 3, { coordinator: true }),
     ]))).toEqual(['conv-project', 'conv-sleeping-project', 'conv-pinned', 'conv-session', 'conv-sleeping-session']);
   });

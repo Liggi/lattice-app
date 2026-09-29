@@ -465,3 +465,12 @@ describe('project routes', () => {
     });
   });
 });
+
+describe('a repeated wait the coordinator was not sent', () => {
+  it('is not owed a disposition', () => {
+    const wait = event('worker:reported', { worker: 'conv-w', model: null, text: 'Waiting on: four lookups' });
+    const repeat = event('worker:reported', { worker: 'conv-w', model: null, text: 'Waiting on: three lookups', quietRepeat: true });
+    const state = foldProjectState([accounting(), dispatched('conv-w'), wait, repeat]);
+    expect(state.attention.map((item) => item.seq)).toEqual([wait.seq]);
+  });
+});

@@ -15,6 +15,7 @@ import { LatticeLogo } from '../shared/LatticeLogo';
 
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip';
 import { ArchivedSessionList } from './ArchivedSessionList';
+import { UpdateNotice } from '../Update/UpdateNotice';
 import { useConversations } from '../../contexts/ConversationsContext';
 import { archivedSidebarQueryKey, useArchivedSidebarSessions } from '../../hooks/useArchivedSidebarSessions';
 import { useTeamStatus, type TeamRuntimeStatus } from '../../hooks/useTeamStatus';
@@ -423,6 +424,8 @@ export function CrossSessionSidebar({
           </CollapsibleGroup>
         )}
       </div>
+
+      <UpdateNotice />
     </aside>
 
     </TooltipProvider>

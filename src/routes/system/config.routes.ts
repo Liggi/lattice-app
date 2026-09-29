@@ -25,6 +25,12 @@ export function publicConfig(config: LatticeConfig): Record<string, unknown> {
     const { [field]: value, ...rest } = current as Record<string, unknown>;
     copy[section] = { ...rest, [`${field}Configured`]: typeof value === 'string' && value.trim().length > 0 };
   }
+  if (Array.isArray(copy.claudeEndpoints)) {
+    copy.claudeEndpoints = (copy.claudeEndpoints as Array<Record<string, unknown>>).map(({ apiKey, ...rest }) => ({
+      ...rest,
+      apiKeyConfigured: typeof apiKey === 'string' && apiKey.trim().length > 0,
+    }));
+  }
   const server = { ...(copy.server as Record<string, unknown>) };
   delete server.authToken;
   copy.server = server;
@@ -56,6 +62,16 @@ export function normalizeSecretUpdates(updates: Partial<LatticeConfig>, current:
       else delete sectionUpdate[field];
     }
     next[section] = sectionUpdate;
+  }
+  if (Array.isArray(next.claudeEndpoints)) {
+    // The same rule per endpoint, matched to the saved one by id.
+    const saved = new Map((current.claudeEndpoints ?? []).map((endpoint) => [endpoint.id, endpoint.apiKey]));
+    next.claudeEndpoints = (next.claudeEndpoints as Array<Record<string, unknown>>).map(({ apiKey, apiKeyConfigured: _shown, ...rest }) => {
+      const key = apiKey === null ? undefined
+        : typeof apiKey === 'string' ? (apiKey.trim() || undefined)
+        : saved.get(rest.id as string);
+      return key ? { ...rest, apiKey: key } : rest;
+    });
   }
   if (next.server && typeof next.server === 'object') {
     // The bearer token is set in the config file by hand, never from the page.

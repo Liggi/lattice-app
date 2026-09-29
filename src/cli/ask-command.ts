@@ -14,9 +14,10 @@ export const ASK_USAGE = `  lattice ask "<question>" --session <conv-id> [--thre
       Put a decision that is the user's to make in front of them as a card
       they answer with a tap, or in their own words. Use it rarely: only when
       you cannot go on without their call. The card replaces the closing
-      question in your message; do not ask it in prose as well. Post it
-      before you write that message: the card shows below the message. Then
-      end your turn; the answer arrives as a message from the user.
+      question in your message; do not ask it in prose as well. Post it,
+      write that message, then end your turn: the card shows below the
+      message once the turn ends, not before. The answer arrives as a
+      message from the user.
       --because and --recommended belong to the --option before them. Asking
       again replaces a question still unanswered in the thread. Workers ask
       their coordinator instead. A coordinator names the project thread the
@@ -80,7 +81,7 @@ export async function runAskCommand(args: string[]): Promise<void> {
   const body = (await response.json().catch(() => ({}))) as { id?: string; replaced?: string | null; error?: string };
   if (!response.ok) fail(body.error ?? `the server answered ${response.status}.`);
   process.stdout.write(
-    'The question is on a card in your thread. Now write your message, which the card shows below, and end your turn.'
+    'The question is on a card in your thread. Now write your message and end your turn: the card shows below the message once your turn ends.'
     + ' The message does not ask the question again or mention the card. The answer arrives as a message from the user.'
     + (body.replaced ? ' It replaced your earlier question, which had no answer yet.' : '')
     + '\n',

@@ -1,6 +1,6 @@
 import type { JSX } from 'react';
 import type { UnifiedConversationSummary } from '../../../types';
-import { lastUsedAt, quietFor, type SessionActivity } from '../../../utils/session-activity';
+import { declaredWait, isRunning, isWaiting, lastUsedAt, liveWorkers, quietFor, type SessionActivity } from '../../../utils/session-activity';
 import { SessionStateIcon } from './SessionStateIcon';
 
 const MAX_WORKERS = 4;
@@ -26,6 +26,43 @@ function workingOn(c: UnifiedConversationSummary): string | null {
   if (c.coordinator) return c.projectWorkingOn ?? null;
   const purpose = c.insights?.purpose?.trim();
   return purpose && purpose !== c.customName?.trim() ? purpose : null;
+}
+
+/** What a waiting worker is waiting on, in a few words. */
+function workerWait(c: UnifiedConversationSummary, conversations: UnifiedConversationSummary[]): string | null {
+  const declared = declaredWait(c, conversations);
+  if (declared) return `On ${declared}`;
+  if (c.pendingWork === 'scheduled_wakeup') return 'Checking back later';
+  return c.pendingWork ? WAITING_LINES[c.pendingWork] : null;
+}
+
+function WorkerList({ project, workers, lead, detail }: {
+  project: UnifiedConversationSummary;
+  workers: UnifiedConversationSummary[];
+  lead: string;
+  detail?: (c: UnifiedConversationSummary) => string | null;
+}): JSX.Element {
+  const more = workers.length - MAX_WORKERS;
+  return (
+    <div>
+      <p>{workers.length} worker{workers.length === 1 ? '' : 's'} {lead}:</p>
+      <ul className="mt-1.5 space-y-1.5 text-fg">
+        {workers.slice(0, MAX_WORKERS).map(c => {
+          const line = detail?.(c);
+          return (
+            <li key={c.conversationId} className="flex items-start gap-2 leading-snug">
+              <span className="mt-px shrink-0 text-fg-3"><SessionStateIcon state={{ kind: 'idle' }} variant="session" size={14} /></span>
+              <span className="min-w-0 break-words">
+                {workerName(project, c)}
+                {line && <span className="block text-[11px] text-fg-3">{line}</span>}
+              </span>
+            </li>
+          );
+        })}
+        {more > 0 && <li className="pl-[22px] text-[11px] text-fg-3">+{more} more</li>}
+      </ul>
+    </div>
+  );
 }
 
 interface Heading { title: string; tone: string; meta?: string }
@@ -66,33 +103,24 @@ function Body({ activity, conversation, conversations }: {
     case 'compacting':
       return <p>Summarising its history to make room, then carries on</p>;
     case 'working': {
-      const busy = conversations.filter(c => c.pickedUpFrom === conversation.conversationId && !c.archived
-        && (c.status === 'pending' || c.status === 'ongoing' || Boolean(c.pendingWork)));
+      const busy = liveWorkers(conversation, conversations).filter(isRunning);
       if (busy.length === 0) {
         const line = workingOn(conversation);
         return line ? <p className="text-fg">{line}</p> : null;
       }
-      const more = busy.length - MAX_WORKERS;
-      return (
-        <div>
-          <p>{busy.length} worker{busy.length === 1 ? '' : 's'} on it:</p>
-          <ul className="mt-1.5 space-y-1.5 text-fg">
-            {busy.slice(0, MAX_WORKERS).map(c => (
-              <li key={c.conversationId} className="flex items-start gap-2 leading-snug">
-                <span className="mt-px shrink-0 text-fg-3"><SessionStateIcon state={{ kind: 'idle' }} variant="session" size={14} /></span>
-                <span className="min-w-0 break-words">{workerName(conversation, c)}</span>
-              </li>
-            ))}
-            {more > 0 && <li className="pl-[22px] text-[11px] text-fg-3">+{more} more</li>}
-          </ul>
-        </div>
-      );
+      return <WorkerList project={conversation} workers={busy} lead="on it" />;
     }
-    case 'waiting':
+    case 'waiting': {
+      if (activity.waitingOn) return <p className="text-fg">{capitalised(activity.waitingOn)}</p>;
       if (conversation.pendingWork === 'scheduled_wakeup') {
         return <p>{conversation.wakeAt ? `Checking back at ${clock(conversation.wakeAt)}` : 'Checking back later'}</p>;
       }
-      return conversation.pendingWork ? <p>{WAITING_LINES[conversation.pendingWork]}</p> : null;
+      if (conversation.pendingWork) return <p>{WAITING_LINES[conversation.pendingWork]}</p>;
+      const waiting = liveWorkers(conversation, conversations).filter(c => isWaiting(c, conversations));
+      return waiting.length > 0
+        ? <WorkerList project={conversation} workers={waiting} lead="waiting" detail={c => workerWait(c, conversations)} />
+        : null;
+    }
     case 'idle':
     case 'sleeping':
       return null;

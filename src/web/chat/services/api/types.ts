@@ -22,8 +22,17 @@ export interface SecretKeyConfig {
   apiKeyConfigured?: boolean;
 }
 
+/** A saved Anthropic-compatible server; the key follows the SecretKeyConfig rules, matched by id. */
+export interface ClaudeEndpointSetting extends SecretKeyConfig {
+  id: string;
+  baseUrl: string;
+  model: string;
+  contextWindow?: number;
+}
+
 export interface AppConfig {
   anthropic?: SecretKeyConfig;
+  claudeEndpoints?: ClaudeEndpointSetting[];
   coordinator?: CoordinatorConfig;
   gemini?: SecretKeyConfig;
   server?: {

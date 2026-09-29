@@ -157,6 +157,7 @@ export async function answerDecision(threadId: string, decisionId: string, rawAn
  * The user wrote to the thread while its card was open: their message is the
  * answer, so the card closes as answered and no tap is expected. Called on a
  * composer send, before the message is written, so the card sits above it.
+ * A card whose turn is still running has not been seen, so it stays open.
  */
 export function settleOpenDecision(manager: SessionManager, threadId: string): void {
   const open = openDecision(threadId);

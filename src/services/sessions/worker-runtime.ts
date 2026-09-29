@@ -49,6 +49,9 @@ export function readWorkerRuntime(worker: string): WorkerRuntime {
   // The persisted log separates them — a session with no status-bearing event
   // has never run, and calling that Stopped would be as wrong as calling it
   // Working.
-  const events = getEventStorage().readStatusWindow(worker);
+  // One row answers it. The default window is 200 whole events, and the
+  // workers route asks this for every stopped worker on every refetch: 93MB
+  // read and parsed per call on a 102-worker coordinator (2026-09-29).
+  const events = getEventStorage().readStatusWindow(worker, 1);
   return events.length === 0 ? 'unknown' : 'exited';
 }

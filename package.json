@@ -1,6 +1,6 @@
 {
   "name": "lattice-app",
-  "version": "0.4.3",
+  "version": "0.5.0",
   "type": "module",
   "description": "Lattice - a self-hosted workspace for running Claude Code and Codex agents on projects",
   "main": "dist/lattice-server.js",
@@ -52,6 +52,7 @@
     "build:quick": "bash scripts/safe-build.sh --skip-lint",
     "build:unsafe": "npm run lint && rm -rf dist && NODE_ENV=production npm run build:web && tsc && tsc-alias && npm run build:daemon",
     "build:web": "NODE_ENV=production vite build",
+    "build:web:live": "bash scripts/build-web.sh",
     "build:daemon": "chmod +x dist/process-daemon/index.js 2>/dev/null || true",
     "start": "node dist/cli.js serve",
     "restart:prod": "bash scripts/restart-server.sh",

@@ -31,6 +31,8 @@ export interface SessionStatusInfo {
   workingOn?: string | null;
   /** On a project: each worker's task, keyed by worker conversation id. */
   workerTasks?: Record<string, string> | null;
+  /** On a coordinator: what each of its workers declared it is waiting on, while it still is. */
+  workerWaits?: Record<string, string> | null;
   /** When a scheduled wake-up fires, epoch ms. */
   wakeAt?: number | null;
   lastTurnUsage?: {

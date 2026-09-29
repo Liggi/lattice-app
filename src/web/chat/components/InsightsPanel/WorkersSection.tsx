@@ -79,7 +79,7 @@ import { ChevronUp } from 'lucide-react';
 import { WaitText, type WaitTextContext } from './WaitText';
 import { SessionStateIcon, type StateIconState } from '@/web/chat/components/shared/session-state-icon/SessionStateIcon';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/web/chat/components/ui/tooltip';
-import { stripWorkerQuestionMarker, workerResumedAfterReport, workerRuntimeWord, workerWaitingOn, type WorkerCardState } from '@/types/worker-events';
+import { stripWorkerQuestionMarker, workerPendingState, workerResumedAfterReport, workerRuntimeWord, workerWaitingOn, type WorkerCardState } from '@/types/worker-events';
 
 /** The state line: one word for where the worker stands, or what a reported worker is waiting on. */
 export function workerStateLine(worker: WorkerCardState, coordinatorRunning: boolean): { state: string; needsYou: boolean; waiting: boolean } {
@@ -135,9 +135,9 @@ export function WorkerRow({
   const waitingOn = waiting ? workerWaitingOn(worker) : null;
   // The cube and the activity phrase both claim work is happening now, so
   // they follow the runtime rather than the assignment phase.
-  const working = (worker.phase === 'working' || workerResumedAfterReport(worker))
-    && worker.runtime !== 'idle' && worker.runtime !== 'exited' && worker.runtime !== 'stopping';
-  const icon: StateIconState = working ? { kind: 'working', level: 1 } : worker.phase === 'asked' ? { kind: 'waiting' } : { kind: 'idle' };
+  const working = workerPendingState(worker) === 'working' || ((worker.phase === 'working' || workerResumedAfterReport(worker))
+    && worker.runtime !== 'idle' && worker.runtime !== 'exited' && worker.runtime !== 'stopping');
+  const icon: StateIconState = working ? { kind: 'working', level: 1 } : worker.phase === 'asked' || waitingOn ? { kind: 'waiting' } : { kind: 'idle' };
 
   const [waitOpen, setWaitOpen] = useState(false);
   const question = worker.phase === 'asked' && worker.question ? stripWorkerQuestionMarker(worker.question) : null;

@@ -33,8 +33,7 @@ import { createLogger } from '../infrastructure/logger.js';
 import { judgeNouls, type NoulQuestion } from '../infrastructure/typesafe-client.js';
 import { SessionInfoService } from './session-info-service.js';
 import { readProjectState } from './project-state.js';
-import { getEvents } from '../../session-history/repository.js';
-import { WORKER_EVENT_TYPES, foldWorkerStates } from '../../types/worker-events.js';
+import { foldedWorkerStates, workerOutputSince } from './worker-events.js';
 import { userName } from '../user-profile.js';
 import { noteStatusChanged } from './session-status-changes.js';
 import { openDecision, type OpenDecision } from './open-decision.js';
@@ -136,7 +135,7 @@ function renderCard(project: string, card: OpenDecision, now: number): string {
       owner: 'user',
       waiting_on: { kind: 'decision', text: card.asked.question },
       next_action: `${userName()} picks an option or answers in their own words.`,
-      days_since_last_update: Math.round(((now - card.askedAt) / DAY_MS) * 10) / 10,
+      days_since_last_update: Math.round(((now - card.shownAt) / DAY_MS) * 10) / 10,
     },
   });
 }
@@ -212,6 +211,8 @@ interface ProjectSnapshot {
   threads: ProjectOpenThread[];
   workingOn: string | null;
   workerTasks: Record<string, string>;
+  /** Workers whose latest report said what they stopped to wait on, and when they reported. */
+  reportedWaits: Array<{ worker: string; waitingOn: string; since: number }>;
   /** When the user last sent the project a message, epoch ms; 0 if never recorded. */
   userSentAt: number;
   /** The project's own question card, while it waits on the user. */
@@ -224,12 +225,14 @@ function snapshot(coordinatorId: string): ProjectSnapshot {
   if (cached && cached.seq === seq) return cached;
   const state = readProjectState(coordinatorId);
   const focus = state.priority?.text ?? state.now;
+  const workers = foldedWorkerStates(coordinatorId);
   const entry = {
     seq,
     threads: state.open.filter(isNeedsYouCandidate),
     workingOn: focus ? withoutThreadRefs(focus) || null : null,
-    workerTasks: Object.fromEntries(foldWorkerStates(getEvents(coordinatorId, { types: [...WORKER_EVENT_TYPES] }))
-      .map(worker => [worker.worker, worker.task])),
+    workerTasks: Object.fromEntries(workers.map(worker => [worker.worker, worker.task])),
+    reportedWaits: workers.flatMap(worker => worker.phase === 'reported' && worker.waitingOn
+      ? [{ worker: worker.worker, waitingOn: worker.waitingOn, since: worker.since }] : []),
     userSentAt: lastUserSentAt(coordinatorId),
     card: openDecision(coordinatorId),
   };
@@ -245,6 +248,18 @@ export function projectWorkingOn(conversationId: string): string | null {
 /** Each worker's task, the name its card in the right panel carries; null when not a project. */
 export function projectWorkerTasks(conversationId: string): Record<string, string> | null {
   return isCoordinator(conversationId) ? snapshot(conversationId).workerTasks : null;
+}
+
+/**
+ * What each worker declared it is waiting on, while it still is; null when not
+ * a project. Read fresh each time: a worker that has output since its report
+ * has resumed, and its own log does not move the coordinator's.
+ */
+export function projectWorkerWaits(conversationId: string): Record<string, string> | null {
+  if (!isCoordinator(conversationId)) return null;
+  return Object.fromEntries(snapshot(conversationId).reportedWaits
+    .filter(wait => !workerOutputSince(wait.worker, wait.since))
+    .map(wait => [wait.worker, wait.waitingOn]));
 }
 
 /**
@@ -273,17 +288,17 @@ export function projectNeedsYou(conversationId: string): NeedsYouItem[] | null {
       });
     }
   }
-  if (card && card.askedAt > userSentAt) {
+  if (card && card.shownAt > userSentAt) {
     const key = `${conversationId}:card:${card.asked.id}`;
     const scored = scores.get(key);
     if (!scored) {
-      scoreInBackground(conversationId, key, card.askedAt, card.seq, (project, now) => renderCard(project, card, now));
+      scoreInBackground(conversationId, key, card.shownAt, card.seq, (project, now) => renderCard(project, card, now));
     } else if (scored.score > NEEDS_YOU_THRESHOLD) {
       items.push({
         seq: card.seq,
         text: card.asked.question,
         thread: card.asked.question,
-        since: card.askedAt,
+        since: card.shownAt,
         score: Math.round(scored.score * 100) / 100,
       });
     }

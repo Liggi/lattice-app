@@ -73,12 +73,12 @@ function Cube({ kind, level, strength }: DrawProps): JSX.Element {
         </g>
       );
     case 'waiting':
+      // Idle's grey cube with its inner Y in cyan, fading slowly: calmer than
+      // Working, livelier than Idle. Still, it rests at the fade's midpoint.
       return (
         <g {...edge}>
-          <path d={CUBE_OUTLINE} stroke="var(--c)" strokeOpacity={.5} />
-          <path d={CUBE_INNER} stroke="var(--c)" strokeOpacity={.5} />
-          <path d={FACE_TOP} fill="var(--c)" stroke="none"
-            style={anim('ssi-breathe 3.2s ease-in-out infinite', { ['--lo' as string]: .08, ['--hi' as string]: .45 })} />
+          <path d={CUBE_OUTLINE} stroke="currentColor" />
+          <path d={CUBE_INNER} stroke="var(--c)" className="ssi-wait" />
         </g>
       );
     case 'compacting':
@@ -211,12 +211,15 @@ function Lattice({ kind, level, strength }: DrawProps): JSX.Element {
         </g>
       );
     case 'waiting':
+      // Idle's grey lattice with its core node and spokes in cyan, fading slowly.
       return (
         <g>
-          {edges('var(--c)', .45)}
-          {nodes(() => 'var(--c)', undefined, .85)}
-          <circle cx={12} cy={12} r={2.4} fill="var(--c)"
-            style={anim('ssi-breathe 3.2s ease-in-out infinite', { ['--lo' as string]: .15, ['--hi' as string]: .7 })} />
+          {edges('currentColor', .7, e => e.key.includes('000'))}
+          {nodes(() => 'currentColor', undefined, 1, n => n.key !== '000')}
+          <g className="ssi-wait-core">
+            {edges('var(--c)', 1.4, e => !e.key.includes('000'), 1)}
+            <circle cx={12} cy={12} r={1.5} fill="var(--c)" />
+          </g>
         </g>
       );
     case 'compacting':

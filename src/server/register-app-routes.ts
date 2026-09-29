@@ -17,6 +17,7 @@ import { createInsightsRoutes } from '@/routes/insights/insights.routes.js';
 import { createTeamsRoutes } from '@/routes/teams.routes.js';
 import { createNotificationRoutes } from '@/routes/system/notifications.routes.js';
 import { createFeedbackRoutes } from '@/routes/system/feedback.routes.js';
+import { createUpdateRoutes } from '@/routes/system/update.routes.js';
 import timelineRouter from '@/routes/debug/timeline.routes.js';
 import { createContextTransfersRoutes } from '@/routes/session/context-transfers.routes.js';
 import { createUnifiedConversationRoutes } from '@/routes/conversation/unified-conversation.routes.js';
@@ -83,6 +84,7 @@ export function registerAppRoutes(deps: RegisterAppRoutesDeps): void {
   app.use('/api/provider-auth', createProviderAuthRoutes({ processManagerClient: deps.processManagerClient }));
   app.use('/api/notifications', createNotificationRoutes());
   app.use('/api/feedback', createFeedbackRoutes(deps.configService));
+  app.use('/api/update', createUpdateRoutes());
   app.use('/api/pending-questions', createPendingQuestionRoutes(
     deps.pendingQuestionService,
     deps.historyReader,
@@ -156,7 +158,7 @@ export function registerAppRoutes(deps: RegisterAppRoutesDeps): void {
         res.status(404).end();
         return;
       }
-      res.sendFile(path.join(deps.frontendDir, 'index.html'));
+      res.sendFile(path.join(deps.frontendDir, 'index.html'), { headers: { 'Cache-Control': 'no-cache' } });
     });
   }
   app.use(errorHandler);

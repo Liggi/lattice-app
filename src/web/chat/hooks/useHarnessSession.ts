@@ -114,6 +114,8 @@ export interface UseHarnessSessionReturn {
   backgroundTaskStates: Record<string, BackgroundTaskState>;
   /** Seq of the newest worker:* event in the loaded window; null when none. */
   lastWorkerEventSeq: number | null;
+  /** Seq of the newest event in the window; null before any has arrived. */
+  lastEventSeq: number | null;
   /** The user's emoji reactions, by the id of the message they are on. */
   reactions: ReadonlyMap<string, readonly string[]>;
   /** The agent's own reactions on the user's messages, by message id. */
@@ -327,6 +329,7 @@ export function useHarnessSession(
     pendingMessages,
     actionTrace,
     lastWorkerEventSeq,
+    lastEventSeq: events.length > 0 ? events[events.length - 1].seq : null,
     reactions,
     agentReactions,
     decisions,
@@ -597,6 +600,17 @@ function eventsToRenderItems(
   return { renderItems: items, childrenMessages };
 }
 
+/** The first image a tool result carries, as an `<img>` src: by URL as served, or inline base64. */
+function resultImageUrl(content: unknown): string | undefined {
+  if (!Array.isArray(content)) return undefined;
+  for (const block of content as Array<{ type?: string; source?: { type?: string; url?: string; data?: string; media_type?: string } }>) {
+    if (block?.type !== 'image') continue;
+    if (block.source?.url) return block.source.url;
+    if (block.source?.data) return `data:${block.source.media_type || 'image/png'};base64,${block.source.data}`;
+  }
+  return undefined;
+}
+
 function collapsedGroupToData(group: CollapsedGroup, isActive: boolean): CollapsedGroupData {
   const toolCalls: ToolCallData[] = [];
   let latestHint: string | undefined;
@@ -635,6 +649,7 @@ function collapsedGroupToData(group: CollapsedGroup, isActive: boolean): Collaps
               input: classification.detail ?? toolUse.name,
               filePath: (toolUse.input.file_path as string) ?? undefined,
               resultContent: typeof block.content === 'string' ? block.content : undefined,
+              imageUrl: resultImageUrl(block.content),
               status: block.is_error ? 'error' : 'success',
             });
           }

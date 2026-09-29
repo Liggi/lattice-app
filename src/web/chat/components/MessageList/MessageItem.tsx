@@ -8,6 +8,7 @@ import { AgentMessage } from './AgentMessage';
 import { JsonViewer } from '../JsonViewer/JsonViewer';
 import { ToolUseRenderer, type BackgroundTaskState } from '@liggi/agent-ui-toolkit';
 import { LazyCodeHighlight } from '../CodeHighlight';
+import { DiagramBlock, DiagramStreamingContext } from './DiagramBlock';
 import type { ChatMessage, ToolResult, QuestionRequest, DisplayContentBlock } from '../../types';
 import { preserveThinkingBreaks } from '../../utils/thinking-text';
 import { AddReactionButton, AgentReactionChips, ReactionChips, firstLine, useRegisterMessageActions, type ReactionTarget } from '../MessageReactions/MessageReactions';
@@ -416,6 +417,10 @@ export const markdownComponents: Record<string, React.ComponentType<MarkdownComp
   code({ node: _node, inline, className, children, ...props }: MarkdownComponentProps) {
     const match = /language-(\w+)/.exec(className || '');
     const language = match ? match[1] : 'text';
+
+    if (!inline && language === 'diagram') {
+      return <DiagramBlock source={String(children)} />;
+    }
 
     // Block code with a language fence → syntax highlighting
     if (!inline && match) {
@@ -857,7 +862,7 @@ export function MessageItem({
 
     return (
       <div className={`group/message relative w-full flex flex-col gap-1.5${mountedWhileStreaming.current ? ' streaming-message' : ''}`} data-testid="assistant-message">
-        {renderContent()}
+        <DiagramStreamingContext.Provider value={isStreaming}>{renderContent()}</DiagramStreamingContext.Provider>
         {messageText.trim() && <MessageActions messageId={message.messageId} text={messageText} reaction={reaction} />}
       </div>
     );

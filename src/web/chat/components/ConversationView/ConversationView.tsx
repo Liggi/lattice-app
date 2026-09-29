@@ -36,6 +36,7 @@ import type {
   PendingWork,
 } from '../../types';
 import { TeamColorProvider, useTeamColorContext } from '../../contexts/TeamColorContext';
+import { usePreferencesContext } from '../../contexts/PreferencesContext';
 import { ToolkitProvider } from '@liggi/agent-ui-toolkit';
 import { debugFlags } from '../../services/debug-logger';
 import { MessageDebugOverlay } from '../MessageDebugOverlay/MessageDebugOverlay';
@@ -70,6 +71,7 @@ import { shouldRefetchOnCompletion } from './session-active-state';
 import { setBrowserIncidentContext, clearBrowserIncidentContext } from '../../services/browser-incidents';
 import type { Provider } from '@/types/unified-messages';
 import { CLAUDE_MODELS } from '@/constants/claude-models';
+import { endpointModelOption } from '@/constants/claude-endpoint';
 import {
   CODEX_EFFORTS,
   CODEX_MODELS,
@@ -173,6 +175,7 @@ export function ConversationView({ sidebarOpen, onToggleSidebar }: ConversationV
     injectEvent: _harnessInjectEvent,
     fetchHistory: harnessFetchHistory,
     lastWorkerEventSeq,
+    lastEventSeq,
     reactions: harnessReactions,
     agentReactions: harnessAgentReactions,
     decisions: harnessDecisions,
@@ -195,7 +198,7 @@ export function ConversationView({ sidebarOpen, onToggleSidebar }: ConversationV
     }
     return [...ids].sort().join(',');
   }, [harnessMessages, harnessPendingMessages]);
-  const { workers, project, senders } = useWorkers(conversationId ?? null, lastWorkerEventSeq, harnessStatus, seenSenders);
+  const { workers, project, senders } = useWorkers(conversationId ?? null, lastWorkerEventSeq, harnessStatus, seenSenders, lastEventSeq);
   const {
     permissionRequest,
     answerPermission,
@@ -213,6 +216,7 @@ export function ConversationView({ sidebarOpen, onToggleSidebar }: ConversationV
   // when it differs from the running config) and clears once the session
   // reports it is actually on the selected model.
   const [pendingModel, setPendingModel] = useState<string | null>(null);
+  const { claudeEndpoints } = usePreferencesContext();
   // Codex reasoning effort works the same way, except that the conversation
   // records what it is running at, so the control shows that and this holds
   // only a choice the user has made and not yet sent.
@@ -233,14 +237,19 @@ export function ConversationView({ sidebarOpen, onToggleSidebar }: ConversationV
   // Claude sessions — a Codex switch also has to carry reasoning effort, which
   // the mid-session path doesn't support yet. No entry is marked default: with
   // nothing selected the badge shows the session's actual serving model.
+  // A saved endpoint's model is offered alongside: switching to it moves this
+  // session onto that server, and switching back returns it to the sign-in.
   const switchableClaudeModels = useMemo(
-    () => CLAUDE_MODELS.filter((m) => m.composerSelectable).map((m) => ({
-      id: m.id,
-      label: m.label,
-      description: m.description,
-      isDefault: false,
-    })),
-    [],
+    () => [
+      ...CLAUDE_MODELS.filter((m) => m.composerSelectable).map((m) => ({
+        id: m.id,
+        label: m.label,
+        description: m.description,
+        isDefault: false,
+      })),
+      ...claudeEndpoints.map((endpoint) => endpointModelOption(endpoint)),
+    ],
+    [claudeEndpoints],
   );
 
   const switchableCodexModels = useMemo(
@@ -982,7 +991,7 @@ export function ConversationView({ sidebarOpen, onToggleSidebar }: ConversationV
   // isActive/isStreaming = harness status derivation
   const isProviderBusy = isActive;
   // A turn held on its own question card (a Codex request_user_input_async) waits on the user, not on the agent.
-  const awaitingAnswer = isProviderBusy && [...harnessDecisions.byId.values()].some(isOpenDecision);
+  const awaitingAnswer = isProviderBusy && [...harnessDecisions.byId.values()].some((decision) => decision.asked.holdsTurn && isOpenDecision(decision));
 
   const wasIdleRef = useRef(isIdle);
   useEffect(() => {

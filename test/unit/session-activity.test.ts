@@ -1,6 +1,7 @@
 /**
  * A sidebar row's state icon comes from server state alone: attention,
- * compaction, running, busy workers, armed background work, and quiet time.
+ * compaction, running, running workers, armed background work or a declared
+ * wait, and quiet time.
  */
 
 import { describe, it, expect } from 'vitest';
@@ -71,10 +72,48 @@ describe('deriveSessionActivity', () => {
     expect(deriveSessionActivity(waiting, [waiting], false, NOW).kind).toBe('waiting');
   });
 
-  it('turns idle into sleeping after 30 quiet minutes', () => {
+  it('shows a project whose workers are all parked as waiting, not working', () => {
+    const project = conv('conv-p', { coordinator: true });
+    const parked = [conv('conv-w0', { pickedUpFrom: 'conv-p', pendingWork: 'background_task' }),
+      conv('conv-w1', { pickedUpFrom: 'conv-p', pendingWork: 'scheduled_wakeup' })];
+    const activity = deriveSessionActivity(project, [project, ...parked], false, NOW);
+    expect(activity).toEqual({ kind: 'waiting', waitingWorkers: 2 });
+    expect(describeSessionActivity(activity, project, NOW)).toBe('Waiting · 2 workers waiting');
+  });
+
+  it('sets the working level by running workers only, not parked ones', () => {
+    const project = conv('conv-p', { coordinator: true });
+    const list = [project, ...workers(1), conv('conv-x', { pickedUpFrom: 'conv-p', pendingWork: 'subagent' }),
+      conv('conv-y', { pickedUpFrom: 'conv-p', pendingWork: 'background_task' })];
+    expect(deriveSessionActivity(project, list, false, NOW)).toEqual({ kind: 'working', level: 1, busyWorkers: 1 });
+  });
+
+  it('counts a wait a worker declared in its report, on the worker and on its project', () => {
+    const project = conv('conv-p', { coordinator: true, projectWorkerWaits: { 'conv-w0': 'the next restart' } });
+    const worker = conv('conv-w0', { pickedUpFrom: 'conv-p' });
+    const list = [project, worker];
+    const own = deriveSessionActivity(worker, list, false, NOW);
+    expect(own).toEqual({ kind: 'waiting', waitingOn: 'the next restart', waitingWorkers: 0 });
+    expect(describeSessionActivity(own, worker, NOW)).toBe('Waiting on the next restart');
+    expect(deriveSessionActivity(project, list, false, NOW)).toEqual({ kind: 'waiting', waitingWorkers: 1 });
+    // Running again: the old report's wait no longer holds it.
+    expect(deriveSessionActivity(conv('conv-w0', { pickedUpFrom: 'conv-p', status: 'ongoing' }), list, false, NOW).kind).toBe('working');
+    // An archived worker's wait counts for nothing.
+    const archived = conv('conv-w0', { pickedUpFrom: 'conv-p', archived: true });
+    expect(deriveSessionActivity(project, [project, archived], false, NOW).kind).toBe('idle');
+  });
+
+  it('keeps Needs you and Failed above Waiting', () => {
+    const project = conv('conv-p', { coordinator: true, projectWorkerWaits: { 'conv-w0': 'a decision' } });
+    const list = [project, conv('conv-w0', { pickedUpFrom: 'conv-p' })];
+    expect(deriveSessionActivity(project, list, true, NOW).kind).toBe('needs-you');
+    expect(deriveSessionActivity({ ...project, failure: { message: 'boom', at: NOW } }, list, false, NOW).kind).toBe('failed');
+  });
+
+  it('turns idle into sleeping after 3 quiet hours', () => {
     const at = (mins: number) => conv('conv-s', { lastActivityAt: new Date(NOW - mins * MIN).toISOString() });
-    expect(deriveSessionActivity(at(29), [], false, NOW).kind).toBe('idle');
-    expect(deriveSessionActivity(at(31), [], false, NOW).kind).toBe('sleeping');
+    expect(deriveSessionActivity(at(179), [], false, NOW).kind).toBe('idle');
+    expect(deriveSessionActivity(at(181), [], false, NOW).kind).toBe('sleeping');
   });
 
   it('shows Failed over everything but Needs you, until new work clears it', () => {

@@ -867,7 +867,7 @@ async function cmdWorkers(cmd: ParsedCommand): Promise<void> {
     const standing = worker.archived
       ? 'archived'
       : waitingOn
-        ? `waiting on ${waitingOn}${worker.reportReached ? '' : ' (not read yet)'}`
+        ? `waiting on ${waitingOn}${worker.phase !== 'reported' || worker.reportReached ? '' : ' (not read yet)'}`
       : worker.phase === 'asked'
         ? 'waiting on an answer'
         // A reported worker that is running again falls through to the

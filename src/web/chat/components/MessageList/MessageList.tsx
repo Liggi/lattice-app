@@ -15,6 +15,7 @@ import { useMessageAnimation } from './use-message-animation';
 import { useScrollManagement } from './use-scroll-management';
 import { useBlockBudget } from './use-block-budget';
 import { useJumpToMessage } from './use-jump-to-message';
+import { useSelectionClipboard } from '../../utils/selection-clipboard';
 import type { ChatMessage, ToolResult, QuestionRequest, PendingQuestion } from '../../types';
 import type { RenderItem } from '../../hooks/useHarnessSession';
 import type { ActionTraceEntry, HydrationPhase } from '@liggi/agent-ui-harness/client';
@@ -167,6 +168,7 @@ export const MessageList: React.FC<MessageListProps> = ({
   hydrationPhase,
 }) => {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  useSelectionClipboard(scrollContainerRef);
   const withdrawnAnswers = useWithdrawnAnswers();
   const topSentinelRef = useRef<HTMLDivElement>(null);
   const { hasShownContent, newMessageIds } = useMessageAnimation({

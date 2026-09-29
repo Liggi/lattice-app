@@ -221,6 +221,7 @@ function asyncQuestionDecision(record: Record<string, unknown>): DecisionAskedDa
     id: randomUUID(),
     question: asked.title.trim(),
     options: [...new Set(labels.map((label) => label.trim()))].map((label) => ({ label, consequence: '' })),
+    holdsTurn: true,
   };
 }
 

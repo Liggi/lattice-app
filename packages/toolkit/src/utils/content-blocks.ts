@@ -10,7 +10,7 @@
 export interface ContentBlock {
   type: string;
   text?: string;
-  source?: { type?: string; media_type?: string; data?: string };
+  source?: { type?: string; media_type?: string; data?: string; url?: string };
 }
 
 export interface UnwrappedContent {
@@ -38,13 +38,16 @@ export function unwrapContentBlocks(raw: string): UnwrappedContent | null {
   return { text, blocks };
 }
 
-/** Check if an unwrapped result contains an image block with base64 data. */
+/** Check if an unwrapped result contains an image block, inline or by URL. */
 export function findImageBlock(content: UnwrappedContent): ContentBlock | undefined {
-  return content.blocks.find(b => b.type === 'image' && b.source?.data);
+  return content.blocks.find(b => b.type === 'image' && (b.source?.data || b.source?.url));
 }
 
-/** Build a data URL from an image content block. */
+/**
+ * The `src` for an image content block: a data URL for inline base64, or the
+ * block's own URL when the server sends the image separately.
+ */
 export function imageBlockToDataUrl(block: ContentBlock): string | null {
-  if (!block.source?.data) return null;
-  return `data:${block.source.media_type || 'image/png'};base64,${block.source.data}`;
+  if (block.source?.data) return `data:${block.source.media_type || 'image/png'};base64,${block.source.data}`;
+  return block.source?.url ?? null;
 }

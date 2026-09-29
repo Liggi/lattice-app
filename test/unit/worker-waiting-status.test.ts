@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { foldWorkerStates, workerWaitPhrase, workerWaitingOn, type WorkerCardState, type WorkerEventLike } from '../../src/types/worker-events';
+import { foldWorkerStates, workerRuntimeWord, workerWaitPhrase, workerWaitingOn, type WorkerCardState, type WorkerEventLike } from '../../src/types/worker-events';
 import { workerStateLine } from '../../src/web/chat/components/InsightsPanel/WorkersSection';
-import { markWorkedSinceReport } from '../../src/services/sessions/worker-events';
+import Database from 'better-sqlite3';
+import { markWorkedSinceReport, workerOutputSince } from '../../src/services/sessions/worker-events';
+import { SqliteEventStorageAdapter } from '../../src/harness/sqlite-event-storage';
 
 /**
  * A worker that stops to wait on something other than the coordinator says so
@@ -67,6 +69,24 @@ describe('a worker waiting on something shows the wait', () => {
     expect(workerStateLine(idle, false).state).toBe('Reported');
   });
 
+  // 2026-09-29: a worker ended on "Waiting on: four read-only code lookups"
+  // and its card read Reported while they ran, because the lookups' own tool
+  // calls land in the worker's log and were counted as the worker resuming.
+  it('holds while only its background subagents write output', () => {
+    const db = new Database(':memory:');
+    try {
+      new SqliteEventStorageAdapter(db);
+      const insert = db.prepare(`INSERT INTO harness_events (session_id, seq, run_id, timestamp, type, data, meta) VALUES ('conv-w', ?, 'run-1', ?, 'content', ?, NULL)`);
+      insert.run(1, 1500, JSON.stringify({ blocks: [], parentToolUseId: null }));
+      insert.run(2, 2500, JSON.stringify({ blocks: [], parentToolUseId: 'toolu_lookup' }));
+      expect(workerOutputSince('conv-w', 2000, db)).toBe(false);
+      insert.run(3, 3000, JSON.stringify({ blocks: [], parentToolUseId: null }));
+      expect(workerOutputSince('conv-w', 2000, db)).toBe(true);
+    } finally {
+      db.close();
+    }
+  });
+
   it('holds while the worker has done nothing since the report', () => {
     const [state] = markWorkedSinceReport(foldWorkerStates([started, report('Waiting on: CI')]), () => false);
     expect(workerWaitingOn({ ...state, runtime: 'idle', queued: false })).toBe('CI');
@@ -81,5 +101,33 @@ describe('a worker waiting on something shows the wait', () => {
     const worker = card([report('Waiting on: the restart'), { type: 'worker:answered', timestamp: 3000, data: { worker: 'conv-w' } }]);
     expect(worker.waitingOn).toBeNull();
     expect(workerStateLine(worker, false).state).toBe('Stopped');
+  });
+});
+
+describe('work a worker armed before its turn ended', () => {
+  // 2026-09-29: a worker's own subagents were still reading code and its card
+  // said Reported.
+  it('reads Working while its own subagents run, over a declared wait', () => {
+    const worker = card([report('Waiting on: four read-only code lookups')], { pendingWork: 'subagent' });
+    expect(workerStateLine(worker, false).state).toBe('Working');
+    expect(workerStateLine(card([report('Done.')], { pendingWork: 'workflow' }), false).state).toBe('Working');
+  });
+
+  it('reads Waiting on a background command or wake-up, keeping a declared reason', () => {
+    expect(workerStateLine(card([report('Done, CI running.')], { pendingWork: 'background_task' }), false).state)
+      .toBe('Waiting on a background command');
+    expect(workerStateLine(card([report('Waiting on: CI')], { pendingWork: 'background_task' }), false).state).toBe('Waiting on CI');
+    expect(workerStateLine(card([report('Done.')], { pendingWork: 'scheduled_wakeup' }), false).state)
+      .toBe('Waiting on a scheduled wake-up');
+  });
+
+  it('applies to a worker that has not reported yet, instead of Stopped', () => {
+    expect(workerStateLine(card([], { pendingWork: 'subagent' }), false).state).toBe('Working');
+    expect(workerStateLine(card([], { pendingWork: 'background_task' }), false).state).toBe('Waiting on a background command');
+  });
+
+  it('reports normally once nothing is pending, and ignores pending work on a process not idle', () => {
+    expect(workerStateLine(card([report('Done.')], { pendingWork: null }), false).state).toBe('Reported');
+    expect(workerRuntimeWord({ runtime: 'exited', queued: false, pendingWork: 'subagent' })).toBe('Stopped');
   });
 });

@@ -30,6 +30,7 @@ import { ConversationConfig, SystemInitMessage, StreamEvent, StreamMessage, Latt
 import { ClaudeLoginTerminalManager, type LoginTerminalProcess, type LoginTerminalSize } from './claude-login-terminal.js';
 import { findUserClaudeExecutable } from '../services/process/claude-cli.js';
 import { claudeSpawnEnv } from './claude-spawn-auth.js';
+import { agentEnv } from '../services/infrastructure/agent-env.js';
 
 class JsonLinesParser extends EventEmitter {
   private buffer = '';
@@ -260,9 +261,9 @@ export class ProcessDaemon extends EventEmitter {
   }
 
   /**
-   * The environment every Claude child gets: the daemon's, minus what would
-   * make the CLI think it is nested inside another Claude, plus the user's
-   * settings.json overrides.
+   * The environment every Claude child gets: the daemon's, minus what
+   * configures the server rather than the agent (agent-env.ts), plus the
+   * user's settings.json overrides.
    *
    * CLAUDE_CODE_AUTO_MODE_SERVER=1: a `-p` session does not ask the API to run
    * auto mode's classifier checks unless told to, and makes its own classifier
@@ -273,12 +274,11 @@ export class ProcessDaemon extends EventEmitter {
    * value in the daemon's environment or the user's settings.json wins.
    */
   private childEnv(): Record<string, string | undefined> {
-    const { NODE_OPTIONS: _NO, VSCODE_INSPECTOR_OPTIONS: _VIO, CLAUDECODE: _CC, CLAUDE_CODE_ENTRYPOINT: _CCE, ...cleanEnv } = process.env;
     return {
       CLAUDE_CODE_AUTO_MODE_SERVER: '1',
       BASH_DEFAULT_TIMEOUT_MS: '300000',
       BASH_MAX_TIMEOUT_MS: '600000',
-      ...cleanEnv,
+      ...agentEnv(),
       ...this.envOverrides,
     };
   }
@@ -644,7 +644,7 @@ export class ProcessDaemon extends EventEmitter {
 
       const env = {
         ...this.childEnv(),
-        ...claudeSpawnEnv(),
+        ...claudeSpawnEnv(config.model),
         CUI_STREAMING_ID: streamingId,
         PWD: cwd,
         INIT_CWD: cwd,
@@ -855,7 +855,7 @@ export class ProcessDaemon extends EventEmitter {
 
     const env = {
       ...this.childEnv(),
-      ...claudeSpawnEnv(),
+      ...claudeSpawnEnv(config.model),
       CUI_STREAMING_ID: streamingId,
       PWD: cwd,
       INIT_CWD: cwd,

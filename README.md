@@ -52,6 +52,8 @@ Open http://localhost:3001. The server keeps running in that terminal; stop it w
 
 Settings and data live in `~/.lattice-app/`. Set `LATTICE_CONFIG_DIR` to keep them somewhere else, for example to run a second instance on another port. If you already run the older `lattice-orchestrator` package, see [Running next to an existing Lattice](docs/running-next-to-lattice-orchestrator.md).
 
+Once a day Lattice asks the npm registry for the latest `lattice-app` version; the request sends nothing about you or your machine. When a newer one is out, the bottom of the sidebar says so and opens the notes from that version's GitHub release. **Update and restart** installs it with `npm install -g` and restarts the server in the same process, so a terminal, `tmux` or a service manager keeps running it; a session that is mid-turn is cut off and carries on after the restart. If Lattice wasn't installed with `npm install -g`, or can't write to its install folder, it shows the command to run instead.
+
 To work on Lattice itself, build it from a clone instead; see [Development](#development).
 
 ## Your first project
@@ -151,7 +153,7 @@ pnpm build
 pnpm start       # same as: node dist/cli.js serve
 ```
 
-A clone uses the same `~/.lattice-app/` data folder as the npm package, so stop one before starting the other, or give the clone its own folder with `LATTICE_CONFIG_DIR`. Don't `npm link` the clone next to an installed `lattice-app`: both provide the `lattice-app` command. `pnpm pack:release` builds the npm tarball from a built clone.
+A clone uses the same `~/.lattice-app/` data folder as the npm package, so stop one before starting the other, or give the clone its own folder with `LATTICE_CONFIG_DIR`. Don't `npm link` the clone next to an installed `lattice-app`: both provide the `lattice-app` command. `pnpm pack:release` builds the npm tarball from a built clone. Each published version also gets a GitHub release tagged `v<version>` with short notes; that is what the Update dialog shows.
 
 ```bash
 pnpm typecheck
@@ -162,7 +164,7 @@ pnpm test             # Playwright behavioural tests (needs `npx playwright inst
 pnpm dev              # server with reload on change, from source
 ```
 
-`pnpm dev` runs from `src/` under `tsx` and reloads on changes. On Linux, `pnpm service:setup` installs optional systemd user services; the other `service:*` scripts manage them.
+`pnpm dev` runs from `src/` under `tsx` and reloads on changes. A clone never checks for new versions; start it with `LATTICE_UPDATE_PREVIEW=0.9.0` to see the update notice, with sample notes and an Update button that installs nothing. On Linux, `pnpm service:setup` installs optional systemd user services; the other `service:*` scripts manage them.
 
 ## Licence
 

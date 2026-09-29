@@ -64,6 +64,8 @@ export function WorkerEventBlock({ message, onNavigateToSession }: WorkerEventBl
     case 'worker:answered':
       return <AnsweredLine data={event.data as WorkerAnsweredData} time={time} />;
     case 'worker:reported':
+      // A repeated wait the coordinator was not sent; the card shows it.
+      if ((event.data as WorkerReportedData).quietRepeat) return null;
       return (
         <ReportedBlock
           messageId={message.messageId}

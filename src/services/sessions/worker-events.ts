@@ -4,13 +4,15 @@
  * with the web client); this file is the only place that touches the harness.
  */
 
+import type Database from 'better-sqlite3';
 import type { SessionEvent } from '@liggi/agent-ui-harness/protocol';
 import { getHarnessSessionManager } from '../../harness/setup.js';
 import { appendCustomHarnessEvent } from '../../harness/harness-custom-events.js';
 import { createLogger } from '../infrastructure/logger.js';
 import { appendProjectNote, readProjectState } from './project-state.js';
-import { getEvents } from '../../session-history/repository.js';
+import { getEvent } from '../../session-history/repository.js';
 import { DatabaseProvider } from '../infrastructure/database-provider.js';
+import { cachedFold } from './fold-cache.js';
 import {
   WORKER_EVENT_TYPES,
   foldWorkerHistory,
@@ -77,15 +79,36 @@ export function startAccountingIfUnstarted(coordinatorConversationId: string): v
 
 /** Every worker the coordinator has dispatched, with its current phase, from the full log. */
 export function readWorkerStates(coordinatorConversationId: string): WorkerState[] {
-  return markWorkedSinceReport(foldWorkerStates(getEvents(coordinatorConversationId, { types: [...WORKER_EVENT_TYPES] })));
+  return markWorkedSinceReport(foldedWorkerStates(coordinatorConversationId));
 }
 
-/** Whether the worker has written any output after `since`: a turn it ran, whoever or whatever started it. */
-export function workerOutputSince(worker: string, since: number): boolean {
-  const latest = DatabaseProvider.getInstance().getDb().prepare(
-    `SELECT timestamp FROM harness_events WHERE session_id = ? AND type = 'content' ORDER BY seq DESC LIMIT 1`,
+/** `readWorkerStates` without `workedSinceReport`, for a caller that needs only the coordinator's own record. */
+export function foldedWorkerStates(coordinatorConversationId: string): WorkerState[] {
+  return cachedFold('workerStates', coordinatorConversationId, WORKER_EVENT_TYPES, foldWorkerStates);
+}
+
+/**
+ * Whether the worker has written any output of its own after `since`: a turn it
+ * ran, whoever or whatever started it. A background subagent's output lands in
+ * the same log with `parentToolUseId` set and does not count: it is the work a
+ * worker ending on "Waiting on: <lookups>" is waiting for, and counting it
+ * cleared that wait to Reported while the lookups ran (2026-09-29).
+ */
+export function workerOutputSince(worker: string, since: number, db: Database.Database = DatabaseProvider.getInstance().getDb()): boolean {
+  const latest = db.prepare(
+    `SELECT timestamp FROM harness_events WHERE session_id = ? AND type = 'content'
+       AND json_extract(data, '$.parentToolUseId') IS NULL ORDER BY seq DESC LIMIT 1`,
   ).get(worker) as { timestamp: number } | undefined;
   return latest !== undefined && latest.timestamp > since;
+}
+
+/** The text of the worker's latest `worker:reported` event in the coordinator's log, or null when it has none. */
+export function latestWorkerReportText(coordinator: string, worker: string, db: Database.Database = DatabaseProvider.getInstance().getDb()): string | null {
+  const row = db.prepare(
+    `SELECT json_extract(data, '$.text') AS text FROM harness_events WHERE session_id = ? AND type = 'worker:reported'
+       AND json_extract(data, '$.worker') = ? ORDER BY seq DESC LIMIT 1`,
+  ).get(coordinator, worker) as { text: string | null } | undefined;
+  return row?.text ?? null;
 }
 
 /**
@@ -111,7 +134,7 @@ export function markWorkedSinceReport(
 
 /** The coordinator's moves with its workers, oldest first, from the full log. */
 export function readWorkerHistory(coordinatorConversationId: string): WorkerHistoryRow[] {
-  return foldWorkerHistory(getEvents(coordinatorConversationId, { types: [...WORKER_EVENT_TYPES] }));
+  return cachedFold('workerHistory', coordinatorConversationId, WORKER_EVENT_TYPES, foldWorkerHistory);
 }
 
 /** The worker's open question in the coordinator's log, or null when it is not waiting on one. */
@@ -122,6 +145,6 @@ export function openQuestion(coordinatorConversationId: string, worker: string):
 
 /** Whether `seq` is a question this worker asked its coordinator: what `--answers` may name. */
 export function isWorkerQuestionSeq(coordinatorConversationId: string, worker: string, seq: number): boolean {
-  const event = getEvents(coordinatorConversationId).find((candidate) => candidate.seq === seq);
+  const event = getEvent(coordinatorConversationId, seq);
   return event?.type === 'worker:asked' && (event.data as { worker?: string })?.worker === worker;
 }

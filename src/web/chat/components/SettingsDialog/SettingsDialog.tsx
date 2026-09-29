@@ -6,6 +6,7 @@ import { usePreferencesContext } from '../../contexts/PreferencesContext';
 import { ProviderAuthTab } from './ProviderAuthTab';
 import { CLAUDE_MODELS } from '@/constants/claude-models';
 import { FeedbackSettingsSection } from '../Feedback/FeedbackSettingsSection';
+import { UpdateSettingsSection } from '../Update/UpdateNotice';
 
 type SettingsTab = 'auth' | 'connection' | 'general';
 
@@ -333,6 +334,8 @@ export function SettingsDialog({ isOpen, onClose, initialTab = 'auth' }: Setting
                   Every new session and project starts here, on this machine. Point it at the folder that holds your repos; the agents find the ones the work involves.
                 </p>
               </div>
+
+              <UpdateSettingsSection />
 
               <FeedbackSettingsSection />
 

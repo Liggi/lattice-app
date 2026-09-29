@@ -47,8 +47,8 @@ import { DEFAULT_MODELS } from '../insights/anthropic-service.js';
 import { getHarnessSessionManager } from '../../harness/setup.js';
 import { appendCustomHarnessEvent } from '../../harness/harness-custom-events.js';
 import { getEvents } from '../../session-history/repository.js';
+import { foldedWorkerStates } from './worker-events.js';
 import {
-  foldWorkerStates,
   reportSummaryDraft,
   reportSummaryOverLimits,
   usableReportSummary,
@@ -170,9 +170,9 @@ export function summaryDetailsMissing(summary: { title: string; text: string }, 
  * Whether this report already has a summary, and the task the coordinator
  * wrote for the worker at dispatch.
  *
- * Both from one read of the log, because a coordinator's log is long — front's
- * was past 41,000 events on 2026-09-21 — and asking twice reads all of it
- * twice for one report.
+ * Neither reads the whole log, because a coordinator's log is long — front's
+ * was past 41,000 events on 2026-09-21: the summaries written since the report,
+ * and the cached worker states.
  */
 function summaryContext(
   coordinator: string,
@@ -180,12 +180,10 @@ function summaryContext(
   reportSeq: number,
 ): { alreadySummarised: boolean; task: string | null } {
   try {
-    const events = getEvents(coordinator);
-    const alreadySummarised = events.some(
-      (event) => event.type === WORKER_REPORT_SUMMARY_EVENT
-        && (event.data as { reportSeq?: number })?.reportSeq === reportSeq,
+    const alreadySummarised = getEvents(coordinator, { fromSeq: reportSeq, types: [WORKER_REPORT_SUMMARY_EVENT] }).some(
+      (event) => (event.data as { reportSeq?: number })?.reportSeq === reportSeq,
     );
-    const task = foldWorkerStates(events).find((state) => state.worker === worker)?.task ?? null;
+    const task = foldedWorkerStates(coordinator).find((state) => state.worker === worker)?.task ?? null;
     return { alreadySummarised, task };
   } catch (err) {
     logger.debug('Could not read the coordinator log for context', {

@@ -28,8 +28,8 @@ import { getEvents, iterateEventsNewestFirst } from '../../session-history/repos
 import type { RawEvent } from '../../session-history/types.js';
 import { contextTokensNewestFirst, type UsageEventLike } from '../../session-history/context-tokens.js';
 import { ConversationService } from './conversation-service.js';
-import { buildCoordinatorPreamble, buildWorkerPreamble, latticeCli } from './pickup-prompts.js';
-import { installedProviders } from './installed-providers.js';
+import { buildCoordinatorPreamble, buildSessionPreamble, buildWorkerPreamble, latticeCli } from './pickup-prompts.js';
+import { claudeEndpointModels, installedProviders } from './installed-providers.js';
 import { tryAdmitTurn } from './turn-admission.js';
 import { unfinishedSwitch } from './coordinator-switch-state.js';
 import { foldProjectState, type ProjectOpenThread } from '../../types/project-state.js';
@@ -134,8 +134,12 @@ function stoppedSinceLastInput(sessionId: string): boolean {
 
 /** True when a compaction boundary is the newest thing since the last real input. */
 export function compactedSinceLastInput(events: readonly UsageEventLike[]): boolean {
-  for (let i = events.length - 1; i >= 0; i--) {
-    const event = events[i];
+  return compactedNewestFirst([...events].reverse());
+}
+
+/** `compactedSinceLastInput` over events newest first, stopping at the first that decides it. */
+function compactedNewestFirst(newestFirst: Iterable<UsageEventLike>): boolean {
+  for (const event of newestFirst) {
     if (event.type === 'input:sent') {
       if ((event.data as { source?: string }).source === 'command') continue;
       return false;
@@ -208,7 +212,7 @@ function buildCoordinatorRestoreBlock(
   end: string = CONTEXT_RESTORE_END,
 ): string {
   const cli = latticeCli();
-  const preamble = buildCoordinatorPreamble({ conversationId, workingDirectory, cli, installedProviders: installedProviders() });
+  const preamble = buildCoordinatorPreamble({ conversationId, workingDirectory, cli, installedProviders: installedProviders(), claudeEndpointModels: claudeEndpointModels() });
   const roster = renderWorkerRoster(events, cli);
 
   // The project state is not here. It follows in its own block, written by
@@ -311,7 +315,7 @@ function renderSiblingReports(
   for (const event of parentEvents) {
     if (event.type !== 'worker:reported') continue;
     const data = event.data as WorkerReportedData & { worker?: string };
-    if (!data?.worker || data.worker === self) continue;
+    if (!data?.worker || data.worker === self || data.quietRepeat) continue;
     reports.push({ seq: event.seq, worker: data.worker, firstLine: firstLine(data.text ?? ''), own: onThread.has(event.seq) });
   }
   if (reports.length === 0) return [];
@@ -336,14 +340,15 @@ export function buildCoordinatorTakeoverBlock(conversationId: string, opening: r
 /**
  * The block to put in front of a conversation's next input after it
  * compacted: a coordinator gets its preamble, roster and project state; a
- * worker gets its parent, its assignment and where the shared record is.
- * Empty for anything else, or when nothing compacted since the last input.
+ * worker gets its parent, its assignment and where the shared record is; a
+ * New-screen session gets its preamble. Empty for anything else, or when
+ * nothing compacted since the last input.
  */
 export function buildCoordinatorRestore(conversationId: string): string {
   const conversation = ConversationService.getInstance().getConversation(conversationId);
   if (!conversation) return '';
+  if (!compactedNewestFirst(iterateEventsNewestFirst(conversationId, ['input:sent', 'turn:end']))) return '';
   const events = getEvents(conversationId);
-  if (!compactedSinceLastInput(events)) return '';
 
   if (conversation.coordinator) {
     return buildCoordinatorRestoreBlock(conversationId, conversation.workingDirectory, events);
@@ -359,6 +364,18 @@ export function buildCoordinatorRestore(conversationId: string): string {
       pickedUpFrom: conversation.pickedUpFrom,
       latestProvider: conversation.latestProvider,
     });
+  }
+  // A New-screen session, whose only standing instruction is how to draw.
+  if (!conversation.pickedUpFrom) {
+    return [
+      `${CONTEXT_RESTORE_PREFIX} Your context was just compacted. What follows is your standing preamble; the message after`,
+      'the end marker is the one to act on.]',
+      '',
+      buildSessionPreamble(latticeCli()).replace(/\n+---\s*$/, '').trimEnd(),
+      '',
+      CONTEXT_RESTORE_END,
+      '',
+    ].join('\n');
   }
   return '';
 }

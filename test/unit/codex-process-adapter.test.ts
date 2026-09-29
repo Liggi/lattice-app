@@ -450,6 +450,7 @@ describe('CodexProcessAdapter', () => {
         id: expect.any(String),
         question: 'Which indentation should this new repo use?',
         options: options.map((label) => ({ label, consequence: '' })),
+        holdsTurn: true,
       },
     }]);
     handle.signal('SIGTERM');

@@ -23,10 +23,10 @@ import { userName } from '../user-profile.js';
 import { createLogger } from '../infrastructure/logger.js';
 import { getHarnessSessionManager } from '../../harness/setup.js';
 import { appendCustomHarnessEvent } from '../../harness/harness-custom-events.js';
-import { getEvents } from '../../session-history/repository.js';
-import type { RawEvent } from '../../session-history/types.js';
+import { iterateEventsNewestFirst } from '../../session-history/repository.js';
 import { ConversationService } from './conversation-service.js';
-import { foldProjectState, renderProjectState, type ProjectState } from '../../types/project-state.js';
+import { renderProjectState, type ProjectState } from '../../types/project-state.js';
+import { readProjectState } from './project-state.js';
 import { SERVER_NOTE_END, SERVER_NOTE_PREFIX } from '../../types/worker-events.js';
 
 const logger = createLogger('ProjectOrientation');
@@ -54,18 +54,18 @@ function hasRecord(state: ProjectState): boolean {
  * given the block and then had it summarised away, so as far as the turn is
  * concerned it never arrived.
  */
-function orientationReason(events: readonly RawEvent[], revision: number): OrientationReason | null {
-  let lastOriented = -1;
-  for (let i = events.length - 1; i >= 0; i--) {
-    if (events[i].type === PROJECT_ORIENTED_EVENT) { lastOriented = i; break; }
+function orientationReason(conversationId: string, revision: number): OrientationReason | null {
+  let compacted = false;
+  for (const event of iterateEventsNewestFirst(conversationId, [PROJECT_ORIENTED_EVENT, 'turn:end'])) {
+    if (event.type === 'turn:end') {
+      if ((event.data as { compact?: boolean })?.compact) compacted = true;
+      continue;
+    }
+    const shown = (event.data as Partial<ProjectOrientedData>)?.revision;
+    if (typeof shown !== 'number' || revision > shown) return 'changed';
+    return compacted ? 'compacted' : null;
   }
-  if (lastOriented < 0) return 'first';
-  const shown = (events[lastOriented].data as Partial<ProjectOrientedData>)?.revision;
-  if (typeof shown !== 'number' || revision > shown) return 'changed';
-  for (const event of events.slice(lastOriented + 1)) {
-    if (event.type === 'turn:end' && (event.data as { compact?: boolean })?.compact) return 'compacted';
-  }
-  return null;
+  return 'first';
 }
 
 /**
@@ -93,10 +93,9 @@ export function composeProjectOrientation(
 ): { text: string; shown: ProjectOrientedData } | null {
   const conversation = ConversationService.getInstance().getConversation(conversationId);
   if (!conversation?.coordinator) return null;
-  const events = getEvents(conversationId);
-  const state = foldProjectState(events);
+  const state = readProjectState(conversationId);
   if (!hasRecord(state)) return null;
-  const reason = opts.switched ? 'switched' : orientationReason(events, state.revision);
+  const reason = opts.switched ? 'switched' : orientationReason(conversationId, state.revision);
   if (!reason) return null;
 
   const opening = reason === 'compacted'

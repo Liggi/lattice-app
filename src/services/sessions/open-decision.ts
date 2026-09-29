@@ -11,6 +11,7 @@ import {
   DECISION_ASKED_EVENT,
   DECISION_DISMISSED_EVENT,
   DECISION_SETTLED_EVENT,
+  endsAskingTurn,
   foldDecisions,
   isOpenDecision,
   type DecisionAskedData,
@@ -19,9 +20,10 @@ import {
 
 export interface OpenDecision {
   asked: DecisionAskedData;
-  /** The `decision:asked` event's seq and time, epoch ms. */
+  /** The `decision:asked` event's seq. */
   seq: number;
-  askedAt: number;
+  /** When the card showed to the user, epoch ms: the end of the turn that asked it (`placeDecisionsAtTurnEnd`). */
+  shownAt: number;
 }
 
 export function decisionsIn(threadId: string): Map<string, DecisionState> {
@@ -30,10 +32,17 @@ export function decisionsIn(threadId: string): Map<string, DecisionState> {
   }));
 }
 
+/**
+ * The thread's open question, once its card shows. While the turn that asked
+ * it is still running the user cannot see it, so it is not waiting on them yet.
+ */
 export function openDecision(threadId: string): OpenDecision | null {
   const open = [...decisionsIn(threadId).values()].find(isOpenDecision);
   if (!open) return null;
   const event = getEvents(threadId, { types: [DECISION_ASKED_EVENT] })
     .find((candidate) => (candidate.data as DecisionAskedData | undefined)?.id === open.asked.id);
-  return event ? { asked: open.asked, seq: event.seq, askedAt: event.timestamp } : null;
+  if (!event) return null;
+  if (open.asked.holdsTurn) return { asked: open.asked, seq: event.seq, shownAt: event.timestamp };
+  const end = getEvents(threadId, { fromSeq: event.seq + 1, types: ['turn:end', 'run:end', 'run:error'] }).find(endsAskingTurn);
+  return end ? { asked: open.asked, seq: event.seq, shownAt: end.timestamp } : null;
 }

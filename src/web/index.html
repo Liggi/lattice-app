@@ -37,13 +37,26 @@
       by nothing. Don't add a face here to try one out; do it behind a flag on
       the visual-language page instead.
     -->
-    <!-- Reading + data: Geist Sans, Geist Mono -->
-    <link href="https://cdn.jsdelivr.net/npm/geist@1.3.1/dist/fonts/geist-sans/style.min.css" rel="stylesheet">
-    <link href="https://cdn.jsdelivr.net/npm/geist@1.3.1/dist/fonts/geist-mono/style.min.css" rel="stylesheet">
     <!-- Display chrome: Orbitron (`font-display`) -->
     <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <!-- Brand texture: GeistPixelCircle (`.font-pixel`) -->
     <style>
+      /* Reading + data: Geist Sans, Geist Mono. The geist package ships font
+         files only, no stylesheet, so each face is declared here. */
+      @font-face {
+        font-family: 'Geist';
+        src: url('https://cdn.jsdelivr.net/npm/geist@1.7.0/dist/fonts/geist-sans/Geist-Variable.woff2') format('woff2');
+        font-weight: 100 900;
+        font-style: normal;
+        font-display: swap;
+      }
+      @font-face {
+        font-family: 'Geist Mono';
+        src: url('https://cdn.jsdelivr.net/npm/geist@1.7.0/dist/fonts/geist-mono/GeistMono-Variable.woff2') format('woff2');
+        font-weight: 100 900;
+        font-style: normal;
+        font-display: swap;
+      }
+      /* Brand texture: GeistPixelCircle (`.font-pixel`) */
       @font-face {
         font-family: 'GeistPixelCircle';
         src: url('https://cdn.jsdelivr.net/npm/geist@1.7.0/dist/fonts/geist-pixel/GeistPixel-Circle.woff2') format('woff2');
@@ -52,7 +65,6 @@
         font-display: swap;
       }
     </style>
-    <script src="https://unpkg.com/@alenaksu/json-viewer@2.1.0/dist/json-viewer.bundle.js"></script>
   </head>
   <body>
     <div id="root"></div>

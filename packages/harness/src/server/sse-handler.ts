@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { SessionManager } from './session-manager.js'
+import type { SessionEvent } from '../protocol/events.js'
 
 const SSE_HEADERS = {
   'Content-Type': 'text/event-stream',
@@ -12,6 +13,8 @@ const HEARTBEAT_INTERVAL_MS = 10_000
 
 export interface SSEHandlerOptions {
   heartbeatMs?: number
+  /** Rewrites each event just before it is written to the stream; the event in the log is untouched. */
+  transformEvent?: (sessionId: string, event: SessionEvent) => SessionEvent
 }
 
 /**
@@ -31,6 +34,7 @@ export function createSSEHandler(
   options?: SSEHandlerOptions,
 ) {
   const heartbeatMs = options?.heartbeatMs ?? HEARTBEAT_INTERVAL_MS
+  const transform = options?.transformEvent ?? ((_sessionId: string, event: SessionEvent) => event)
 
   return function handleSSE(
     req: IncomingMessage,
@@ -171,7 +175,7 @@ export function createSSEHandler(
     res.write(`event: replay_meta\ndata: ${JSON.stringify(meta)}\n\n`)
 
     for (let i = replayStart; i < missed.length; i++) {
-      writeEvent(res, missed[i])
+      writeEvent(res, transform(sessionId, missed[i]))
     }
 
     // Diagnostic comment — visible in browser DevTools Network tab for SSE debugging.
@@ -182,7 +186,7 @@ export function createSSEHandler(
 
     // Stream live events
     const unsub = log.subscribe((event) => {
-      writeEvent(res, event)
+      writeEvent(res, transform(sessionId, event))
     })
 
     // Immediate ping — confirms to the client that the session is valid.

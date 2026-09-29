@@ -101,7 +101,7 @@ describe('GET /api/sessions/status for a turn held on its question card', () => 
 
   it('reports awaitingAnswer while the running turn waits on the card, and not once it is answered', async () => {
     seedRunStart('conv-codex', 'codex');
-    seed('conv-codex', 2, 'decision:asked', { id: 'd1', question: 'Tabs or spaces?', options: [] });
+    seed('conv-codex', 2, 'decision:asked', { id: 'd1', question: 'Tabs or spaces?', options: [], holdsTurn: true });
     const app = buildApp(['conv-codex']);
 
     const waiting = await request(app).get('/api/sessions/status').expect(200);
@@ -110,5 +110,12 @@ describe('GET /api/sessions/status for a turn held on its question card', () => 
     seed('conv-codex', 3, 'decision:settled', { id: 'd1' });
     const settled = await request(app).get('/api/sessions/status').expect(200);
     expect(settled.body.sessions['conv-codex']).toMatchObject({ status: 'ongoing', awaitingAnswer: false });
+  });
+
+  it('does not report awaitingAnswer for a lattice ask card whose turn is still running', async () => {
+    seedRunStart('conv-claude', 'claude');
+    seed('conv-claude', 2, 'decision:asked', { id: 'd2', question: 'Tabs or spaces?', options: [] });
+    const running = await request(buildApp(['conv-claude'])).get('/api/sessions/status').expect(200);
+    expect(running.body.sessions['conv-claude']).toMatchObject({ status: 'ongoing', awaitingAnswer: false });
   });
 });

@@ -11,7 +11,7 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useSearchParams, useNavigate } from 'react-router-dom';
-import { Bot, Code2, PanelLeft, Boxes, Settings } from 'lucide-react';
+import { Bot, Code2, PanelLeft, Boxes, Server, Settings } from 'lucide-react';
 import { DEFAULT_OPENCODE_MODEL_ID } from '@/constants/opencode-models.js';
 
 /** Toggle icon per provider. Keep in step with the Provider union. */
@@ -55,6 +55,7 @@ import {
   CLAUDE_MODELS,
   formatClaudeModelLabel,
 } from '@/constants/claude-models';
+import { endpointModelOption } from '@/constants/claude-endpoint';
 import {
   CODEX_MODELS,
   CODEX_EFFORTS,
@@ -84,7 +85,7 @@ function createPendingLaunchId(): string {
 export function NewSessionView({ sidebarOpen, onToggleSidebar }: NewSessionViewProps): JSX.Element {
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
-  const { serverConfig } = usePreferencesContext();
+  const { serverConfig, claudeEndpoints } = usePreferencesContext();
   const {
     addOptimisticSession,
     addPendingLaunch,
@@ -109,6 +110,10 @@ export function NewSessionView({ sidebarOpen, onToggleSidebar }: NewSessionViewP
   const [provider, setProvider] = useState<Provider>(searchParamProvider);
   const [goalObjective, setGoalObjective] = useState('');
   const [selectedModel, setSelectedModel] = useState<string | null>(null);
+  // A saved endpoint picked beside Claude and Codex: a Claude session on that
+  // server's model. Null is Claude on the sign-in.
+  const [endpointModel, setEndpointModel] = useState<string | null>(null);
+  const endpoint = claudeEndpoints.find((candidate) => candidate.model === endpointModel) ?? null;
   const [selectedEffort, setSelectedEffort] = useState<string | null>(null);
 
   useEffect(() => {
@@ -120,11 +125,13 @@ export function NewSessionView({ sidebarOpen, onToggleSidebar }: NewSessionViewP
   useEffect(() => {
     setSelectedModel(null);
     setSelectedEffort(null);
-  }, [provider]);
+  }, [provider, endpointModel]);
 
   // A Claude session with no configured model runs on the Claude CLI's own
   // default, which only the CLI knows, so it is shown as that.
-  const effectiveDefaultModel = coordinator
+  const effectiveDefaultModel = endpoint
+    ? endpoint.model
+    : coordinator
     ? NEW_PROJECT_MODEL
     : serverConfig?.defaultModel?.trim() || CLAUDE_CLI_DEFAULT_MODEL;
   const codexDefaultModel = DEFAULT_CODEX_MODEL_ID;
@@ -141,6 +148,7 @@ export function NewSessionView({ sidebarOpen, onToggleSidebar }: NewSessionViewP
   }, [provider, selectedModel, selectedEffort, codexDefaultModel]);
 
   const claudeAvailableModels = React.useMemo(() => {
+    if (endpoint) return [endpointModelOption(endpoint, true)];
     const selectable: Array<{ id: string; label: string; description?: string; isDefault: boolean }> =
       CLAUDE_MODELS.filter((m) => m.composerSelectable).map((m) => ({
         id: m.id,
@@ -161,7 +169,7 @@ export function NewSessionView({ sidebarOpen, onToggleSidebar }: NewSessionViewP
       });
     }
     return selectable;
-  }, [effectiveDefaultModel]);
+  }, [effectiveDefaultModel, endpoint]);
 
   const codexAvailableModels = React.useMemo(() => {
     const selectable: Array<{ id: string; label: string; description?: string; isDefault: boolean }> =
@@ -234,6 +242,7 @@ export function NewSessionView({ sidebarOpen, onToggleSidebar }: NewSessionViewP
 
   const _handleProviderChange = useCallback((nextProvider: Provider) => {
     setProvider(nextProvider);
+    setEndpointModel(null);
 
     const nextSearchParams = new URLSearchParams(searchParams);
     nextSearchParams.set('provider', nextProvider);
@@ -480,9 +489,9 @@ export function NewSessionView({ sidebarOpen, onToggleSidebar }: NewSessionViewP
         <div className="flex-1 flex items-center justify-center">
           <div className="flex flex-col items-center gap-3">
             <div className="flex flex-col items-center gap-2">
-            <div className="flex items-center rounded-md border border-line bg-surface p-0.5">
+            <div className="flex flex-wrap items-center justify-center rounded-md border border-line bg-surface p-0.5">
               {NEW_SESSION_PROVIDERS.map((providerOption) => {
-                const isActive = provider === providerOption;
+                const isActive = provider === providerOption && !endpoint;
                 const Icon = PROVIDER_ICONS[providerOption];
                 return (
                   <button
@@ -502,19 +511,36 @@ export function NewSessionView({ sidebarOpen, onToggleSidebar }: NewSessionViewP
                   </button>
                 );
               })}
+              {claudeEndpoints.map((option) => (
+                <button
+                  key={option.id}
+                  type="button"
+                  data-testid="provider-option-endpoint"
+                  onClick={() => { _handleProviderChange('claude'); setEndpointModel(option.model); }}
+                  disabled={isCreating}
+                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-sm text-xs font-medium transition-colors duration-100 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
+                    endpoint?.id === option.id
+                      ? 'bg-surface-2 text-fg'
+                      : 'text-fg-3 hover:text-fg-2'
+                  }`}
+                >
+                  <Server size={12} />
+                  {option.model}
+                </button>
+              ))}
             </div>
             {coordinator && (
               <div className="px-4 text-center text-xs text-fg-3" data-testid="new-project-summary">
                 Coordinator on {provider === 'codex'
                   ? CODEX_MODELS.find((m) => m.id === codexDefaultModel)?.label ?? codexDefaultModel
-                  : formatClaudeModelLabel(NEW_PROJECT_MODEL)}
+                  : formatClaudeModelLabel(effectiveDefaultModel)}
               </div>
             )}
-            <ProviderSignInStatus
+            {!endpoint && <ProviderSignInStatus
               status={signIn}
               provider={provider === 'codex' ? 'codex' : 'claude'}
               onOpenProviders={() => setSettingsOpen(true)}
-            />
+            />}
             </div>
           </div>
         </div>

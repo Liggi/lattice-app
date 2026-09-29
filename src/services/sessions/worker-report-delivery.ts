@@ -47,13 +47,14 @@ import { ConversationService } from './conversation-service.js';
 import { getEvents } from '../../session-history/repository.js';
 import { projectTranscript } from '../../session-history/renderer.js';
 import type { RawEvent } from '../../session-history/types.js';
-import { appendWorkerEvent } from './worker-events.js';
+import { appendWorkerEvent, foldedWorkerStates, latestWorkerReportText } from './worker-events.js';
 import { drainInbox, enqueueInboxItem } from './session-inbox.js';
 import { noteWorkerReport } from './worker-report-summary.js';
 import { handOverNow } from './immediate-delivery.js';
 import { UserName } from '../user-profile.js';
 import { checkWaitingWorkers } from './wait-watch.js';
 import {
+  isQuietRepeat,
   isWorkerQuestion,
   workerWaitPhrase,
   type WorkerAskedData,
@@ -67,7 +68,11 @@ const WAIT_CHECK_DELAY_MS = 15_000;
 
 export type LastTurn =
   /** The turn ended on an assistant reply, given exactly as written. */
-  | { reply: string }
+  | {
+      reply: string;
+      /** No input opened the turn: the worker's own Monitor, background task or subagent finishing woke it. */
+      selfStarted: boolean;
+    }
   /**
    * The turn has no reply to deliver: it was the server's own control
    * operation, it was stopped, the `turn:end` was a compaction's and the
@@ -144,7 +149,7 @@ export function readLastTurn(events: readonly RawEvent[]): LastTurn {
   // tool call, so the last line is the message the worker ended on.
   const lines = projectTranscript(turnEvents)
     .filter((line) => line.role === 'assistant' && line.text.trim().length > 0);
-  return { reply: lines[lines.length - 1].text.trim() };
+  return { reply: lines[lines.length - 1].text.trim(), selfStarted: startIdx >= 0 && events[startIdx].type === 'turn:end' };
 }
 
 /** The newest compaction's error, when the newest one failed; null otherwise. */
@@ -215,9 +220,19 @@ async function deliverIfWorker(workerConversationId: string): Promise<void> {
   // coordinator reads names the exact question or report (`--answers <seq>`,
   // `--addresses <seq>`), and the row can be traced back to it. A row with no
   // seq means the event was not written, which the log above already says.
+  const quietRepeat = !question && turn.selfStarted && isQuietRepeat(reply, lastReport(parent, workerConversationId));
   const sourceEvent = question
     ? appendWorkerEvent(parent, 'worker:asked', { worker: workerConversationId, text: reply } satisfies WorkerAskedData)
-    : appendWorkerEvent(parent, 'worker:reported', { worker: workerConversationId, model, text: reply } satisfies WorkerReportedData);
+    : appendWorkerEvent(parent, 'worker:reported', {
+      worker: workerConversationId, model, text: reply, ...(quietRepeat ? { quietRepeat: true } : {}),
+    } satisfies WorkerReportedData);
+  if (quietRepeat) {
+    logger.info('Worker woke and only repeated its last report; recorded for its card, not sent', {
+      worker: workerConversationId, parent, seq: sourceEvent?.seq ?? null,
+    });
+    setTimeout(() => { void checkWaitingWorkers(parent); }, WAIT_CHECK_DELAY_MS).unref?.();
+    return;
+  }
 
   enqueueInboxItem({
     sessionId: parent,
@@ -243,6 +258,13 @@ async function deliverIfWorker(workerConversationId: string): Promise<void> {
   if (!question && workerWaitPhrase(reply)) {
     setTimeout(() => { void checkWaitingWorkers(parent); }, WAIT_CHECK_DELAY_MS).unref?.();
   }
+}
+
+/** The worker's standing in the coordinator's log and its latest report's text, for `isQuietRepeat`. */
+function lastReport(parent: string, worker: string): Parameters<typeof isQuietRepeat>[1] {
+  const state = foldedWorkerStates(parent).find((candidate) => candidate.worker === worker);
+  if (!state) return null;
+  return { phase: state.phase, waitingOn: state.waitingOn, text: latestWorkerReportText(parent, worker) };
 }
 
 /** The line a coordinator reads when the user stops one of its workers. Exported for tests. */

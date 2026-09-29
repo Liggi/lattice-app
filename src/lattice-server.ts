@@ -51,7 +51,7 @@ import { ConversationService } from './services/sessions/conversation-service.js
 import { drainAllInboxes } from './services/sessions/session-inbox.js';
 import { settleHeldDeliveries } from './services/sessions/held-delivery-settlement.js';
 import { wakeRestartWaiters } from './services/sessions/wait-watch.js';
-import { servesViteDevClient } from './server/vite-dev-client.js';
+import { builtClientDir, servesViteDevClient } from './server/vite-dev-client.js';
 
 // ViteExpress will be imported dynamically in initialize() if needed
 let ViteExpress: typeof import('vite-express') | undefined;
@@ -731,13 +731,16 @@ export class LatticeServer {
 
     this.stopBackgroundServices();
     await this.closeHttpServer();
-    this.stopSpawnedDaemon();
+    await this.stopSpawnedDaemon();
   }
 
-  private stopSpawnedDaemon(): void {
+  /** Waits for the daemon to exit, so a server started next spawns its own rather than finding this one's socket. */
+  private async stopSpawnedDaemon(): Promise<void> {
     const child = this.spawnedDaemonChild;
     if (!child) return;
     this.spawnedDaemonChild = null;
+    if (child.exitCode !== null || child.signalCode !== null) return;
+    const exited = new Promise<void>((resolve) => child.once('exit', () => resolve()));
     try {
       child.kill('SIGTERM');
       this.logger.info('Sent SIGTERM to spawned daemon child', { pid: child.pid });
@@ -745,6 +748,16 @@ export class LatticeServer {
       this.logger.warn('Failed to stop spawned daemon child', {
         error: err instanceof Error ? err.message : String(err),
       });
+      return;
+    }
+    const timedOut = await Promise.race([
+      exited.then(() => false),
+      new Promise<boolean>((resolve) => setTimeout(() => resolve(true), 5_000).unref()),
+    ]);
+    if (timedOut) {
+      this.logger.warn('Daemon child did not exit within 5s of SIGTERM; killing it', { pid: child.pid });
+      child.kill('SIGKILL');
+      await exited;
     }
   }
 
@@ -842,9 +855,16 @@ export class LatticeServer {
       // In production/test, serve built static files
       // In production, __dirname will be /path/to/node_modules/lattice-app/dist
       // We need to serve from dist/web
-      const staticPath = path.join(__dirname, 'web');
+      const staticPath = builtClientDir;
       this.logger.debug('Serving static files from', { path: staticPath });
-      this.app.use(express.static(staticPath));
+      // Built asset names carry a content hash, so a browser can keep them;
+      // index.html names the current ones and is always revalidated.
+      this.app.use('/assets', express.static(path.join(staticPath, 'assets'), { immutable: true, maxAge: '1y' }));
+      this.app.use(express.static(staticPath, {
+        setHeaders: (res, filePath) => {
+          if (filePath.endsWith('.html')) res.setHeader('Cache-Control', 'no-cache');
+        },
+      }));
     }
     // In development, ViteExpress handles static file serving
     
@@ -864,7 +884,7 @@ export class LatticeServer {
     registerAppRoutes({
       app: this.app,
       logger: this.logger,
-      frontendDir: path.join(__dirname, 'web'),
+      frontendDir: builtClientDir,
       historyReader: this.historyReader,
       activeConversationRegistry: this.activeConversationRegistry,
       processManagerClient: this.processManagerClient,

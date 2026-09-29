@@ -15,9 +15,10 @@ let workerEvents: { type: string; timestamp: number; data: unknown }[] = [];
 let userSent: { timestamp: number }[] = [];
 let card: OpenDecision | null = null;
 const judgeNouls = vi.fn();
+const outputSince = vi.fn((_worker: string, _since: number) => false);
 
 vi.mock('../../src/services/sessions/project-state.js', () => ({ readProjectState: () => ({ open, priority, now: null }) }));
-vi.mock('../../src/session-history/repository.js', () => ({ getEvents: () => workerEvents, iterateEventsNewestFirst: () => userSent[Symbol.iterator]() }));
+vi.mock('../../src/session-history/repository.js', () => ({ iterateEventsNewestFirst: () => userSent[Symbol.iterator]() }));
 vi.mock('../../src/harness/event-message-reader.js', () => ({ getEventStorage: () => ({ maxSeq: () => maxSeq }) }));
 vi.mock('../../src/services/infrastructure/typesafe-client.js', () => ({ judgeNouls: (...args: unknown[]) => judgeNouls(...args) }));
 vi.mock('../../src/services/infrastructure/database-provider.js', () => ({
@@ -27,9 +28,13 @@ vi.mock('../../src/services/sessions/session-info-service.js', () => ({
   SessionInfoService: { getInstance: () => ({ getSessionInfoSync: () => ({ custom_name: 'Project' }) }) },
 }));
 vi.mock('../../src/services/sessions/open-decision.js', () => ({ openDecision: () => card }));
+vi.mock('../../src/services/sessions/worker-events.js', async () => {
+  const { foldWorkerStates } = await import('../../src/types/worker-events.js');
+  return { foldedWorkerStates: () => foldWorkerStates(workerEvents), workerOutputSince: (w: string, t: number) => outputSince(w, t) };
+});
 vi.mock('../../src/services/user-profile.js', () => ({ userName: () => 'Alex' }));
 
-const { projectNeedsYou, projectWorkingOn, projectWorkerTasks, __resetNeedsYouForTests } = await import('../../src/services/sessions/project-needs-you.js');
+const { projectNeedsYou, projectWorkingOn, projectWorkerTasks, projectWorkerWaits, __resetNeedsYouForTests } = await import('../../src/services/sessions/project-needs-you.js');
 
 function thread(seq: number, overrides: Partial<ProjectOpenThread> = {}): ProjectOpenThread {
   return {
@@ -63,6 +68,21 @@ describe('projectNeedsYou', () => {
     workerEvents = [{ type: 'worker:started', timestamp: 1, data: { worker: 'conv-w', provider: 'claude', task: 'Screenshot every sidebar tooltip' } }];
     expect(projectWorkerTasks('conv-p')).toEqual({ 'conv-w': 'Screenshot every sidebar tooltip' });
     expect(projectWorkerTasks('conv-s')).toBeNull();
+    workerEvents = [];
+  });
+
+  it("gives each worker's declared wait until it has output since the report", () => {
+    workerEvents = [
+      { type: 'worker:started', timestamp: 1, data: { worker: 'conv-w', provider: 'claude', task: 'Restart' } },
+      { type: 'worker:reported', timestamp: 2, data: { worker: 'conv-w', text: 'Waiting on: the next restart\n\nBuilt it.' } },
+      { type: 'worker:started', timestamp: 3, data: { worker: 'conv-x', provider: 'claude', task: 'Done' } },
+      { type: 'worker:reported', timestamp: 4, data: { worker: 'conv-x', text: 'Built it.' } },
+    ];
+    expect(projectWorkerWaits('conv-p')).toEqual({ 'conv-w': 'the next restart' });
+    outputSince.mockReturnValue(true);
+    expect(projectWorkerWaits('conv-p')).toEqual({});
+    outputSince.mockReturnValue(false);
+    expect(projectWorkerWaits('conv-s')).toBeNull();
     workerEvents = [];
   });
 
@@ -116,7 +136,7 @@ describe('projectNeedsYou', () => {
     card = {
       asked: { id: 'd1', question: 'Ship it tonight?', options: [{ label: 'Yes', consequence: 'Release goes out' }, { label: 'No', consequence: 'Wait a day' }] },
       seq: 40,
-      askedAt: 800,
+      shownAt: 800,
     };
     judgeNouls.mockResolvedValue({ nouls: { act: 0.95, parked: 0 } });
     expect(projectNeedsYou('conv-p')).toEqual([]);

@@ -15,7 +15,8 @@ import type {
 } from '@/services/sessions/conversation-service.js';
 import type { SessionInfoService } from '@/services/sessions/session-info-service.js';
 import type { ClaudeHistoryReader } from '@/services/sessions/claude-history-reader.js';
-import { readMessages, readMessagesTail, countMessages } from '@/harness/event-message-reader.js';
+import { readMessages, readMessagesTail, countMessages, getEventStorage } from '@/harness/event-message-reader.js';
+import { deriveSessionStatusFromEvents } from '@/harness/derive-session-status.js';
 import type { ActiveConversationRegistry } from '@/services/process/active-conversation-registry.js';
 import type { InsightsEngine } from '@/services/insights/insights-engine.js';
 import { mapUnifiedMessageToConversationMessage } from '@/services/sessions/unified-message-mapper.js';
@@ -420,6 +421,7 @@ export function registerUnifiedConversationQueryRoutes(
     // `archived` is the coordinator's call that the worker is done (it
     // archives the session); `reportReached` says whether the latest report
     // or question has been read by one of the coordinator's turns yet.
+    const asOfSeq = getEventStorage().maxSeq(conversationId);
     const reached = latestWorkerItemReached(conversationId);
     const states = readWorkerStates(conversationId);
     // What each worker's process is doing, asked of the harness rather than
@@ -443,6 +445,12 @@ export function registerUnifiedConversationQueryRoutes(
       // An idle worker with something in its inbox is about to run again, so
       // the card can say that rather than calling it stopped.
       queued: unread.has(state.worker),
+      // Between turns, what it armed and is still running: its own subagents
+      // mean it is working, a background command or wake-up that it is
+      // waiting. Only an idle process can hold any, so only those are read.
+      pendingWork: runtimes.get(state.worker) === 'idle'
+        ? deriveSessionStatusFromEvents(getEventStorage().readStatusWindow(state.worker, 200)).pendingWork
+        : null,
       // Present tense, so it is only served for the turn it was written from
       // and only while a turn is actually in progress; a question or report
       // replaces it. A stopped or exited process gets none: the last phrase
@@ -463,6 +471,7 @@ export function registerUnifiedConversationQueryRoutes(
       project,
       senders: senderIdentities(conversationId),
       unread: Object.fromEntries(unread),
+      asOfSeq,
     } satisfies WorkersResponse);
   }));
 

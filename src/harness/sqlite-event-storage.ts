@@ -114,6 +114,7 @@ export class SqliteEventStorageAdapter implements EventStorageAdapter {
   private stmtListSessionsWithNonTerminalTail: Database.Statement;
   private stmtListUnfinishedTasks: Database.Statement;
   private stmtReadStatusWindow: Database.Statement;
+  private stmtReadRunTasksBefore: Database.Statement;
   private stmtReadTail: Database.Statement;
   private stmtReadDecisions: Database.Statement;
 
@@ -235,6 +236,19 @@ export class SqliteEventStorageAdapter implements EventStorageAdapter {
       LIMIT ?
     `);
 
+    // Task lifecycle events of the latest run older than `beforeSeq`: see readStatusWindow.
+    this.stmtReadRunTasksBefore = db.prepare(`
+      SELECT * FROM harness_events
+      WHERE session_id = ?
+        AND type IN ('task:started', 'task:updated', 'task:notification')
+        AND seq < ?
+        AND seq > COALESCE((
+          SELECT MAX(seq) FROM harness_events
+          WHERE session_id = ? AND type IN ('run:start', 'run:end', 'run:error')
+        ), 0)
+      ORDER BY seq ASC
+    `);
+
     this.stmtReadTail = db.prepare(`
       SELECT * FROM harness_events
       WHERE session_id = ?
@@ -316,6 +330,14 @@ export class SqliteEventStorageAdapter implements EventStorageAdapter {
     return rows.map(rowToEvent);
   }
 
+  /**
+   * The latest `limit` status-bearing events, plus every task lifecycle event
+   * of the latest run that fell out of that window. A background subagent
+   * writes its tool calls into this log, so 200 events can pass in a minute or
+   * two and take its `task:started` with them; `derivePendingWork` then called
+   * a session with four lookups running idle (2026-09-29). A window of one
+   * only asks whether the session has ever run, so it skips the extra read.
+   */
   readStatusWindow(sessionId: string, limit = 200): SessionEvent[] {
     const rows = this.stmtReadStatusWindow.all(
       sessionId,
@@ -323,6 +345,10 @@ export class SqliteEventStorageAdapter implements EventStorageAdapter {
       limit,
     ) as Array<Record<string, unknown>>;
     rows.reverse();
+    if (rows.length === limit && limit > 1) {
+      const older = this.stmtReadRunTasksBefore.all(sessionId, rows[0].seq, sessionId) as Array<Record<string, unknown>>;
+      rows.unshift(...older);
+    }
     return rows.map(rowToEvent);
   }
 

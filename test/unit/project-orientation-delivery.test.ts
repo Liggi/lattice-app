@@ -38,7 +38,7 @@ vi.mock('../../src/services/infrastructure/config-service.js', () => ({
 }));
 vi.mock('../../src/session-history/repository.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
-  getEvents: (conversationId: string) => storedEvents.get(conversationId) ?? [],
+  ...(await import('./fake-event-reads.js')).fakeEventReads((conversationId) => storedEvents.get(conversationId) ?? []),
 }));
 
 const { createHarnessRoutes } = await import('../../src/harness/routes.js');

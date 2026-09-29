@@ -18,6 +18,8 @@ export interface ToolCallData {
   input: string;
   filePath?: string;
   resultContent?: string;
+  /** Where to load the image a call returned (a screenshot read from disk), shown in place of text. */
+  imageUrl?: string;
   status: 'pending' | 'success' | 'error';
 }
 
@@ -156,7 +158,7 @@ export function CollapsedToolGroup({ group, temporalState }: CollapsedToolGroupP
               const Icon = meta.icon;
               const isCallExpanded = expandedCalls.has(index);
               const cleanedResult = call.resultContent ? stripRerunFooter(call.resultContent) : call.resultContent;
-              const hasResult = cleanedResult && call.status === 'success';
+              const hasResult = (cleanedResult || call.imageUrl) && call.status === 'success';
               const language = call.tool === 'read' ? (detectLanguageFromPath(call.filePath ?? call.input) || 'text') : 'text';
 
               return (
@@ -179,7 +181,17 @@ export function CollapsedToolGroup({ group, temporalState }: CollapsedToolGroupP
                     )}
                   </button>
 
-                  {isCallExpanded && hasResult && (
+                  {isCallExpanded && hasResult && call.imageUrl && (
+                    <div className="mt-1.5 mb-2">
+                      <img
+                        src={call.imageUrl}
+                        alt={call.input}
+                        className="rounded border border-stone-200 dark:border-stone-800/40 max-w-full max-h-96 object-contain"
+                      />
+                    </div>
+                  )}
+
+                  {isCallExpanded && hasResult && !call.imageUrl && (
                     <div className="mt-1.5 mb-2">
                       <div className={cn(
                         'relative rounded-md border overflow-hidden max-h-60 overflow-y-auto',

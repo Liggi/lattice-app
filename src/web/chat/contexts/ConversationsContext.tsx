@@ -870,6 +870,7 @@ export function ConversationsProvider({ children }: { children: ReactNode }): JS
         projectNeedsYou: status.needsYou ?? [],
         projectWorkingOn: status.workingOn ?? null,
         projectWorkerTasks: status.workerTasks ?? null,
+        projectWorkerWaits: status.workerWaits ?? null,
         wakeAt: status.wakeAt ?? null,
         latestProvider: status.provider || conversation.latestProvider,
         streamingId: status.streamingId ?? conversation.streamingId ?? null,
@@ -917,8 +918,10 @@ export function ConversationsProvider({ children }: { children: ReactNode }): JS
   // This ensures clicking into an active session is instant
   useEffect(() => {
     // Keep prefetch lightweight. The details endpoint defaults to returning the full
-    // transcript (including tool blocks) when no limit is provided.
-    const PREFETCH_MESSAGE_LIMIT = 50;
+    // transcript (including tool blocks) when no limit is provided. Same limit as
+    // ConversationView, which shares this cache entry and reads only metadata
+    // from it: at 50 a busy session's prefetch was 2.2MB, at 10 it is 0.6MB.
+    const PREFETCH_MESSAGE_LIMIT = 10;
 
     const sessionsToPrefetch = Array.from(activeSessionIds).filter(
       sessionId => !prefetchedSessionsRef.current.has(sessionId)

@@ -12,15 +12,15 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { __setGenerationOverridesForTests } from '../../src/services/infrastructure/generation-gates.js';
+import { clearFoldCache } from '../../src/services/sessions/fold-cache.js';
 
 const log: { events: Array<{ seq: number; type: string; data: unknown }> } = { events: [] };
 const appended: Array<{ conversationId: string; type: string; data: unknown }> = [];
 const messagesCreate = vi.fn();
 const client: { value: unknown } = { value: { messages: { create: messagesCreate } } };
 
-vi.mock('../../src/session-history/repository.js', () => ({
-  getEvents: () => log.events,
-}));
+vi.mock('../../src/session-history/repository.js', async () =>
+  (await import('./fake-event-reads.js')).fakeEventReads(() => log.events as never));
 vi.mock('../../src/harness/setup.js', () => ({
   getHarnessSessionManager: () => ({}),
 }));
@@ -62,6 +62,7 @@ function answer(text: string) {
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 beforeEach(() => {
+  clearFoldCache();
   log.events = [
     { seq: 12, type: 'worker:started', data: { worker: 'conv-w', provider: 'claude', model: 'claude-opus-5', task: 'Simplify the header and sidebar' } },
     { seq: 41, type: 'worker:reported', data: { worker: 'conv-w', model: 'claude-opus-5', text: REPORT } },

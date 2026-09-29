@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { readLastTurn } from '../../src/services/sessions/worker-report-delivery.js';
-import { isWorkerQuestion } from '../../src/types/worker-events.js';
+import { isBareWait, isQuietRepeat, isWorkerQuestion } from '../../src/types/worker-events.js';
 import type { RawEvent } from '../../src/session-history/types.js';
 
 let seq = 0;
@@ -60,7 +60,7 @@ describe('readLastTurn', () => {
       said(REPORT, 'm3'),
       ended(),
     ];
-    expect(readLastTurn(events)).toEqual({ reply: REPORT });
+    expect(readLastTurn(events)).toMatchObject({ reply: REPORT });
   });
 
   it('classifies a question by the final reply, so narration before it does not hide it', () => {
@@ -89,7 +89,7 @@ describe('readLastTurn', () => {
 
     // The worker carries on with no new input; its real turn:end follows.
     events.push(said('Now the SessionCard alignment.', 'm2'), called('m2'), returned(), said(REPORT, 'm3'), ended());
-    expect(readLastTurn(events)).toEqual({ reply: REPORT });
+    expect(readLastTurn(events)).toMatchObject({ reply: REPORT });
   });
 
   it('delivers nothing when a compaction follows a delivered reply', () => {
@@ -111,7 +111,7 @@ describe('readLastTurn', () => {
     expect(readLastTurn(events)).toEqual({ reply: null, reason: 'no-reply' });
 
     const after = event('content', { blocks: [{ type: 'tool_use', name: 'Bash', input: {} }, { type: 'text', text: REPORT }], messageId: 'm2' });
-    expect(readLastTurn([input('Fix the composer.'), called('m1'), returned(), after, ended()])).toEqual({ reply: REPORT });
+    expect(readLastTurn([input('Fix the composer.'), called('m1'), returned(), after, ended()])).toMatchObject({ reply: REPORT });
   });
 
   it('marks a turn that ended on a stop request as interrupted', () => {
@@ -149,7 +149,7 @@ describe('readLastTurn', () => {
       said(REPORT, 'm2'),
       ended(),
     ];
-    expect(readLastTurn(events)).toEqual({ reply: REPORT });
+    expect(readLastTurn(events)).toMatchObject({ reply: REPORT });
   });
 
   it('delivers a turn Claude opened itself after a compaction the server ran', () => {
@@ -158,10 +158,10 @@ describe('readLastTurn', () => {
     // turn read as the compaction's, and a worker's question never arrived.
     const events = [input('Fix the composer.'), said(REPORT, 'm1'), ended(), ...compactionSucceeded()];
     events.push(event('run:ready'), said('Waiting on: the next scene.', 'm2'), ended());
-    expect(readLastTurn(events)).toEqual({ reply: 'Waiting on: the next scene.' });
+    expect(readLastTurn(events)).toMatchObject({ reply: 'Waiting on: the next scene.' });
 
     events.push(event('run:ready'), called('m3'), returned(), said('Question for front: is the user playing?', 'm4'), ended());
-    expect(readLastTurn(events)).toEqual({ reply: 'Question for front: is the user playing?' });
+    expect(readLastTurn(events)).toMatchObject({ reply: 'Question for front: is the user playing?' });
   });
 
   it('does not deliver the previous reply again for a self-opened turn with none', () => {
@@ -178,6 +178,36 @@ describe('readLastTurn', () => {
       said('Stopped.', 'm4'),
       ended(),
     ];
-    expect(readLastTurn(events)).toEqual({ reply: 'Stopped.' });
+    expect(readLastTurn(events)).toMatchObject({ reply: 'Stopped.' });
+  });
+});
+
+// 2026-09-29: each of a worker's four subagents finishing woke it, and every
+// wake-up sent its coordinator another "Waiting on: N remaining lookups".
+describe('a wake-up turn that only repeats the wait', () => {
+  it('knows a turn its own task opened from one a message opened', () => {
+    const woken = [input('Look into it.'), said('Waiting on: four lookups', 'm1'), ended(), event('run:ready'), said('Waiting on: three lookups', 'm2'), ended()];
+    expect(readLastTurn(woken)).toEqual({ reply: 'Waiting on: three lookups', selfStarted: true });
+    const asked = [...woken, input('Where are you?'), said('Waiting on: three lookups', 'm3'), ended()];
+    expect(readLastTurn(asked)).toEqual({ reply: 'Waiting on: three lookups', selfStarted: false });
+  });
+
+  it('is a bare wait only when nothing follows the wait line', () => {
+    expect(isBareWait('Waiting on: two remaining read-only code lookups (training data, other readers)')).toBe(true);
+    expect(isBareWait('**Waiting on:**\nthe sleep subagent')).toBe(true);
+    expect(isBareWait('Waiting on: one lookup\n\nThe Reader lookup came back: it shows summaries only.')).toBe(false);
+    expect(isBareWait('Done: the subagent finished.')).toBe(false);
+    expect(isBareWait('Waiting on: nothing.')).toBe(false);
+  });
+
+  it('holds back a woken reply that repeats the last report exactly, or only repeats a wait', () => {
+    const done = { phase: 'reported' as const, waitingOn: null, text: 'Done: both lookups finished.' };
+    expect(isQuietRepeat('Done: both lookups finished.', done)).toBe(true);
+    expect(isQuietRepeat('Done: both lookups finished', done)).toBe(false);
+    const waiting = { phase: 'reported' as const, waitingOn: 'two lookups', text: 'Waiting on: two lookups' };
+    expect(isQuietRepeat('Waiting on: one remaining lookup', waiting)).toBe(true);
+    expect(isQuietRepeat('Done: both lookups finished.', waiting)).toBe(false);
+    expect(isQuietRepeat('Done: both lookups finished.', { ...done, phase: 'working' })).toBe(false);
+    expect(isQuietRepeat('Done: both lookups finished.', null)).toBe(false);
   });
 });

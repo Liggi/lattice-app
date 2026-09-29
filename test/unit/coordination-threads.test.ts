@@ -30,7 +30,7 @@ vi.mock('../../src/harness/harness-custom-events.js', () => ({
 }));
 vi.mock('../../src/session-history/repository.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
-  getEvents: (conversationId: string) => storedEvents.get(conversationId) ?? [],
+  ...(await import('./fake-event-reads.js')).fakeEventReads((conversationId) => storedEvents.get(conversationId) ?? []),
 }));
 
 const { DatabaseProvider } = await import('../../src/services/infrastructure/database-provider.js');
@@ -266,6 +266,20 @@ describe('the nudge', () => {
     expect(nudge).toContain('and 4 older');
     expect(nudge).toContain(`session state ${coordinator}`);
   });
+
+  it('looks only at the turn since the last input: a dispatch there with no note, not a report that arrived during it', async () => {
+    await accounting();
+    push(coordinator, 'worker:started', { worker: 'conv-earlier', provider: 'claude', model: null, task: 'noted before' });
+    await note({ kind: 'now', text: 'dispatched conv-earlier' });
+    push(coordinator, 'input:sent', { text: 'go' });
+    push(coordinator, 'worker:started', { worker, provider: 'claude', model: null, task: 'build it' });
+    const midTurn = push(coordinator, 'worker:reported', { worker, model: null, text: 'Done.' });
+    push(coordinator, 'turn:end', {});
+
+    const nudge = buildProjectStateNudge(coordinator, 'lattice');
+    expect(nudge).toContain('left the project state untouched');
+    expect(nudge).not.toContain(`[${midTurn}]`);
+  });
 });
 
 describe('dispatching onto a thread', () => {
@@ -332,5 +346,19 @@ describe('a compacted worker', () => {
     push(worker, 'input:sent', { text: 'go' });
     push(worker, 'turn:end', {});
     expect(buildCoordinatorRestore(worker)).toBe('');
+  });
+});
+
+describe('a compacted New-screen session', () => {
+  it('gets its diagram guidance back, with no stray rule', () => {
+    const plain = ConversationService.getInstance().createConversation({
+      workingDirectory: '/tmp', provider: 'codex', providerSessionId: 'p-plain',
+    }).conversationId;
+    push(plain, 'input:sent', { text: 'go' });
+    push(plain, 'turn:end', { compact: true, trigger: 'auto' });
+    const restored = buildCoordinatorRestore(plain);
+    expect(restored).toContain('This session runs in Lattice, ');
+    expect(restored).toContain('Never draw ASCII-art diagrams.');
+    expect(restored.split('\n').filter((line) => line.trim() === '---')).toEqual([]);
   });
 });

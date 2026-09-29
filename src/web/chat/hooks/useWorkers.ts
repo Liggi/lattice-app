@@ -42,6 +42,10 @@ export function useWorkers(
   // An agent message can arrive without any worker or status event, so this is
   // what makes a newly-heard-from peer resolve when it actually speaks.
   seenSenders = '',
+  // Seq of the newest event in the coordinator's window. The three triggers
+  // above are all derived from events, so an answer read at or after this seq
+  // already reflects whatever moved them.
+  lastEventSeq: number | null = null,
 ): WorkersResponse {
   const [response, setResponse] = useState<WorkersResponse>(() => (conversationId ? lastSeen.get(conversationId) : undefined) ?? EMPTY);
   // A worker's activity line changes inside the worker's own session, so no
@@ -76,27 +80,48 @@ export function useWorkers(
   // trigger fired before it arrived (a session switch fires several), and
   // each extra request made the server fold the log again. The panel waited
   // for the last of them — 1.2s on the canary coordinator (2026-09-23).
+  //
+  // Triggers derived from the coordinator's events are also checked against
+  // the seq the last answer was read at. Opening a session moves all three as
+  // its window hydrates, just after the opening request has read past them;
+  // asking again for each made three serial requests per switch (2026-09-29).
+  // A switch, a worker's activity frame, a reconnect and a wake always ask.
   const current = useRef(conversationId);
   current.current = conversationId;
   const inFlight = useRef<string | null>(null);
-  const stale = useRef(false);
+  const stale = useRef<{ always: boolean; seq: number } | null>(null);
+  const answeredAt = useRef<{ conversationId: string; seq: number } | null>(null);
+  const alwaysKey = `${conversationId}|${activitySeen}|${streamConnectedAt}|${wokeUp}`;
+  const lastAlwaysKey = useRef<string | null>(null);
+  // Read, not a trigger: every streamed event moves it.
+  const newestSeq = useRef(lastEventSeq);
+  newestSeq.current = lastEventSeq;
 
   useEffect(() => {
     if (!conversationId) {
       setResponse(EMPTY);
       return;
     }
+    const always = alwaysKey !== lastAlwaysKey.current;
+    lastAlwaysKey.current = alwaysKey;
+    const needSeq = newestSeq.current ?? Number.POSITIVE_INFINITY;
+    const covered = (): boolean =>
+      answeredAt.current?.conversationId === conversationId && answeredAt.current.seq >= needSeq;
     const load = (): void => {
       if (inFlight.current === conversationId) {
-        stale.current = true;
+        stale.current = {
+          always: always || (stale.current?.always ?? false),
+          seq: Math.max(needSeq, stale.current?.seq ?? 0),
+        };
         return;
       }
       inFlight.current = conversationId;
-      stale.current = false;
+      stale.current = null;
       api.getWorkers(conversationId)
         .then((next) => {
           const seen = { workers: next.workers, history: next.history ?? [], project: next.project ?? null, senders: next.senders ?? {} };
           lastSeen.set(conversationId, seen);
+          answeredAt.current = typeof next.asOfSeq === 'number' ? { conversationId, seq: next.asOfSeq } : null;
           if (current.current === conversationId) setResponse(seen);
         })
         .catch(() => {
@@ -105,11 +130,16 @@ export function useWorkers(
         .finally(() => {
           if (inFlight.current !== conversationId) return;
           inFlight.current = null;
-          if (stale.current && current.current === conversationId) load();
+          const pending = stale.current;
+          stale.current = null;
+          if (!pending || current.current !== conversationId) return;
+          const answered = answeredAt.current?.conversationId === conversationId ? answeredAt.current.seq : -1;
+          if (pending.always || pending.seq > answered) load();
         });
     };
+    if (!always && covered()) return;
     load();
-  }, [conversationId, lastWorkerEventSeq, coordinatorStatus, activitySeen, seenSenders, streamConnectedAt, wokeUp]);
+  }, [conversationId, lastWorkerEventSeq, coordinatorStatus, activitySeen, seenSenders, streamConnectedAt, wokeUp, alwaysKey]);
 
   return response;
 }
