@@ -140,7 +140,7 @@ export async function askExplain(threadId: string, rubric: ExplainRubric): Promi
   if (!ConversationService.getInstance().getConversation(threadId)) throw new ExplainError(`No conversation ${threadId}`, 404);
   if (isWorker(threadId)) throw new ExplainError(WORKER_ASK_REFUSAL, 409);
   if (!isTypeSafeConfigured()) {
-    throw new ExplainError('Explain-back checks answers with TypeSafe\'s Jev, and no TypeSafe key is configured. Set typesafe.apiKey (or typesafe.apiKeyFile) in config.json, or TYPESAFE_API_KEY.', 503);
+    throw new ExplainError('Explain-back checks answers with TypeSafe\'s Jev, and no TypeSafe key is configured. Add one in Settings → Providers, or set TYPESAFE_API_KEY.', 503);
   }
   checkRubric(rubric);
 

@@ -41,25 +41,39 @@ export class TypeSafeUnavailableError extends Error {
   }
 }
 
-/** The key, or null when nothing is configured. Never logged. */
-export function resolveTypeSafeKey(): string | null {
+/** Where the key comes from: Settings (config.json), the environment, or a key file named in config. */
+export type TypeSafeKeySource = 'config' | 'env' | 'file';
+
+/** The key and where it came from, or null when nothing is configured. Never logged. */
+function findTypeSafeKey(): { key: string; source: TypeSafeKeySource } | null {
   let config: ReturnType<ConfigService['getConfig']> | null = null;
   try {
     config = ConfigService.getInstance().getConfig();
   } catch {
     config = null;
   }
-  const direct = config?.typesafe?.apiKey?.trim() || process.env.TYPESAFE_API_KEY?.trim();
-  if (direct) return direct;
+  const saved = config?.typesafe?.apiKey?.trim();
+  if (saved) return { key: saved, source: 'config' };
+  const env = process.env.TYPESAFE_API_KEY?.trim();
+  if (env) return { key: env, source: 'env' };
   const file = config?.typesafe?.apiKeyFile?.trim();
   if (!file) return null;
   try {
     const key = readFileSync(file, 'utf8').trim();
-    return key || null;
+    return key ? { key, source: 'file' } : null;
   } catch (err) {
     logger.warn('TypeSafe key file unreadable', { error: err instanceof Error ? err.message : String(err) });
     return null;
   }
+}
+
+/** The key, or null when nothing is configured. Never logged. */
+export function resolveTypeSafeKey(): string | null {
+  return findTypeSafeKey()?.key ?? null;
+}
+
+export function typeSafeKeySource(): TypeSafeKeySource | null {
+  return findTypeSafeKey()?.source ?? null;
 }
 
 export function isTypeSafeConfigured(): boolean {

@@ -39,6 +39,8 @@ export interface AppConfig {
   generation?: GenerationConfig;
   coordinator?: CoordinatorConfig;
   gemini?: SecretKeyConfig;
+  /** Runtime-only `keySource`: where the key Lattice uses comes from, set here or outside Settings. */
+  typesafe?: SecretKeyConfig & { keySource?: 'config' | 'env' | 'file' | null };
   server?: {
     systemPrompt?: string;
     host?: string;

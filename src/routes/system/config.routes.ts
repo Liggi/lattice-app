@@ -6,11 +6,13 @@ import { asyncHandler } from '@/middleware/error-handler.js';
 import { requireTrustedOrigin } from '@/middleware/trusted-origin.js';
 import { AMBIENT_LATEST_PATH } from '@/routes/ambient.routes.js';
 import { chatgptPlanAuth } from '../../services/infrastructure/chatgpt-plan-auth.js';
+import { typeSafeKeySource } from '../../services/infrastructure/typesafe-client.js';
 
 /** Keys the browser may set but never read back. */
 const SECRET_FIELDS = [
   ['anthropic', 'apiKey'],
   ['gemini', 'apiKey'],
+  ['typesafe', 'apiKey'],
 ] as const;
 
 /**
@@ -85,11 +87,16 @@ export function normalizeSecretUpdates(updates: Partial<LatticeConfig>, current:
 /**
  * The config plus what this machine has right now. `ambientScan` says whether
  * an ambient watcher has written a scan, so the UI does not poll for a file a
- * fresh install never has.
+ * fresh install never has. `typesafe.keySource` says where Jev's key comes
+ * from, since it can also be set outside Settings (environment or key file).
  */
 function configResponse(service: ConfigService): Record<string, unknown> {
   const config = publicConfig(service.getConfig());
-  return { ...config, server: { ...(config.server as Record<string, unknown>), ambientScan: fs.existsSync(AMBIENT_LATEST_PATH) } };
+  return {
+    ...config,
+    server: { ...(config.server as Record<string, unknown>), ambientScan: fs.existsSync(AMBIENT_LATEST_PATH) },
+    typesafe: { ...(config.typesafe as Record<string, unknown> | undefined), keySource: typeSafeKeySource() },
+  };
 }
 
 export function createConfigRoutes(service: ConfigService): Router {

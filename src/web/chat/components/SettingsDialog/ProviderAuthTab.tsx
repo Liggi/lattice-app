@@ -10,7 +10,7 @@ import { SecretKeyField } from './SecretKeyField';
 import { ChatGPTPlanCard } from './ChatGPTPlanCard';
 import { ClaudeEndpointsCard, type ClaudeEndpointUpdate } from './ClaudeEndpointsCard';
 import { usePreferencesContext } from '../../contexts/PreferencesContext';
-import type { ClaudeEndpointSetting } from '../../services/api/types';
+import type { AppConfig, ClaudeEndpointSetting } from '../../services/api/types';
 
 type ClaudeStatusResponse =
   | { available: false; installed: boolean; error: string }
@@ -105,6 +105,7 @@ export function ProviderAuthTab(): JSX.Element {
   const [claudeAuthMode, setClaudeAuthMode] = useState<'cli' | 'api-key'>('cli');
   const [anthropicKeyConfigured, setAnthropicKeyConfigured] = useState(false);
   const [billingError, setBillingError] = useState<string | null>(null);
+  const [typeSafeKey, setTypeSafeKey] = useState<NonNullable<AppConfig['typesafe']>>({});
   const [endpoints, setEndpoints] = useState<ClaudeEndpointSetting[]>([]);
   const { setClaudeEndpointsFrom } = usePreferencesContext();
 
@@ -159,6 +160,7 @@ export function ProviderAuthTab(): JSX.Element {
     api.getConfig().then((config) => {
       setClaudeAuthMode(config.server?.claudeAuthMode === 'api-key' ? 'api-key' : 'cli');
       setAnthropicKeyConfigured(config.anthropic?.apiKeyConfigured === true);
+      setTypeSafeKey(config.typesafe ?? {});
       setEndpoints(config.claudeEndpoints ?? []);
     }).catch((err) => {
       setBillingError(err instanceof Error ? err.message : 'Could not read the billing setting');
@@ -204,6 +206,11 @@ export function ProviderAuthTab(): JSX.Element {
       throw err;
     }
   }, [claudeAuthMode]);
+
+  const saveTypeSafeKey = useCallback(async (apiKey: string | null) => {
+    const config = await api.updateConfig({ typesafe: { apiKey } });
+    setTypeSafeKey(config.typesafe ?? {});
+  }, []);
 
   const saveEndpoints = useCallback(async (list: ClaudeEndpointUpdate[]) => {
     const config = await api.updateConfig({ claudeEndpoints: list });
@@ -474,6 +481,23 @@ export function ProviderAuthTab(): JSX.Element {
         />
         <p className="text-xs text-fg-3">
           For background calls when Anthropic API billing is selected. Billed per token, separately from ChatGPT plan usage.
+        </p>
+      </section>
+      <section className="border border-line rounded-lg bg-bg p-4 space-y-2">
+        <SecretKeyField
+          id="typesafe-key"
+          label="TypeSafe API key"
+          hint="Optional"
+          placeholder="TypeSafe key"
+          configured={typeSafeKey.apiKeyConfigured === true}
+          onSave={saveTypeSafeKey}
+        />
+        <p className="text-xs text-fg-3">
+          {typeSafeKey.apiKeyConfigured !== true && typeSafeKey.keySource === 'env'
+            ? 'Using the key in TYPESAFE_API_KEY. A key saved here replaces it.'
+            : typeSafeKey.apiKeyConfigured !== true && typeSafeKey.keySource === 'file'
+              ? 'Using the key file named in config.json. A key saved here replaces it.'
+              : 'Turns on Needs you for project threads and explain-back cards, both judged by TypeSafe\'s Jev.'}
         </p>
       </section>
 

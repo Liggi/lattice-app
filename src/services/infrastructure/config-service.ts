@@ -341,6 +341,11 @@ export class ConfigService {
           models: { ...current.anthropic?.models, ...updates.anthropic.models } }
       : current.anthropic;
 
+    // Merged so saving the key from Settings keeps a hand-set apiKeyFile.
+    const mergedTypeSafe = updates.typesafe
+      ? { ...(current.typesafe || {}), ...updates.typesafe }
+      : current.typesafe;
+
     const mergedMessageLifecycle = updates.messageLifecycle
       ? { ...(current.messageLifecycle || {}), ...updates.messageLifecycle }
       : current.messageLifecycle;
@@ -357,6 +362,7 @@ export class ConfigService {
       'generation',
       'coordinator',
       'backgroundInference',
+      'typesafe',
     ]);
     const passthroughUpdates = Object.fromEntries(
       Object.entries(updates as Record<string, unknown>).filter(([key]) => !knownTopLevelKeys.has(key))
@@ -375,6 +381,7 @@ export class ConfigService {
       interface: mergedInterface,
       gemini: mergedGemini,
       anthropic: mergedAnthropic,
+      typesafe: mergedTypeSafe,
       messageLifecycle: mergedMessageLifecycle,
     };
 
