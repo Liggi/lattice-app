@@ -5,6 +5,7 @@
  */
 
 import { getEvents } from '../../session-history/repository.js';
+import { cachedFold } from './fold-cache.js';
 import { INBOX_READ_EVENT, INBOX_WITHDRAWN_EVENT } from '../../types/inbox.js';
 import {
   DECISION_ANSWERED_EVENT,
@@ -26,10 +27,11 @@ export interface OpenDecision {
   shownAt: number;
 }
 
+const DECISION_FOLD_TYPES = [DECISION_ASKED_EVENT, DECISION_ANSWERED_EVENT, DECISION_SETTLED_EVENT, DECISION_DISMISSED_EVENT, INBOX_READ_EVENT, INBOX_WITHDRAWN_EVENT];
+
+/** Kept until a decision or inbox event lands: every status poll reads it for each project. */
 export function decisionsIn(threadId: string): Map<string, DecisionState> {
-  return foldDecisions(getEvents(threadId, {
-    types: [DECISION_ASKED_EVENT, DECISION_ANSWERED_EVENT, DECISION_SETTLED_EVENT, DECISION_DISMISSED_EVENT, INBOX_READ_EVENT, INBOX_WITHDRAWN_EVENT],
-  }));
+  return cachedFold('decisions', threadId, DECISION_FOLD_TYPES, foldDecisions);
 }
 
 /**

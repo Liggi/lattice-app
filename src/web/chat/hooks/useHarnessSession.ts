@@ -27,7 +27,8 @@ import type { Provider } from '@/types/unified-messages';
 import type { CodexThreadGoal } from '@/services/process/codex-app-server-types';
 import { PROJECT_NOTED_EVENT, type ProjectNotedData } from '@/types/project-state';
 import { FEEDBACK_PROPOSED_EVENT, type FeedbackProposedData } from '@/types/feedback';
-import { DECISION_ANSWERED_EVENT, DECISION_ASKED_EVENT, foldDecisions, placeDecisionsAtTurnEnd, withdrawnDecisionAnswers, type DecisionAnsweredData, type DecisionAskedData, type ThreadDecisions } from '@/types/decisions';
+import { EXPLAIN_ASKED_EVENT, concealOpenExplainReasoning, foldExplains, type ExplainAskedData, type ExplainState } from '@/types/explain';
+import { DECISION_ANSWERED_EVENT, DECISION_ASKED_EVENT, foldDecisions, placeDecisionsAtTurnEnd, shownOpenDecision, withdrawnDecisionAnswers, type DecisionAnsweredData, type ShownOpenDecision, type DecisionAskedData, type ThreadDecisions } from '@/types/decisions';
 import {
   isWorkerEventType,
   isWorkerInput,
@@ -57,6 +58,8 @@ export type RenderItem =
  */
 export interface PendingInput extends PendingMessage {
   undeliverable: string | null;
+  /** Images or documents sent with it, drawn above the text as in the thread. */
+  attachments?: DisplayContentBlock[];
   /** Present when another agent sent it; absent on the user's own message. */
   attribution?: MessageAttribution;
 }
@@ -122,6 +125,10 @@ export interface UseHarnessSessionReturn {
   agentReactions: ReadonlyMap<string, readonly string[]>;
   /** The agent's questions to the user (`lattice ask`) with their answers, and answers taken back unread. */
   decisions: ThreadDecisions;
+  /** The agent's explain-backs (`lattice explain`), each with the user's latest check, hints and finish. */
+  explains: ReadonlyMap<string, ExplainState>;
+  /** The open question whose card the thread shows now, if any: what the panel and the composer keep in reach. */
+  openDecision: ShownOpenDecision | null;
   /** Mid-turn injected messages waiting for consumption (floating above composer). */
   pendingMessages: PendingInput[];
   /** Send user input. `extra` is spread into the POST body by the harness client
@@ -164,14 +171,16 @@ export function useHarnessSession(
   }, [events]);
   const agentReactions = useMemo<ReadonlyMap<string, readonly string[]>>(() => foldAgentReactions(events), [events]);
   const decisions = useMemo<ThreadDecisions>(() => ({ byId: foldDecisions(events), withdrawnAnswers: withdrawnDecisionAnswers(events) }), [events]);
+  const explains = useMemo<ReadonlyMap<string, ExplainState>>(() => foldExplains(events), [events]);
   const { pending: pendingMessages, consumed: consumedMessages } = useMemo(() => placeWaitingMessages(events, inbox), [events, inbox]);
 
   const eventContext = useMemo(() => deriveEventContext(events), [events]);
 
   // Transform harness events → ChatMessage[] (for data derivation)
   // What the thread shows, in the order it shows it: a question sits below the message it closes.
-  const threadEvents = useMemo(() => placeDecisionsAtTurnEnd(events), [events]);
+  const threadEvents = useMemo(() => placeDecisionsAtTurnEnd(concealOpenExplainReasoning(events)), [events]);
   const messages = useMemo(() => eventsToMessages(threadEvents, eventContext.providerBySeq), [threadEvents, eventContext.providerBySeq]);
+  const openDecision = useMemo(() => shownOpenDecision(threadEvents, decisions.byId), [threadEvents, decisions]);
 
   // Group events → render items + subagent children (for rendering).
   // `isStreaming` feeds CollapsedToolGroup.isActive — gate on hydrationPhase
@@ -333,6 +342,8 @@ export function useHarnessSession(
     reactions,
     agentReactions,
     decisions,
+    explains,
+    openDecision,
     send,
     compact,
     stop,
@@ -414,7 +425,7 @@ export function placeWaitingMessages(events: SessionEvent[], inbox: InboxFold): 
   for (const p of detected.pending) {
     const text = stripContextRestore(p.text);
     if (isWorkerInput(text) || inbox.hiddenInputSeqs.has(p.inputEvent.seq)) continue;
-    pending.push({ ...p, text, undeliverable: null });
+    pending.push({ ...p, text, undeliverable: null, attachments: attachmentsOf(p.inputEvent) });
   }
   for (const c of detected.consumed) {
     if (isWorkerInput(inputText(c.inputEvent)) || inbox.hiddenInputSeqs.has(c.inputEvent.seq)) continue;
@@ -433,7 +444,7 @@ export function placeWaitingMessages(events: SessionEvent[], inbox: InboxFold): 
       ? { sender: item.sender, passedOn: item.passedOn }
       : undefined;
     if (item.readBySeq === null) {
-      pending.push({ inputEvent: item.event, text: item.text, undeliverable: item.undeliverable, attribution });
+      pending.push({ inputEvent: item.event, text: item.text, undeliverable: item.undeliverable, attribution, attachments: attachmentsOf(item.event) });
       continue;
     }
     // It enters the thread where the session took it in. A message sent into
@@ -454,6 +465,43 @@ function attributionOf(event: SessionEvent): MessageAttribution | undefined {
   const data = event.data as Partial<InboxQueuedData>;
   if (data.source !== 'agent') return undefined;
   return { sender: data.sender ?? null, passedOn: data.passedOn === true };
+}
+
+/** The attachments on an `input:sent` or `input:queued` event; absent when it has none. */
+function attachmentsOf(event: SessionEvent): DisplayContentBlock[] | undefined {
+  const blocks = (event.data as { blocks?: unknown }).blocks;
+  return Array.isArray(blocks) && blocks.length > 0 ? blocks as DisplayContentBlock[] : undefined;
+}
+
+/**
+ * A user message's content: the text alone as a plain string (MessageItem's
+ * media rendering keys off an array content, and every consumer of the string
+ * form is untouched), or with attachments, the blocks first then the text,
+ * matching the order the SDK receives them. Null when there is nothing to show;
+ * a bare screenshot paste has attachments and no text.
+ */
+function userMessageContent(text: string | undefined, attachments: DisplayContentBlock[] | undefined): string | DisplayContentBlock[] | null {
+  if (!attachments) return text || null;
+  return [...attachments, ...(text ? [{ type: 'text', text } as DisplayContentBlock] : [])];
+}
+
+/** A message the session took in mid-turn, as the user's bubble at the point it was read. */
+function consumedMessage(consumed: ConsumedMessage, providerBySeq: ReadonlyMap<number, Provider>): RenderItem | null {
+  const data = consumed.inputEvent.data as { text?: string };
+  const content = userMessageContent(data.text, attachmentsOf(consumed.inputEvent));
+  if (content === null) return null;
+  return {
+    kind: 'message',
+    message: {
+      id: `h-${consumed.inputEvent.seq}`,
+      messageId: `h-${consumed.inputEvent.seq}`,
+      type: 'user',
+      content,
+      timestamp: new Date(consumed.inputEvent.timestamp).toISOString(),
+      provider: providerBySeq.get(consumed.inputEvent.seq) ?? 'claude',
+      attribution: attributionOf(consumed.inputEvent),
+    },
+  };
 }
 
 /**
@@ -521,21 +569,8 @@ function eventsToRenderItems(
         const toInsert = insertBeforeSeq.get(groupEvent.seq)
         if (toInsert) {
           for (const consumed of toInsert) {
-            const data = consumed.inputEvent.data as { text?: string }
-            if (data.text) {
-              items.push({
-                kind: 'message',
-                message: {
-                  id: `h-${consumed.inputEvent.seq}`,
-                  messageId: `h-${consumed.inputEvent.seq}`,
-                  type: 'user',
-                  content: data.text,
-                  timestamp: new Date(consumed.inputEvent.timestamp).toISOString(),
-                  provider: providerBySeq.get(consumed.inputEvent.seq) ?? 'claude',
-                  attribution: attributionOf(consumed.inputEvent),
-                },
-              })
-            }
+            const message = consumedMessage(consumed, providerBySeq)
+            if (message) items.push(message)
           }
         }
       }
@@ -552,21 +587,8 @@ function eventsToRenderItems(
       const toInsert = insertBeforeSeq.get(item.seq)
       if (toInsert) {
         for (const consumed of toInsert) {
-          const data = consumed.inputEvent.data as { text?: string }
-          if (data.text) {
-            items.push({
-              kind: 'message',
-              message: {
-                id: `h-${consumed.inputEvent.seq}`,
-                messageId: `h-${consumed.inputEvent.seq}`,
-                type: 'user',
-                content: data.text,
-                timestamp: new Date(consumed.inputEvent.timestamp).toISOString(),
-                provider: providerBySeq.get(consumed.inputEvent.seq) ?? 'claude',
-                attribution: attributionOf(consumed.inputEvent),
-              },
-            })
-          }
+          const message = consumedMessage(consumed, providerBySeq)
+          if (message) items.push(message)
         }
       }
 
@@ -769,21 +791,8 @@ function eventToMessage(
       // A worker's report or question delivered into a coordinator: the
       // worker event carries it in its own shape, so the raw input is hidden.
       if (data.text && isWorkerInput(data.text)) return null;
-      const attachmentBlocks = Array.isArray(data.blocks) ? data.blocks : [];
-      // A message can be attachments-only (a bare screenshot paste), so an
-      // empty text is only "nothing to render" when there are no blocks either.
-      if (!data.text && attachmentBlocks.length === 0) return null;
-
-      // Text-only stays a plain string — MessageItem's media rendering keys off
-      // an array content, and every existing consumer of the string form is
-      // untouched. With attachments, emit blocks first then the text block,
-      // matching the order the SDK receives them.
-      const content: string | DisplayContentBlock[] = attachmentBlocks.length === 0
-        ? data.text!
-        : [
-            ...(attachmentBlocks as unknown as DisplayContentBlock[]),
-            ...(data.text ? [{ type: 'text', text: data.text } as DisplayContentBlock] : []),
-          ];
+      const content = userMessageContent(data.text, attachmentsOf(event));
+      if (content === null) return null;
 
       return {
         id: `h-${event.seq}`,
@@ -878,6 +887,18 @@ function eventToMessage(
           provider,
           systemSubtype: 'decision',
           decision: event.data as DecisionAskedData,
+        };
+      }
+      if ((event.type as string) === EXPLAIN_ASKED_EVENT) {
+        return {
+          id: `h-${event.seq}`,
+          messageId: `h-${event.seq}`,
+          type: 'system',
+          content: '',
+          timestamp: new Date(event.timestamp).toISOString(),
+          provider,
+          systemSubtype: 'explain',
+          explain: event.data as ExplainAskedData,
         };
       }
       if ((event.type as string) === DECISION_ANSWERED_EVENT) {

@@ -13,6 +13,7 @@
 import type Database from 'better-sqlite3';
 import { DatabaseProvider } from '../infrastructure/database-provider.js';
 import { PROJECT_NOTED_EVENT } from '../../types/project-state.js';
+import { getEventsVersion } from '../../session-history/repository.js';
 
 export type SenderRole = 'worker' | 'coordinator';
 
@@ -45,24 +46,37 @@ function sendersTo(conversationId: string): string[] {
  * one session's log, because the sender's own log is not where its task is
  * recorded. Both types carry `$.task` and the latest seq wins, so a reused
  * worker is attributed by what it is doing now rather than by the assignment
- * it finished. The type index finds the dispatch events; no index serves
- * `$.worker`, so every sender is answered from one pass over them rather
- * than a pass each.
+ * it finished. No index serves `$.worker`, and reading every dispatch's JSON
+ * cost 2.5s a boot from a cold cache (2026-09-30), so the map is built once
+ * and rebuilt only when the index count of dispatch events changes.
  */
+let dispatchCache: { db: Database.Database; count: number; tasks: Map<string, string> } | null = null;
+
 function dispatchedTasks(senders: readonly string[]): Map<string, string> {
   if (senders.length === 0) return new Map();
-  const rows = db().prepare(
-    `SELECT json_extract(data, '$.worker') AS worker, json_extract(data, '$.task') AS task FROM harness_events
-      WHERE type IN ('worker:started', 'worker:reassigned')
-        AND json_extract(data, '$.worker') IN (${senders.map(() => '?').join(', ')})
-      ORDER BY seq ASC`,
-  ).all(...senders) as Array<{ worker: string; task: string | null }>;
-  const latest = new Map<string, string | null>();
-  for (const row of rows) latest.set(row.worker, row.task);
+  const database = db();
+  const { count } = database.prepare(
+    `SELECT COUNT(*) AS count FROM harness_events WHERE type IN ('worker:started', 'worker:reassigned')`,
+  ).get() as { count: number };
+  if (dispatchCache?.db !== database || dispatchCache.count !== count) {
+    const rows = database.prepare(
+      `SELECT json_extract(data, '$.worker') AS worker, json_extract(data, '$.task') AS task FROM harness_events
+        WHERE type IN ('worker:started', 'worker:reassigned')
+        ORDER BY seq ASC`,
+    ).all() as Array<{ worker: string | null; task: string | null }>;
+    const latest = new Map<string, string | null>();
+    for (const row of rows) if (row.worker) latest.set(row.worker, row.task);
+    const tasks = new Map<string, string>();
+    for (const [worker, task] of latest) {
+      const trimmed = task?.trim();
+      if (trimmed) tasks.set(worker, trimmed);
+    }
+    dispatchCache = { db: database, count, tasks };
+  }
   const tasks = new Map<string, string>();
-  for (const [worker, task] of latest) {
-    const trimmed = task?.trim();
-    if (trimmed) tasks.set(worker, trimmed);
+  for (const sender of senders) {
+    const task = dispatchCache.tasks.get(sender);
+    if (task) tasks.set(sender, task);
   }
   return tasks;
 }
@@ -71,10 +85,25 @@ function dispatchedTasks(senders: readonly string[]): Map<string, string> {
  * The outcome a coordinator is running, which is how a coordinator is named:
  * its latest outcome note, as the project fold takes it. Read directly rather
  * than by folding the coordinator's whole log, which is a thousand events for
- * a busy one and runs on every /workers request.
+ * a busy one and runs on every /workers request. Kept until the sender writes
+ * another note: finding the newest outcome among a thousand notes read their
+ * JSON on every conversation-details request, 9s in ten minutes on 3045
+ * (2026-09-30).
  */
+const outcomes = new Map<string, { db: Database.Database; maxSeq: number; count: number; outcome: string | null }>();
+
 function coordinatorOutcome(sender: string): string | null {
-  const row = db().prepare(
+  const database = db();
+  const version = getEventsVersion(sender, [PROJECT_NOTED_EVENT]);
+  const held = outcomes.get(sender);
+  if (held?.db === database && held.maxSeq === version.maxSeq && held.count === version.count) return held.outcome;
+  const outcome = readCoordinatorOutcome(database, sender);
+  outcomes.set(sender, { db: database, ...version, outcome });
+  return outcome;
+}
+
+function readCoordinatorOutcome(database: Database.Database, sender: string): string | null {
+  const row = database.prepare(
     `SELECT json_extract(data, '$.text') AS text FROM harness_events
       WHERE session_id = ? AND type = ?
         AND json_extract(data, '$.kind') = 'outcome' AND json_type(data, '$.text') = 'text'

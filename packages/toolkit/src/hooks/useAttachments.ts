@@ -19,6 +19,11 @@ const TEXT_TYPES = [
 ];
 
 const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB per file
+/** Largest image sent as-is: its base64 stays under the 5MB the model APIs accept. */
+const MAX_IMAGE_PASSTHROUGH_BYTES = 3.75 * 1024 * 1024;
+/** Long edge for re-encoded images; Claude scales anything larger down to ~1568px. */
+const MAX_IMAGE_EDGE_PX = 2048;
+const IMAGE_EXTENSIONS = /\.(heic|heif|jpe?g|png|gif|webp|avif|bmp|tiff?)$/i;
 const MAX_ATTACHMENTS = 20;
 
 // ── Public types ──
@@ -68,8 +73,12 @@ function generateId(): string {
   return `att-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
-function getAttachmentType(mimeType: string): 'image' | 'document' | 'text' | null {
-  if (IMAGE_TYPES.includes(mimeType)) return 'image';
+function getAttachmentType(file: File): 'image' | 'document' | 'text' | null {
+  const mimeType = file.type;
+  // Phones hand over HEIC, or no type at all; those are decoded and re-encoded.
+  if (mimeType.startsWith('image/') || (!mimeType && IMAGE_EXTENSIONS.test(file.name))) {
+    return 'image';
+  }
   if (DOCUMENT_TYPES.includes(mimeType)) return 'document';
   if (TEXT_TYPES.includes(mimeType)) return 'text';
   return null;
@@ -86,6 +95,44 @@ function fileToBase64(file: File): Promise<string> {
     reader.onerror = () => reject(new Error('Failed to read file'));
     reader.readAsDataURL(file);
   });
+}
+
+function decodeImage(file: File): Promise<HTMLImageElement> {
+  const url = URL.createObjectURL(file);
+  const img = new Image();
+  img.src = url;
+  return img
+    .decode()
+    .then(() => img)
+    .finally(() => URL.revokeObjectURL(url));
+}
+
+/**
+ * Images the model APIs take as they are pass through untouched. Anything else
+ * (HEIC, a camera-sized JPEG) is redrawn at most MAX_IMAGE_EDGE_PX on its long
+ * edge and sent as JPEG.
+ */
+async function prepareImage(file: File): Promise<{ base64: string; mimeType: string }> {
+  if (IMAGE_TYPES.includes(file.type) && file.size <= MAX_IMAGE_PASSTHROUGH_BYTES) {
+    return { base64: await fileToBase64(file), mimeType: file.type };
+  }
+  let img: HTMLImageElement;
+  try {
+    img = await decodeImage(file);
+  } catch {
+    throw new Error(`This browser can't read ${file.type || 'this image format'}; send a JPEG or PNG`);
+  }
+  const scale = Math.min(1, MAX_IMAGE_EDGE_PX / Math.max(img.naturalWidth, img.naturalHeight));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.round(img.naturalWidth * scale);
+  canvas.height = Math.round(img.naturalHeight * scale);
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('Could not resize the image');
+  ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+  const base64 = canvas.toDataURL('image/jpeg', 0.85).split(',')[1] ?? '';
+  if (!base64) throw new Error('Could not resize the image');
+  if (base64.length > MAX_FILE_SIZE) throw new Error('Image is still over 5MB after resizing');
+  return { base64, mimeType: 'image/jpeg' };
 }
 
 function fileToText(file: File): Promise<string> {
@@ -117,12 +164,12 @@ export function useAttachments(): UseAttachmentsReturn {
       const errors: string[] = [];
 
       for (const file of fileArray) {
-        const type = getAttachmentType(file.type);
+        const type = getAttachmentType(file);
         if (!type) {
           errors.push(`${file.name}: Unsupported file type (${file.type || 'unknown'})`);
           continue;
         }
-        if (file.size > MAX_FILE_SIZE) {
+        if (type !== 'image' && file.size > MAX_FILE_SIZE) {
           const sizeMB = (file.size / (1024 * 1024)).toFixed(1);
           errors.push(`${file.name}: File too large (${sizeMB}MB, max 5MB)`);
           continue;
@@ -153,24 +200,35 @@ export function useAttachments(): UseAttachmentsReturn {
 
         const processFile =
           attachment.type === 'text'
-            ? fileToText(attachment.file).then((textContent) => ({ textContent, base64: null }))
-            : fileToBase64(attachment.file).then((base64) => ({ base64, textContent: null }));
+            ? fileToText(attachment.file).then((textContent) => ({
+                textContent,
+                base64: null,
+                mimeType: attachment.mimeType,
+              }))
+            : attachment.type === 'image'
+              ? prepareImage(attachment.file).then((image) => ({ ...image, textContent: null }))
+              : fileToBase64(attachment.file).then((base64) => ({
+                  base64,
+                  textContent: null,
+                  mimeType: attachment.mimeType,
+                }));
 
         processFile
-          .then(({ base64, textContent }) => {
+          .then(({ base64, textContent, mimeType }) => {
             setAttachments((prev) =>
               prev.map((a) =>
-                a.id === attachment.id ? { ...a, base64, textContent, status: 'ready' as const } : a,
+                a.id === attachment.id
+                  ? { ...a, base64, textContent, mimeType, status: 'ready' as const }
+                  : a,
               ),
             );
           })
           .catch((err: unknown) => {
+            // A file that can't be used leaves the strip and says why, rather
+            // than sitting there to be dropped from the message on send.
             const errorMessage = err instanceof Error ? err.message : 'Upload failed';
-            setAttachments((prev) =>
-              prev.map((a) =>
-                a.id === attachment.id ? { ...a, status: 'error' as const, error: errorMessage } : a,
-              ),
-            );
+            setAttachments((prev) => prev.filter((a) => a.id !== attachment.id));
+            setError((prev) => [prev, `${attachment.name}: ${errorMessage}`].filter(Boolean).join('; '));
           });
       }
     },

@@ -10,9 +10,8 @@
  * 2. Post-session learning - feeding to Opus for recommendations
  */
 
-import type Anthropic from '@anthropic-ai/sdk';
 import { createLogger } from '../infrastructure/logger.js';
-import { anthropicClientFactory } from '../infrastructure/anthropic-client-factory.js';
+import { backgroundTextClient, backgroundProvenance, type BackgroundTextClient } from '../infrastructure/background-text-client.js';
 import { ClaudeHistoryReader } from '../sessions/claude-history-reader.js';
 import { SessionInfoService } from '../sessions/session-info-service.js';
 import { TurnRepository } from '../sessions/turn-repository.js';
@@ -105,8 +104,8 @@ export class TurnCaptureService {
     return TurnCaptureService.instance;
   }
 
-  private getClient(): Anthropic {
-    const client = anthropicClientFactory.getClient();
+  private getClient(): BackgroundTextClient {
+    const client = backgroundTextClient.getClient('turnCapture');
     if (!client) {
       throw new Error(
         'Anthropic client unavailable. Configure an Anthropic API key or active hosted proxy credentials.'
@@ -709,7 +708,7 @@ JSON ONLY:`;
         costTracker.log({
           sessionId: sessionId || 'unknown',
           operation: 'TURN_CAPTURE',
-          model: 'claude-haiku-4-5-20251001',
+          ...backgroundProvenance(response, 'claude-haiku-4-5-20251001'),
           inputTokens: response.usage?.input_tokens || 0,
           outputTokens: response.usage?.output_tokens || 0,
           cacheCreationInputTokens: response.usage?.cache_creation_input_tokens || 0,

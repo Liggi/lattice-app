@@ -9,8 +9,8 @@
  * `process_lost`. Either way a session that was mid-turn, or waiting on
  * background tasks, would sit idle until someone remembered to wake it.
  *
- * Both paths queue the same note in the session's inbox, and the inbox drain
- * delivers it as the session's next turn. A session somebody stopped is not
+ * Both paths queue the same note in the session's inbox when they find the
+ * session cut off, and the inbox drain delivers it as the session's next turn. A session somebody stopped is not
  * woken, even with background tasks still running, since that would undo the
  * Stop; an idle one with nothing running is not either.
  */
@@ -158,55 +158,48 @@ export function queueCarryOnNote(input: {
   });
 }
 
-/** Sessions the daemon took down with it, waiting for it to come back. */
-const lostToDaemon = new Map<string, { closedAtSeq: number; cutOffAt: Date; inTurn: boolean; lostTasks: LostTask[]; wake: boolean }>();
+/** Sessions the daemon took down with it, drained once it is back. */
+const lostToDaemon = new Set<string>();
 
 /**
  * Called for every live `run:end`. One of reason `process_lost` means the
- * daemon connection dropped under the process. The note is held until the
- * daemon is back: sent now, it would fail to spawn and show as undeliverable.
+ * daemon connection dropped under the process. The note goes into the inbox
+ * at once, so it survives this server exiting before the daemon is back (a
+ * restart that stops both, 2026-09-30), and is delivered by the reconnect or
+ * by the next server's boot drain. Returns whether the session's drain must
+ * wait for the daemon: drained now, the note would fail to spawn.
  */
-export function noteRunEnd(event: SessionEvent): void {
+export function noteRunEnd(event: SessionEvent): boolean {
   const data = event.data as RunEndData | undefined;
-  if (data?.reason !== 'process_lost') return;
+  if (data?.reason !== 'process_lost') return false;
   // The boot sweep writes its own process_lost and queues its own note.
-  if ((event.meta as { source?: string } | undefined)?.source === 'recovery') return;
+  if ((event.meta as { source?: string } | undefined)?.source === 'recovery') return false;
+  lostToDaemon.add(event.sessionId);
   const events = getHarnessSessionManager()?.getLog(event.sessionId)?.all() ?? [];
   const before = events.filter((e) => e.seq < event.seq);
-  if (before.length === 0) return;
+  if (before.length === 0) return true;
   const lostTasks = data.lostTasks ?? [];
   const { wake, inTurn, compacting } = shouldCarryOn(before, lostTasks);
-  if (!wake && !compacting) return;
   if (compacting) noteCompactionCutOff(event.sessionId);
-  lostToDaemon.set(event.sessionId, {
-    closedAtSeq: event.seq,
-    cutOffAt: new Date(before[before.length - 1].timestamp),
-    inTurn,
-    lostTasks: [...lostTasks],
-    wake,
-  });
-  logger.info('Session lost its process with the daemon; it will be carried on when the daemon is back', {
-    sessionId: event.sessionId,
-    inTurn,
-    compacting,
-    lostTasks: lostTasks.length,
-  });
+  if (wake) {
+    queueCarryOnNote({
+      sessionId: event.sessionId,
+      closedAtSeq: event.seq,
+      cutOffAt: new Date(before[before.length - 1].timestamp),
+      inTurn,
+      lostTasks,
+      kind: 'daemon',
+    });
+  }
+  return true;
 }
 
-/** The daemon is reachable again: queue and deliver every held note. */
+/** The daemon is reachable again: deliver what waited for it. */
 export async function carryOnAfterDaemonReconnect(): Promise<void> {
-  const held = [...lostToDaemon.entries()];
+  const held = [...lostToDaemon];
   lostToDaemon.clear();
   if (held.length === 0) return;
-  logger.info('Daemon is back; carrying on the sessions it took down', { sessions: held.map(([id]) => id) });
-  for (const [sessionId, { wake, ...entry }] of held) {
-    if (!wake) continue;
-    try {
-      queueCarryOnNote({ sessionId, ...entry, kind: 'daemon' });
-    } catch (err) {
-      logger.error('Could not queue carry-on note after the daemon restart', err, { sessionId });
-    }
-  }
+  logger.info('Daemon is back; carrying on the sessions it took down', { sessions: held });
   await rerunCutOffCompactions();
-  await Promise.all(held.map(([sessionId]) => drainInbox(sessionId)));
+  await Promise.all(held.map((sessionId) => drainInbox(sessionId)));
 }

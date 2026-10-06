@@ -24,7 +24,7 @@ import Database from 'better-sqlite3';
 import type Anthropic from '@anthropic-ai/sdk';
 import { createLogger, type Logger } from '../infrastructure/logger.js';
 import { DatabaseProvider } from '../infrastructure/database-provider.js';
-import { anthropicClientFactory } from '../infrastructure/anthropic-client-factory.js';
+import { backgroundTextClient, backgroundProvenance } from '../infrastructure/background-text-client.js';
 import { getCostTracker } from '../infrastructure/cost-tracker.js';
 import { SessionInfoService } from './session-info-service.js';
 import { readMessages, countMessages } from '../../harness/event-message-reader.js';
@@ -209,6 +209,7 @@ export interface EligibilityResult {
 }
 
 interface LLMOutput {
+  modelUsed?: string;
   project?: string | null;
   title?: string;
   summary?: string;
@@ -540,7 +541,7 @@ export class SessionSummaryService {
         status: 'complete',
         errorMessage: null,
         generatorVersion: GENERATOR_VERSION,
-        generatorModel: GENERATOR_MODEL,
+        generatorModel: llmOutput.modelUsed ?? GENERATOR_MODEL,
         generatedAt,
       };
       this.upsertRow(final);
@@ -881,7 +882,7 @@ export class SessionSummaryService {
     total: number,
     chunk: string[],
   ): Promise<string> {
-    const client = anthropicClientFactory.getClient();
+    const client = backgroundTextClient.getClient('sessionSummary');
     if (!client) {
       throw new Error('Anthropic client unavailable (no API key configured)');
     }
@@ -917,7 +918,7 @@ Bullets:`;
       getCostTracker().log({
         sessionId,
         operation: 'SESSION_SUMMARY',
-        model: GENERATOR_MODEL,
+        ...backgroundProvenance(response, GENERATOR_MODEL),
         inputTokens: response.usage?.input_tokens ?? 0,
         outputTokens: response.usage?.output_tokens ?? 0,
         cacheCreationInputTokens: response.usage?.cache_creation_input_tokens ?? 0,
@@ -1042,7 +1043,7 @@ Remember: respond ONLY with the JSON object. No preamble. No markdown code fence
   }
 
   private async callLLM(sessionId: string, prompt: string): Promise<LLMOutput> {
-    const client = anthropicClientFactory.getClient();
+    const client = backgroundTextClient.getClient('sessionSummary');
     if (!client) {
       throw new Error('Anthropic client unavailable (no API key configured)');
     }
@@ -1061,7 +1062,7 @@ Remember: respond ONLY with the JSON object. No preamble. No markdown code fence
       getCostTracker().log({
         sessionId,
         operation: 'SESSION_SUMMARY',
-        model: GENERATOR_MODEL,
+        ...backgroundProvenance(response, GENERATOR_MODEL),
         inputTokens: response.usage?.input_tokens ?? 0,
         outputTokens: response.usage?.output_tokens ?? 0,
         cacheCreationInputTokens: response.usage?.cache_creation_input_tokens ?? 0,
@@ -1103,7 +1104,7 @@ Remember: respond ONLY with the JSON object. No preamble. No markdown code fence
     }
 
     const parsed = parseJson(jsonMatch[0]) as LLMOutput;
-    return parsed;
+    return { ...parsed, modelUsed: response.model || GENERATOR_MODEL };
   }
 
   // --------------------------------------------------------------------------

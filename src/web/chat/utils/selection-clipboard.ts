@@ -98,7 +98,9 @@ class SelectionWriter {
       if (!this.inRange(node)) return '';
       const t = this.textOf(node as Text);
       if (LIST_LIKE.has(parentTag) && !t.trim()) return '';
-      return t.replace(/\s+/g, ' ');
+      // The newline markdown puts after a hard break is not a space.
+      const afterBreak = (node.previousSibling as Element | null)?.tagName === 'BR';
+      return (afterBreak ? t.trimStart() : t).replace(/\s+/g, ' ');
     }
     if (node.nodeType !== Node.ELEMENT_NODE) return '';
     const el = node as Element;

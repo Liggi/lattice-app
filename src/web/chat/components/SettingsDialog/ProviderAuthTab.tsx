@@ -7,6 +7,7 @@ import { PROVIDER_SIGN_IN_QUERY_KEY } from '../../hooks/useProviderSignIn';
 import { api } from '../../services/api';
 import { ClaudeLoginTerminal, type LoginAttemptState } from './ClaudeLoginTerminal';
 import { SecretKeyField } from './SecretKeyField';
+import { ChatGPTPlanCard } from './ChatGPTPlanCard';
 import { ClaudeEndpointsCard, type ClaudeEndpointUpdate } from './ClaudeEndpointsCard';
 import { usePreferencesContext } from '../../contexts/PreferencesContext';
 import type { ClaudeEndpointSetting } from '../../services/api/types';
@@ -461,6 +462,7 @@ export function ProviderAuthTab(): JSX.Element {
         )}
       </ProviderCard>
 
+      <ChatGPTPlanCard />
       <section className="border border-line rounded-lg bg-bg p-4 space-y-2">
         <SecretKeyField
           id="claude-anthropic-key"
@@ -471,7 +473,7 @@ export function ProviderAuthTab(): JSX.Element {
           onSave={(value) => saveClaudeBilling({ apiKey: value })}
         />
         <p className="text-xs text-fg-3">
-          For Lattice&apos;s own short model calls: report summaries, worker activity lines and project names. Billed per token by Anthropic, apart from your plans.
+          For background calls when Anthropic API billing is selected. Billed per token, separately from ChatGPT plan usage.
         </p>
       </section>
 

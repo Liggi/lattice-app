@@ -26,7 +26,7 @@ import { readWorkerHistory, readWorkerStates } from '@/services/sessions/worker-
 import { latestWorkerItemReached, unreadInboxSummaries } from '@/services/sessions/session-inbox.js';
 import { conversationContextTokens } from '@/services/sessions/context-compaction.js';
 import type { ProjectStateResponse, WorkerCardState, WorkersResponse } from '@/types/worker-events.js';
-import { readWorkerActivity } from '@/services/sessions/worker-activity.js';
+import { readWorkerActivity, watchPanel } from '@/services/sessions/worker-activity.js';
 import { readWorkerRuntime } from '@/services/sessions/worker-runtime.js';
 import { archiveFinishedWorkers } from '@/services/sessions/worker-auto-archive.js';
 import { appendProjectNote, readProjectState } from '@/services/sessions/project-state.js';
@@ -288,6 +288,7 @@ export function registerUnifiedConversationQueryRoutes(
         pinned: convInfo?.pinned ?? segmentInfo?.pinned ?? false,
         archived: convInfo?.archived ?? segmentInfo?.archived ?? true,
         pausedReason: convInfo?.paused_reason || segmentInfo?.paused_reason || null,
+        sleptAt: convInfo?.slept_at ?? null,
         importedAt: convInfo?.imported_at || null,
         permissionMode: convInfo?.permission_mode || segmentInfo?.permission_mode || null,
         identityImage: includeIdentityImage
@@ -399,6 +400,20 @@ export function registerUnifiedConversationQueryRoutes(
       identityImage,
     });
   }));
+
+  // ==========================================================================
+  // POST /:conversationId/workers/watch — Heartbeat from an open panel. Worker
+  // activity lines are only written for a coordinator someone is looking at.
+  // ==========================================================================
+  router.post('/:conversationId/workers/watch', (req: RequestWithRequestId, res) => {
+    const { conversationId } = req.params;
+    if (!conversationId.startsWith('conv-') || !conversationService.getConversation(conversationId)) {
+      res.status(404).json({ error: 'Conversation not found' });
+      return;
+    }
+    watchPanel(conversationId);
+    res.json({ ok: true });
+  });
 
   // ==========================================================================
   // GET /:conversationId/workers — Workers this coordinator dispatched, with

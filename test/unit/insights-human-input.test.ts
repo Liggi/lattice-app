@@ -152,6 +152,7 @@ function engineOver(events: Array<{ type: string; data: unknown }>, existing: In
     logger: { warn: () => {}, info: () => {}, debug: () => {}, error: () => {} },
     lastComputedAt: new Map<string, number>(),
     turnEndInFlight: new Set<string>(),
+    failedUntil: new Map<string, number>(),
     db: {
       prepare: () => ({
         all: () => events.map((e) => ({ type: e.type, data: JSON.stringify(e.data) })),

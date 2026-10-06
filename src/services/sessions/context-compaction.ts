@@ -371,7 +371,7 @@ export function buildCoordinatorRestore(conversationId: string): string {
       `${CONTEXT_RESTORE_PREFIX} Your context was just compacted. What follows is your standing preamble; the message after`,
       'the end marker is the one to act on.]',
       '',
-      buildSessionPreamble(latticeCli()).replace(/\n+---\s*$/, '').trimEnd(),
+      buildSessionPreamble(latticeCli(), conversationId).replace(/\n+---\s*$/, '').trimEnd(),
       '',
       CONTEXT_RESTORE_END,
       '',

@@ -7,7 +7,9 @@
  * - Needs you: amber cube and the brightest text in the panel, because this
  *   is the only section that is the user's move. The row is the ask alone;
  *   the detail (`needsYouLines`) is on hover or a tap. Amber appears nowhere
- *   else in the panel.
+ *   else in the panel. The chat's open question card is a Needs you row too,
+ *   in place of the thread it is about: a tap takes the user to it, and its
+ *   × dismisses the question, not the thread.
  * - Workers: every live worker as its own row, named by its task (2026-09-28;
  *   folding them into the threads hid one whose thread waited on the user).
  * - In progress: threads nobody is on that are held on something outside the
@@ -21,7 +23,7 @@
  */
 
 import React, { useEffect, useRef, useState } from 'react';
-import { ChevronDown, ChevronRight, Circle, CircleCheck, CirclePause, Undo2, X } from 'lucide-react';
+import { ArrowLeft, ArrowUp, ChevronDown, ChevronRight, Circle, CircleCheck, CirclePause, Undo2, X } from 'lucide-react';
 import { SectionHeading } from './SectionHeading';
 import { WorkerRow } from './WorkersSection';
 import type { WaitTextContext } from './WaitText';
@@ -45,7 +47,20 @@ interface StateOfPlaySectionProps {
   onOpenWorker?: (conversationId: string) => void;
   waitContext?: WaitTextContext;
   pointedWorker?: string | null;
+  openQuestion?: OpenQuestion | null;
+  onJumpToQuestion?: () => void;
+  onDismissQuestion?: () => Promise<void>;
 }
+
+/** The chat's open question card (`lattice ask`), as the panel lists it. */
+export interface OpenQuestion {
+  question: string;
+  /** The project thread it is about, when the coordinator named one. */
+  thread?: number;
+}
+
+/** An open question's row: its text, what takes the user to its card, and its dismiss. */
+type QuestionLink = { text: string; onJump: () => void; onDismiss?: () => Promise<void> };
 
 type Pending = { seq: number; label: string; error?: string };
 
@@ -57,7 +72,7 @@ async function postThreadAction(coordinatorId: string, seq: number, action: 'dis
 }
 
 export function StateOfPlaySection({
-  project, workers, coordinatorId, coordinatorRunning, onOpenWorker, waitContext, pointedWorker,
+  project, workers, coordinatorId, coordinatorRunning, onOpenWorker, waitContext, pointedWorker, openQuestion, onJumpToQuestion, onDismissQuestion,
 }: StateOfPlaySectionProps): JSX.Element | null {
   const [dismissed, setDismissed] = useState<Pending[]>([]);
   const [parkedOpen, setParkedOpen] = useState(false);
@@ -132,18 +147,29 @@ export function StateOfPlaySection({
   };
 
   const needsYou = placed(play.needsYou, 'needs-you');
+  // A question card and the thread it is about are one thing to the user: the
+  // thread's row shows the question. A card about no listed thread goes first.
+  const question: QuestionLink | null = openQuestion ? { text: openQuestion.question, onJump: () => onJumpToQuestion?.(), onDismiss: onDismissQuestion } : null;
+  const questionThread = openQuestion?.thread !== undefined && needsYou.some((item) => item.thread.seq === openQuestion.thread)
+    ? openQuestion.thread
+    : null;
   const inProgress = placed(play.inProgress, 'in-progress');
   const next = placed(play.next, 'next');
   const orphanErrors = dismissed.filter((entry) => entry.error && !entry.label);
 
-  if (needsYou.length + play.workers.length + inProgress.length + next.length + parkedNow.length === 0 && !justDone) return null;
+  if ((question ? 1 : 0) + needsYou.length + play.workers.length + inProgress.length + next.length + parkedNow.length === 0 && !justDone) return null;
 
   return (
     <>
-      {needsYou.length > 0 && (
+      {(needsYou.length > 0 || question) && (
         <section data-testid="play-needs-you">
           <SectionHeading>Needs you</SectionHeading>
-          <div className="flex flex-col gap-px">{needsYou.map((item) => render(item, 'needs-you'))}</div>
+          <div className="flex flex-col gap-px">
+            {question && questionThread === null && <QuestionRow question={question} />}
+            {needsYou.map((item) => question && item.thread.seq === questionThread
+              ? <QuestionRow key={item.key} question={question} />
+              : render(item, 'needs-you'))}
+          </div>
         </section>
       )}
       {play.workers.length > 0 && (
@@ -269,7 +295,8 @@ function DismissedRow({ pending, onUndo }: { pending: Pending; onUndo: () => voi
   );
 }
 
-function DismissButton({ label, onClick }: { label: string; onClick: () => void }) {
+/** The × centres on the row's marker, so `tall` matches a tall `Marker`. */
+function DismissButton({ label, onClick, tall }: { label: string; onClick: () => void; tall?: boolean }) {
   return (
     <Tooltip delayDuration={300}>
       <TooltipTrigger asChild>
@@ -278,7 +305,7 @@ function DismissButton({ label, onClick }: { label: string; onClick: () => void 
           aria-label={label}
           data-testid="play-dismiss"
           onClick={(event) => { event.stopPropagation(); onClick(); }}
-          className="absolute right-1 top-1 hidden h-6 w-6 items-center justify-center rounded-sm text-fg-3 opacity-0 transition-opacity hover:text-fg focus-visible:opacity-100 group-hover:opacity-100 [@media(hover:hover)]:flex"
+          className={`absolute right-1 ${tall ? 'top-2' : 'top-1'} hidden h-6 w-6 items-center justify-center rounded-sm text-fg-3 opacity-0 transition-opacity hover:text-fg focus-visible:opacity-100 group-hover:opacity-100 [@media(hover:hover)]:flex`}
         >
           <X size={14} strokeWidth={1.75} />
         </button>
@@ -348,7 +375,7 @@ function ItemRow({ item, section, onDismiss }: {
 }) {
   const label = withoutThreadRefs(item.label);
   const dismissLabel = item.workers.length === 0 ? 'Dismiss' : item.workers.length === 1 ? 'Dismiss and stop its worker' : 'Dismiss and stop its workers';
-  const dismissControl = onDismiss ? <DismissButton label={dismissLabel} onClick={onDismiss} /> : null;
+  const dismissControl = onDismiss ? <DismissButton label={dismissLabel} onClick={onDismiss} tall={section === 'needs-you'} /> : null;
   // The × sits over the row's right edge rather than taking a column, so the
   // Waiting hairline runs as far as a worker row's; only the label keeps clear of it.
   const clearDismiss = onDismiss ? '[@media(hover:hover)]:pr-6' : '';
@@ -427,6 +454,43 @@ function NeedsYouRow({ label, ask, detail, clearDismiss, dismissControl }: {
       </div>
       {dismissControl}
     </div>
+  );
+}
+
+/**
+ * The chat's open question card (`lattice ask`) as a Needs you row
+ * (2026-09-29, Jason: "questions disappear up the thread"), in place of the
+ * thread it is about. The row is the question; a tap takes the user to the
+ * card, where it is answered, so the card stays the one place to answer or
+ * change an answer. Its × (a swipe on a phone) dismisses the question without
+ * answering, as the card's own does; the thread stays, and its own row and ×
+ * come back once the question is gone.
+ */
+function QuestionRow({ question }: { question: QuestionLink }) {
+  const [error, setError] = useState<string | null>(null);
+  const onDismiss = question.onDismiss;
+  const dismiss = onDismiss ? () => {
+    setError(null);
+    onDismiss().catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
+  } : undefined;
+  return (
+    <Swipeable onDismiss={dismiss}>
+      <div data-testid="play-question" className="group relative flex flex-col rounded-sm bg-bg transition-colors hover:bg-surface-2">
+        <button type="button" onClick={question.onJump} className="flex min-w-0 flex-1 items-start gap-2.5 px-2 py-1.5 text-left">
+          <Marker tall><SessionStateIcon state={{ kind: 'needs-you' }} variant="session" /></Marker>
+          <span className="flex min-h-7 min-w-0 flex-1 flex-col justify-center">
+            <span className={`text-[13px] font-medium leading-[1.45] text-fg break-words ${dismiss ? '[@media(hover:hover)]:pr-6' : ''}`}>{question.text}</span>
+            <span className="mt-0.5 flex items-center gap-1 text-[12px] font-medium text-accent">
+              <ArrowLeft size={12} strokeWidth={2} aria-hidden className="hidden md:block" />
+              <ArrowUp size={12} strokeWidth={2} aria-hidden className="md:hidden" />
+              Answer in the chat
+            </span>
+          </span>
+        </button>
+        {error && <span className="px-2 pb-1.5 pl-[46px] text-[12px] text-rose-400">Could not dismiss: {error}</span>}
+        {dismiss && <DismissButton label="Dismiss the question" onClick={dismiss} tall />}
+      </div>
+    </Swipeable>
   );
 }
 

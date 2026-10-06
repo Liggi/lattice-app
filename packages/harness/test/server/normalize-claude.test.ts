@@ -34,6 +34,11 @@ describe('normalizeClaude', () => {
       expect(data.permissionMode).toBe('default')
     })
 
+    it('keeps the capabilities init advertises, for a server that takes the process over later', () => {
+      const result = normalizeClaude({ ...INIT_EVENT, capabilities: ['msg_lifecycle_v1'] })
+      expect((result!.data as Record<string, unknown>).capabilities).toEqual(['msg_lifecycle_v1'])
+    })
+
     it('returns null for non-init system events', () => {
       expect(normalizeClaude(SYSTEM_NON_INIT)).toBeNull()
     })

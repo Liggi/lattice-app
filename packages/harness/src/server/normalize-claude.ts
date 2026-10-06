@@ -79,6 +79,7 @@ export function normalizeClaude(raw: unknown): NormalizedEvent | null {
             cwd: msg.cwd as string | undefined,
             mcpServers: msg.mcp_servers as unknown[] | undefined,
             permissionMode: msg.permissionMode as string | undefined,
+            capabilities: msg.capabilities as string[] | undefined,
           },
         }
       }

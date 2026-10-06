@@ -135,6 +135,8 @@ export function registerUnifiedConversationLifecycleRoutes(
       permissionMode?: string;
       workspace?: string;
       reasoningEffort?: string;
+      /** Codex only: `fast` runs every turn on Codex's Fast (priority) tier. */
+      serviceTier?: string;
       systemPrompt?: string;
       initialContent?: ContentBlockParam[];
       goalObjective?: string;
@@ -214,6 +216,14 @@ export function registerUnifiedConversationLifecycleRoutes(
           fallback: coordinatorDefaults?.reasoningEffort,
         }).effort
       : undefined;
+    if (body.serviceTier !== undefined && body.serviceTier !== 'fast') {
+      throw new LatticeError('INVALID_REQUEST', `serviceTier must be "fast", got "${body.serviceTier}"`, 400);
+    }
+    if (body.serviceTier && provider !== 'codex') {
+      throw new LatticeError('INVALID_REQUEST', `serviceTier is a Codex setting; provider ${provider} has none`, 400);
+    }
+    // Codex's catalog lists Fast as the `priority` tier; that id is what the app-server takes.
+    const serviceTier = body.serviceTier === 'fast' ? 'priority' : undefined;
     const workingDirectory = normalizedWorkingDirectory || body.workingDirectory;
     const traceId = generateTraceId('conv');
 
@@ -275,6 +285,7 @@ export function registerUnifiedConversationLifecycleRoutes(
         providerSessionId: `pending-${Date.now()}`,
         model: model ?? defaultModelForProvider(provider),
         reasoningEffort,
+        serviceTier,
         workspace,
         initialPrompt: message,
         pickedUpFrom: parentConversation?.conversationId,
@@ -301,7 +312,7 @@ export function registerUnifiedConversationLifecycleRoutes(
             }) + message
           : body.coordinator
             ? buildCoordinatorPreamble({ conversationId, workingDirectory, cli: latticeCli(), installedProviders: installedProviders(), claudeEndpointModels: claudeEndpointModels() }) + message
-            : buildSessionPreamble(latticeCli()) + (message ?? '');
+            : buildSessionPreamble(latticeCli(), conversationId) + (message ?? '');
 
         // Prime conversation metadata
         await sessionInfoService.updateSessionInfo(conversationId, {

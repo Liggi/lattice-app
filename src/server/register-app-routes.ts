@@ -23,6 +23,8 @@ import { createContextTransfersRoutes } from '@/routes/session/context-transfers
 import { createUnifiedConversationRoutes } from '@/routes/conversation/unified-conversation.routes.js';
 import { createNotesRoutes } from '@/routes/session/notes.routes.js';
 import { createProviderAuthRoutes } from '@/routes/integrations/provider-auth.routes.js';
+import { createChatGPTPlanRoutes } from '@/routes/integrations/chatgpt-plan.routes.js';
+import { createBackgroundRoutes } from '@/routes/system/background.routes.js';
 import { createSessionTransferRoutes } from '@/routes/session/session-transfer.routes.js';
 import { createSessionStatusRoutes } from '@/routes/session/session-status.routes.js';
 import { createSessionHistoryRoutes } from '@/routes/session/session-history.routes.js';
@@ -82,6 +84,8 @@ export function registerAppRoutes(deps: RegisterAppRoutesDeps): void {
   app.use('/api/working-directories', createWorkingDirectoriesRoutes(deps.workingDirectoriesService));
   app.use('/api/config', createConfigRoutes(deps.configService));
   app.use('/api/provider-auth', createProviderAuthRoutes({ processManagerClient: deps.processManagerClient }));
+  app.use('/api/chatgpt-plan', createChatGPTPlanRoutes());
+  app.use('/api/background', createBackgroundRoutes());
   app.use('/api/notifications', createNotificationRoutes());
   app.use('/api/feedback', createFeedbackRoutes(deps.configService));
   app.use('/api/update', createUpdateRoutes());

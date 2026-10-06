@@ -3,8 +3,8 @@
  * Process Daemon Entry Point
  *
  * Run this separately from the main lattice-server. It manages Claude CLI
- * processes and outlives nodemon / server restarts. See process-daemon.ts for
- * the durability caveat — PTYs survive but in-flight stream events do not.
+ * processes and outlives server restarts; a process's events are kept while no
+ * server is attached and replayed to the next one (held-streams.ts).
  *
  * Usage:
  *   npx tsx src/process-daemon/index.ts
@@ -13,51 +13,17 @@
  */
 
 import { decideSocketPath } from './resolve-socket-path.js';
-import fs from 'fs';
-import os from 'os';
-import path from 'path';
 import { rotateOversizedLogs } from '../services/infrastructure/structured-log-files.js';
 import { getEventJournal } from '../services/infrastructure/event-journal.js';
-import { parseJson } from '../utils/json.js';
+import { fileURLToPath } from 'url';
+import { daemonIdentity, loadClaudeEnvOverrides } from './daemon-identity.js';
 
 process.env.LATTICE_PROCESS_ROLE = 'daemon';
 rotateOversizedLogs();
 
-type ClaudeSettings = {
-  env?: Record<string, unknown>;
-};
-
-function loadClaudeEnvOverrides(): Record<string, string> {
-  const settingsPath = path.join(os.homedir(), '.claude', 'settings.json');
-
-  try {
-    if (!fs.existsSync(settingsPath)) {
-      return {};
-    }
-
-    const raw = fs.readFileSync(settingsPath, 'utf-8');
-    const parsed = parseJson(raw) as ClaudeSettings;
-
-    if (!parsed.env || typeof parsed.env !== 'object') {
-      return {};
-    }
-
-    const overrides: Record<string, string> = {};
-
-    for (const [key, value] of Object.entries(parsed.env)) {
-      if (value === undefined || value === null) {
-        continue;
-      }
-      overrides[key] = String(value);
-    }
-
-    return overrides;
-  } catch (_error) {
-    return {};
-  }
-}
-
 const envOverrides = loadClaudeEnvOverrides();
+// Read before anything else can change on disk, so it names the code this process loaded.
+const identity = daemonIdentity(fileURLToPath(import.meta.url), envOverrides);
 
 const { ProcessDaemon } = await import('./process-daemon.js');
 
@@ -72,6 +38,7 @@ const socketPath = socketDecision.socketPath;
 const daemon = new ProcessDaemon({
   socketPath,
   envOverrides,
+  identity,
 });
 
 getEventJournal().record({
@@ -83,6 +50,7 @@ getEventJournal().record({
     logLevel: process.env.LOG_LEVEL || 'info',
     socketPath,
     pid: process.pid,
+    identity,
   },
 });
 
@@ -95,6 +63,24 @@ async function shutdown(_signal: string): Promise<void> {
     console.error('[DAEMON] Error during shutdown:', error);
     process.exit(1);
   }
+}
+
+// A daemon a server started outlives it, for the next server. One that no
+// server connects to for this long is left from a Lattice nobody restarted.
+const exitWithoutServerMs = Number(process.env.LATTICE_DAEMON_EXIT_WITHOUT_SERVER_MS) || 0;
+// Not for the agents it starts, whose environment is copied from this one.
+delete process.env.LATTICE_DAEMON_EXIT_WITHOUT_SERVER_MS;
+if (exitWithoutServerMs > 0) {
+  let timer: NodeJS.Timeout | null = null;
+  const onClients = (count: number) => {
+    if (timer) clearTimeout(timer);
+    timer = count > 0 ? null : setTimeout(() => {
+      console.error(`[DAEMON] No server connected for ${exitWithoutServerMs}ms; stopping`);
+      void shutdown('no server');
+    }, exitWithoutServerMs);
+  };
+  daemon.on('clients', onClients);
+  onClients(0);
 }
 
 process.on('SIGINT', () => void shutdown('SIGINT'));

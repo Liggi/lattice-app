@@ -44,7 +44,7 @@
 
 import { createLogger } from '../infrastructure/logger.js';
 import { ConversationService } from './conversation-service.js';
-import { getEvents } from '../../session-history/repository.js';
+import { getEvents, iterateEventsNewestFirst } from '../../session-history/repository.js';
 import { projectTranscript } from '../../session-history/renderer.js';
 import type { RawEvent } from '../../session-history/types.js';
 import { appendWorkerEvent, foldedWorkerStates, latestWorkerReportText } from './worker-events.js';
@@ -153,14 +153,31 @@ export function readLastTurn(events: readonly RawEvent[]): LastTurn {
 }
 
 /** The newest compaction's error, when the newest one failed; null otherwise. */
-function lastCompactionFailure(events: readonly RawEvent[]): string | null {
-  for (let i = events.length - 1; i >= 0; i--) {
-    if (events[i].type !== 'context:compaction') continue;
-    const data = events[i].data as { phase?: string; error?: string } | undefined;
+function lastCompactionFailure(conversationId: string): string | null {
+  for (const event of iterateEventsNewestFirst(conversationId, ['context:compaction'])) {
+    const data = event.data as { phase?: string; error?: string } | undefined;
     if (data?.phase !== 'failed') return null;
     return data.error ?? 'no error given';
   }
   return null;
+}
+
+/**
+ * The worker's log from the boundary `turnStart` would find onward, which is
+ * all `readLastTurn` reads. Found through the type index, so a turn end does
+ * not load and parse a worker's whole log: 2.4s of one 9.4s event-loop block
+ * on 3045 (2026-09-30).
+ */
+function lastTurnEvents(conversationId: string): RawEvent[] {
+  let lastEnd: RawEvent | undefined;
+  for (const event of iterateEventsNewestFirst(conversationId, ['input:sent', 'turn:end'])) {
+    if (!lastEnd) {
+      if (event.type === 'turn:end') lastEnd = event;
+      continue;
+    }
+    if (event.type === 'input:sent' || !isCompactEnd(event)) return getEvents(conversationId, { fromSeq: event.seq });
+  }
+  return getEvents(conversationId);
 }
 
 /** Called from the turn:end side effect for every conversation; a no-op unless it has a parent. Never rejects. */
@@ -181,8 +198,7 @@ async function deliverIfWorker(workerConversationId: string): Promise<void> {
   if (!worker?.pickedUpFrom) return;
   const parent = worker.pickedUpFrom;
 
-  const events = getEvents(workerConversationId);
-  const turn = readLastTurn(events);
+  const turn = readLastTurn(lastTurnEvents(workerConversationId));
   // A turn cut short by a stop request is not the worker's word on anything:
   // whoever stopped it (the coordinator's `session send`, or the user) sent the
   // input that follows, and the worker's answer to that is the report.
@@ -193,7 +209,7 @@ async function deliverIfWorker(workerConversationId: string): Promise<void> {
     // A control operation that failed still has to be seen. The worker's own
     // thread renders the `context:compaction` as an error; this keeps it in
     // the server log too, so suppressing the delivery does not also hide it.
-    const failure = turn.reason === 'control-operation' ? lastCompactionFailure(events) : null;
+    const failure = turn.reason === 'control-operation' ? lastCompactionFailure(workerConversationId) : null;
     if (failure !== null) {
       logger.warn('Compaction failed; its error is not a worker report', {
         worker: workerConversationId,

@@ -98,7 +98,7 @@ Lattice has two long-lived runtime processes:
 - `lattice-server` - Express API + static frontend
 - `lattice-daemon` - PTY/process owner for provider sessions
 
-The daemon and the Claude PTYs outlive server restarts, but in-flight stream events are not buffered across the gap. A server restart mid-response loses the in-flight output; the next user message resumes the conversation via `--resume`. Treat server restart as "session survives, current turn does not."
+The daemon and its Claude processes outlive server restarts: the daemon keeps each process's events while no server is attached, and the next server takes the process over and replays them, so a Claude turn carries on through a restart (`src/harness/adopt-running-processes.ts`). The server restarts the daemon only when its code or the Claude settings it passes on have changed (`src/process-daemon/daemon-identity.ts`); that, like any daemon restart, ends its turns, and those sessions are sent a note to carry on. Codex turns run in the server process and are always cut off by a server restart, then carried on the same way.
 
 ### Canonical IDs
 

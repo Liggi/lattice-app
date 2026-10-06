@@ -10,6 +10,7 @@ import { WorkerEventBlock } from '../WorkerEvents/WorkerEventBlock';
 import { DismissalLine } from '../WorkerEvents/DismissalLine';
 import { FeedbackProposalCard } from '../Feedback/FeedbackProposalCard';
 import { DecisionAskCard, useWithdrawnAnswers } from '../Decision/DecisionAskCard';
+import { ExplainCard } from '../Explain/ExplainCard';
 import { BLOCK_BUDGET_BASE, BLOCK_BUDGET_STEP } from './message-list-constants';
 import { useMessageAnimation } from './use-message-animation';
 import { useScrollManagement } from './use-scroll-management';
@@ -21,6 +22,7 @@ import type { RenderItem } from '../../hooks/useHarnessSession';
 import type { ActionTraceEntry, HydrationPhase } from '@liggi/agent-ui-harness/client';
 import { CollapsedToolGroup, type BackgroundTaskState } from '@liggi/agent-ui-toolkit';
 import { useRenderOrderDetector } from '../../hooks/useRenderOrderDetector';
+import { isBlankText } from '../../utils/blank-text';
 
 interface BranchLineage {
   parentSessionId: string;
@@ -245,6 +247,8 @@ export const MessageList: React.FC<MessageListProps> = ({
 
       for (const ri of renderItemsProp) {
         if (ri.kind === 'message') {
+          const { message } = ri;
+          if (message.type === 'assistant' && Array.isArray(message.content) && message.content.length > 0 && message.content.every(isBlankText)) continue;
           items.push({
             kind: 'message',
             message: ri.message,
@@ -456,6 +460,7 @@ export const MessageList: React.FC<MessageListProps> = ({
     const isWorkerMessage = isWorkerEventMessage(item.message);
     const feedbackProposal = item.message.type === 'system' && item.message.systemSubtype === 'feedback' ? item.message.feedbackProposal : undefined;
     const decision = item.message.type === 'system' && item.message.systemSubtype === 'decision' ? item.message.decision : undefined;
+    const explain = item.message.type === 'system' && item.message.systemSubtype === 'explain' ? item.message.explain : undefined;
     if (item.message.decisionAnswer && withdrawnAnswers.has(item.message.decisionAnswer.inboxId)) return null;
     const isStreamingMessage = isStreaming && isAssistant;
 
@@ -478,6 +483,10 @@ export const MessageList: React.FC<MessageListProps> = ({
           ) : decision ? (
             <ErrorBoundary name="Decision">
               <DecisionAskCard decision={decision} />
+            </ErrorBoundary>
+          ) : explain ? (
+            <ErrorBoundary name="Explain">
+              <ExplainCard explain={explain} />
             </ErrorBoundary>
           ) : feedbackProposal ? (
             <ErrorBoundary name="FeedbackProposal">

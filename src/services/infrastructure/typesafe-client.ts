@@ -1,6 +1,6 @@
 /**
- * TypeSafe's Jev: a criterion judge. One yes/no question against a state,
- * answered as a probability. Called direct (`api.typesafe.ai`) rather than
+ * TypeSafe's Jev: a criterion judge. Questions against a state, answered
+ * as a probability (noul), a level (score) or one of a set (choice). Called direct (`api.typesafe.ai`) rather than
  * through a gateway: the Vercel gateway was returning 503s on 2026-09-19
  * while the direct endpoint answered in ~340ms median.
  *
@@ -94,15 +94,56 @@ export async function judgeNouls<K extends string>(
   questions: Record<K, NoulQuestion>,
   options: JudgeOptions = { timeoutMs: 3000 },
 ): Promise<{ nouls: Record<K, number>; model: string; ms: number }> {
+  const keys = Object.keys(questions) as K[];
+  const asked = Object.fromEntries(keys.map((k) => [k, { type: 'noul' as const, ...questions[k] }])) as Record<K, JevQuestion>;
+  const { answers, model, ms } = await askJev(state, asked, options);
+  const nouls = {} as Record<K, number>;
+  for (const k of keys) nouls[k] = answers[k].noul as number;
+  return { nouls, model, ms };
+}
+
+/**
+ * Jev's three question types. `instructions` may be a string or an object
+ * whose fields name parts of the state, as `idea` and `explanation` do in
+ * the explain-back check.
+ */
+export type JevQuestion =
+  | { type: 'noul'; instructions: unknown; criteria?: { true: string; false: string } }
+  | { type: 'score'; instructions: unknown; criteria: string[] }
+  | { type: 'choice'; instructions: unknown; criteria: Record<string, string> };
+
+export interface JevAnswer {
+  /** Noul: probability the criterion holds, 0..1. */
+  noul?: number;
+  /** Score: expected level, 0..levels-1. */
+  score?: number;
+  /** Choice: the key of the chosen option. */
+  choice?: string;
+  confidence?: number;
+  probabilities?: number[] | Record<string, number>;
+}
+
+export interface AskJevOptions extends JudgeOptions {
+  /** A pinned version (`jev-1.13.0`); `jev-latest` when absent. */
+  model?: string;
+}
+
+/**
+ * Any mix of Jev questions against one state in a single call, keyed as
+ * asked. Each answer is checked for the field its type returns. Fails as
+ * `judgeNoul` does.
+ */
+export async function askJev<K extends string>(
+  state: unknown,
+  questions: Record<K, JevQuestion>,
+  options: AskJevOptions = { timeoutMs: 3000 },
+): Promise<{ answers: Record<K, JevAnswer>; model: string; ms: number }> {
   const key = resolveTypeSafeKey();
   if (!key) throw new TypeSafeUnavailableError('TypeSafe key not configured');
   const doFetch = options.fetchImpl ?? fetch;
+  const requestedModel = options.model ?? JEV_MODEL;
   const keys = Object.keys(questions) as K[];
-  const body = JSON.stringify({
-    model: JEV_MODEL,
-    state,
-    questions: Object.fromEntries(keys.map((k) => [k, { type: 'noul', ...questions[k] }])),
-  });
+  const body = JSON.stringify({ model: requestedModel, state, questions });
   const started = Date.now();
   const deadline = started + options.timeoutMs;
 
@@ -136,21 +177,27 @@ export async function judgeNouls<K extends string>(
     }
     const answer = (parsed ?? {}) as {
       model?: unknown;
-      answers?: Record<string, { noul?: unknown } | undefined>;
+      answers?: Record<string, JevAnswer | undefined>;
       usage?: { input_tokens?: unknown; output_tokens?: unknown };
     };
-    const nouls = {} as Record<K, number>;
+    const answers = {} as Record<K, JevAnswer>;
     for (const k of keys) {
-      const noul = answer.answers?.[k]?.noul;
-      if (typeof noul !== 'number' || !Number.isFinite(noul) || noul < 0 || noul > 1) {
-        throw new TypeSafeUnavailableError('TypeSafe answer had no noul score');
-      }
-      nouls[k] = noul;
+      const got = answer.answers?.[k];
+      if (!got || !hasAnswerFor(questions[k], got)) throw new TypeSafeUnavailableError(`TypeSafe answer had no ${questions[k].type} for ${k}`);
+      answers[k] = got;
     }
     const ms = Date.now() - started;
-    logJevCost(answer.usage, options.cost, ms);
-    return { nouls, model: typeof answer.model === 'string' ? answer.model : JEV_MODEL, ms };
+    const model = typeof answer.model === 'string' ? answer.model : requestedModel;
+    logJevCost(answer.usage, options.cost, ms, model);
+    return { answers, model, ms };
   }
+}
+
+function hasAnswerFor(question: JevQuestion, got: JevAnswer): boolean {
+  const finite = (n: unknown): n is number => typeof n === 'number' && Number.isFinite(n);
+  if (question.type === 'noul') return finite(got.noul) && got.noul >= 0 && got.noul <= 1;
+  if (question.type === 'score') return finite(got.score) && got.score >= 0 && got.score <= question.criteria.length - 1;
+  return typeof got.choice === 'string' && got.choice in question.criteria;
 }
 
 /** Jev bills per token like any model; without this its spend never reached the cost log. */
@@ -158,13 +205,14 @@ function logJevCost(
   usage: { input_tokens?: unknown; output_tokens?: unknown } | undefined,
   cost: JudgeOptions['cost'],
   durationMs: number,
+  model: string,
 ): void {
   const count = (n: unknown) => (typeof n === 'number' && Number.isFinite(n) ? n : 0);
   try {
     getCostTracker().log({
       sessionId: cost?.sessionId ?? 'typesafe',
       operation: cost?.operation ?? 'NEEDS_YOU',
-      model: JEV_MODEL,
+      model,
       inputTokens: count(usage?.input_tokens),
       outputTokens: count(usage?.output_tokens),
       durationMs,

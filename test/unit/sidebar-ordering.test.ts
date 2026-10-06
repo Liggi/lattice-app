@@ -126,6 +126,19 @@ describe('sleeping', () => {
     expect(ids(lists.projects)).toEqual(['conv-project']);
   });
 
+  it('sleeps a row put to sleep by hand at once, even while it works, unless it needs the user or failed', () => {
+    const sleptAt = ago(MINUTE);
+    const { sessions, sleepingSessions } = sidebarLists([
+      session('conv-quiet', 1, { sleptAt }),
+      session('conv-working', 2, { sleptAt, status: 'ongoing' }),
+      session('conv-asking', 3, { sleptAt, awaitingAnswer: true }),
+      session('conv-failed', 4, { sleptAt, failure: { message: 'boom', at: Date.now() } }),
+    ]);
+
+    expect(sleepingSessions.map(s => s.conversationId).sort()).toEqual(['conv-quiet', 'conv-working']);
+    expect(sessions.map(s => s.conversationId)).toEqual(['conv-asking', 'conv-failed']);
+  });
+
   it('moves a row back to its place when it wakes', () => {
     const quiet = [session('conv-a', 1), session('conv-b', 2, asleep), session('conv-c', 3)];
     expect(ids(sidebarLists(quiet).sessions)).toEqual(['conv-a', 'conv-c']);

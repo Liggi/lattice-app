@@ -38,7 +38,7 @@
  */
 
 import type Anthropic from '@anthropic-ai/sdk';
-import { anthropicClientFactory } from '../infrastructure/anthropic-client-factory.js';
+import { backgroundTextClient, backgroundProvenance } from '../infrastructure/background-text-client.js';
 import { ConfigService } from '../infrastructure/config-service.js';
 import { allowGeneration } from '../infrastructure/generation-gates.js';
 import { getCostTracker } from '../infrastructure/cost-tracker.js';
@@ -226,7 +226,7 @@ async function summariseReport({ coordinator, worker, reportSeq, report }: Repor
     return;
   }
 
-  const client = anthropicClientFactory.getClient();
+  const client = backgroundTextClient.getClient('workerReportSummary');
   if (!client) {
     logger.debug('No Anthropic client; report cards show the report as stored', { worker });
     return;
@@ -242,12 +242,13 @@ async function summariseReport({ coordinator, worker, reportSeq, report }: Repor
     model,
     max_tokens: MAX_OUTPUT_TOKENS,
     thinking: THINKING,
-    system: prompt.system,
+    system: [{ type: 'text', text: prompt.system, cache_control: { type: 'ephemeral' } }],
     messages: [{ role: 'user', content: prompt.user }],
   });
   const durationMs = Date.now() - started;
   logSummaryCost(worker, model, response, durationMs);
 
+  let actualModel = response.model || model;
   const firstReply = replyText(response);
   const draft = reportSummaryDraft(firstReply);
   if (!draft) {
@@ -271,7 +272,7 @@ async function summariseReport({ coordinator, worker, reportSeq, report }: Repor
       model,
       max_tokens: MAX_OUTPUT_TOKENS,
       thinking: THINKING,
-      system: prompt.system,
+      system: [{ type: 'text', text: prompt.system, cache_control: { type: 'ephemeral' } }],
       messages: [
         { role: 'user', content: prompt.user },
         { role: 'assistant', content: firstReply },
@@ -279,6 +280,7 @@ async function summariseReport({ coordinator, worker, reportSeq, report }: Repor
       ],
     });
     logSummaryCost(worker, model, retry, Date.now() - retryStarted);
+    actualModel = retry.model || model;
     const second = usableReportSummary(replyText(retry));
     const stillMissing = second ? summaryDetailsMissing(second, source) : [];
     if (!second || stillMissing.length > 0) {
@@ -304,7 +306,7 @@ async function summariseReport({ coordinator, worker, reportSeq, report }: Repor
     reportSeq,
     title: summary.title,
     text: summary.text,
-    model,
+    model: actualModel,
   } satisfies WorkerReportSummaryData);
   logger.info('Report summary written', { worker, reportSeq, model, ms: durationMs, title: summary.title });
 }
@@ -333,7 +335,7 @@ function logSummaryCost(worker: string, model: string, response: Anthropic.Messa
     getCostTracker().log({
       sessionId: worker,
       operation: 'WORKER_REPORT_SUMMARY',
-      model,
+      ...backgroundProvenance(response, model),
       inputTokens: response.usage?.input_tokens ?? 0,
       outputTokens: response.usage?.output_tokens ?? 0,
       cacheCreationInputTokens: response.usage?.cache_creation_input_tokens ?? 0,

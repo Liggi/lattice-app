@@ -26,7 +26,8 @@ interface WaitingQuestion {
  *
  * The held request lives in this process only, as Codex's do: a server
  * restart leaves the CLI waiting with nothing to answer it, and the pending
- * row is expired on boot.
+ * row is expired on boot. A turn that ends (stopped, or the process gone)
+ * has dropped its request, so its question is expired then too.
  */
 export class ClaudeQuestionCoordinator {
   private readonly waiting = new Map<string, WaitingQuestion>();
@@ -35,7 +36,11 @@ export class ClaudeQuestionCoordinator {
     private readonly client: ProcessManagerClient,
     private readonly questionService: PendingQuestionService,
     private readonly tracker: PermissionTracker,
-  ) {}
+  ) {
+    const release = ({ streamingId }: { streamingId: string }) => this.expireForStreaming(streamingId);
+    client.on('turn-idle', release);
+    client.on('process-closed', release);
+  }
 
   /** Holds the request as a pending question. False when the input is not one the card can show. */
   hold(event: ClaudeControlRequestEventData): boolean {
@@ -66,6 +71,15 @@ export class ClaudeQuestionCoordinator {
       behavior: 'deny',
       message: 'The user dismissed the question without answering it.',
     });
+  }
+
+  private expireForStreaming(streamingId: string): void {
+    for (const [id, waiting] of this.waiting) {
+      if (waiting.streamingId !== streamingId) continue;
+      this.waiting.delete(id);
+      this.questionService.markExpired(id);
+      logger.info('Claude AskUserQuestion expired: its turn ended unanswered', { id, streamingId });
+    }
   }
 
   private take(id: string): WaitingQuestion | undefined {

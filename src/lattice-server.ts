@@ -46,7 +46,7 @@ import { migrateLegacyHistoryToEvents } from './harness/legacy-message-migration
 import { DatabaseProvider } from './services/infrastructure/database-provider.js';
 import { ProcessManagerClient } from './process-daemon/process-manager-client.js';
 import { ensureDaemon } from './process-daemon/ensure-daemon.js';
-import type { ChildProcess } from 'child_process';
+import type { ActiveSession } from './process-daemon/types.js';
 import { ConversationService } from './services/sessions/conversation-service.js';
 import { drainAllInboxes } from './services/sessions/session-inbox.js';
 import { settleHeldDeliveries } from './services/sessions/held-delivery-settlement.js';
@@ -83,7 +83,6 @@ export class LatticeServer {
   private configOverrides?: { port?: number; host?: string; cwd?: string };
   private harnessRuntime?: HarnessRuntime;
   private processManagerClient?: ProcessManagerClient;
-  private spawnedDaemonChild: ChildProcess | null = null;
   private summaryTickHandle: NodeJS.Timeout | null = null;
   private autoArchiveTickHandle: NodeJS.Timeout | null = null;
   private idleReapTickHandle: NodeJS.Timeout | null = null;
@@ -297,30 +296,30 @@ export class LatticeServer {
   }
 
   /**
-   * Stop every Claude process a daemon that outlived the previous server still
-   * runs. This server has no subscription to any of them, so one mid-turn
-   * would go on reading files, running commands and committing with nothing
-   * reaching its transcript (seen 2026-09-26: a fixture wrote its marker file
-   * a minute after a restart, invisible in its thread). The recovery sweep
-   * then closes the sessions, and the ones cut off mid-turn are carried on by
-   * a fresh process that resumes from the provider's own history.
+   * Stop every Claude process a previous server left running that this one
+   * did not take over (a process for a conversation it cannot place, or a
+   * second process for one it already has). This server hears none of them,
+   * so one mid-turn would go on reading files, running commands and
+   * committing with nothing reaching its transcript (seen 2026-09-26: a
+   * fixture wrote its marker file a minute after a restart, invisible in its
+   * thread). The recovery sweep has closed their sessions, and the ones cut
+   * off mid-turn are carried on by a fresh process.
    */
-  private async stopOrphanedDaemonProcesses(client: ProcessManagerClient): Promise<void> {
-    const orphans = await client.getActiveSessions();
+  private async stopUnadoptedDaemonProcesses(client: ProcessManagerClient, running: readonly ActiveSession[], adopted: Set<string>): Promise<void> {
+    const orphans = running.filter((p) => !p.exited && !adopted.has(p.streamingId));
     if (orphans.length === 0) return;
     const results = await Promise.allSettled(orphans.map((o) => client.stopConversation(o.streamingId)));
     const failed = orphans.filter((_, i) => results[i].status === 'rejected');
     this.logger.info('Stopped Claude processes left from the previous server', {
       stopped: orphans.length - failed.length,
       failed: failed.map((o) => o.streamingId),
-      sessions: orphans.map((o) => o.sessionId),
+      sessions: orphans.map((o) => o.conversationId ?? o.sessionId),
     });
   }
 
   private async setupHarness(): Promise<void> {
-    const { socketPath, spawned, child } = await ensureDaemon();
-    this.spawnedDaemonChild = child;
-    this.logger.info('Daemon reachable', { socketPath, spawned });
+    const { socketPath, spawned, child, replaced } = await ensureDaemon();
+    this.logger.info('Daemon reachable', { socketPath, spawned, pid: child?.pid, replaced });
 
     // The daemon can die under a running server (2026-09-27: an uncaught
     // spawn error stopped it); without a new one every session stays down.
@@ -328,14 +327,14 @@ export class LatticeServer {
       revive: async () => {
         const revived = await ensureDaemon();
         if (!revived.spawned) return;
-        this.spawnedDaemonChild = revived.child;
         this.logger.warn('Process daemon had stopped; started a new one', { socketPath: revived.socketPath, pid: revived.child?.pid });
       },
     });
     await client.connect();
     this.processManagerClient = client;
     this.logger.info('Harness daemon client connected');
-    if (!spawned) await this.stopOrphanedDaemonProcesses(client);
+    // What a daemon that outlived the previous server still runs, to take over.
+    const running = spawned ? [] : await client.getActiveSessions();
     // A daemon restart under a running server ends every Claude process; the
     // sessions it cut off are carried on once it answers again.
     client.on('daemon-reconnected', () => { void carryOnAfterDaemonReconnect(); });
@@ -353,6 +352,7 @@ export class LatticeServer {
     this.harnessRuntime = setupHarness({
       app: this.app,
       processManagerClient: client,
+      adoptable: running,
       resolveResumeSessionId: (conversationId: string) => {
         const conversation = conversationService.getConversation(conversationId);
         if (!conversation || conversation.segments.length === 0) return conversationId;
@@ -381,6 +381,7 @@ export class LatticeServer {
       activeConversationRegistry: this.activeConversationRegistry,
       pendingQuestionService: this.pendingQuestionService,
     });
+    await this.stopUnadoptedDaemonProcesses(client, running, this.harnessRuntime.adopted);
     this.logger.info('Harness integration initialized');
 
     // Pre-cutover conversations have no harness events and would render empty.
@@ -730,35 +731,8 @@ export class LatticeServer {
     });
 
     this.stopBackgroundServices();
+    // The daemon is left running with its agents, for the next server.
     await this.closeHttpServer();
-    await this.stopSpawnedDaemon();
-  }
-
-  /** Waits for the daemon to exit, so a server started next spawns its own rather than finding this one's socket. */
-  private async stopSpawnedDaemon(): Promise<void> {
-    const child = this.spawnedDaemonChild;
-    if (!child) return;
-    this.spawnedDaemonChild = null;
-    if (child.exitCode !== null || child.signalCode !== null) return;
-    const exited = new Promise<void>((resolve) => child.once('exit', () => resolve()));
-    try {
-      child.kill('SIGTERM');
-      this.logger.info('Sent SIGTERM to spawned daemon child', { pid: child.pid });
-    } catch (err) {
-      this.logger.warn('Failed to stop spawned daemon child', {
-        error: err instanceof Error ? err.message : String(err),
-      });
-      return;
-    }
-    const timedOut = await Promise.race([
-      exited.then(() => false),
-      new Promise<boolean>((resolve) => setTimeout(() => resolve(true), 5_000).unref()),
-    ]);
-    if (timedOut) {
-      this.logger.warn('Daemon child did not exit within 5s of SIGTERM; killing it', { pid: child.pid });
-      child.kill('SIGKILL');
-      await exited;
-    }
   }
 
   private stopBackgroundServices(): void {

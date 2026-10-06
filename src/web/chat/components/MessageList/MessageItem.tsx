@@ -4,6 +4,7 @@ import { SkillHeading } from './SkillHeading';
 import { Code, Lightbulb, AlertTriangle, Minimize2, Maximize2, Copy, Check, FileText, Image, Loader2, ExternalLink, FlaskConical, LayoutDashboard, MessageCircle, Wrench, Brain } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { remarkSlackBullets } from '../../utils/slack-bullets';
 import { AgentMessage } from './AgentMessage';
 import { JsonViewer } from '../JsonViewer/JsonViewer';
 import { ToolUseRenderer, type BackgroundTaskState } from '@liggi/agent-ui-toolkit';
@@ -14,6 +15,7 @@ import { preserveThinkingBreaks } from '../../utils/thinking-text';
 import { AddReactionButton, AgentReactionChips, ReactionChips, firstLine, useRegisterMessageActions, type ReactionTarget } from '../MessageReactions/MessageReactions';
 import { copyText } from '../../utils/copy-text';
 import { parseAnnotatedMessage } from '../../utils/annotations-format';
+import { hasVisibleText } from '../../utils/blank-text';
 import { AnnotatedUserMessage } from './AnnotatedUserMessage';
 // import type { ContentBlockParam } from '@anthropic-ai/sdk/resources/messages/messages';
 
@@ -38,6 +40,34 @@ interface MessageItemProps {
 
 const EMPTY_TOOL_RESULTS: Record<string, ToolResult> = {};
 const EMPTY_CHILDREN_MESSAGES: Record<string, ChatMessage[]> = {};
+
+/** A user message's images and documents, as its bubble shows them above the text. */
+export function attachmentMedia(blocks: readonly DisplayContentBlock[]): React.ReactNode[] {
+  return (blocks as ReadonlyArray<{ type: string; source?: { type: string; media_type: string; data?: string; url?: string } }>).map((block, idx) => {
+    if (block.type === 'image' && block.source) {
+      const src = block.source.type === 'base64'
+        ? `data:${block.source.media_type};base64,${block.source.data}`
+        : block.source.url;
+      return (
+        <ImageWithPlaceholder
+          key={`img-${idx}`}
+          src={src}
+          alt="Attached"
+          className="max-w-[200px] max-h-[200px] rounded-md border border-line object-contain"
+        />
+      );
+    }
+    if (block.type === 'document') {
+      return (
+        <div key={`doc-${idx}`} className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-surface-2">
+          <FileText size={14} className="text-fg-2" />
+          <span className="text-xs text-fg-2">PDF</span>
+        </div>
+      );
+    }
+    return null;
+  });
+}
 
 // Image component with loading placeholder
 function ImageWithPlaceholder({
@@ -86,7 +116,8 @@ function ImageWithPlaceholder({
 
 // Strip NEXT_STEPS block from display (rendered separately as clickable pills)
 function stripNextStepsBlock(text: string): string {
-  return text.replace(/<!--\s*NEXT_STEPS\s*\n[\s\S]*?-->/g, '').trim();
+  const stripped = text.replace(/<!--\s*NEXT_STEPS\s*\n[\s\S]*?-->/g, '').trim();
+  return hasVisibleText(stripped) ? stripped : '';
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -235,13 +266,13 @@ function ContentWithInsights({ text, markdownComponents }: {
                   Insight
                 </div>
                 <div className="prose max-w-none text-sm leading-[1.55] dark:prose-invert">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{block.content}</ReactMarkdown>
+                  <ReactMarkdown remarkPlugins={[remarkGfm, remarkSlackBullets]} components={markdownComponents}>{block.content}</ReactMarkdown>
                 </div>
               </div>
             );
           }
           return (
-            <ReactMarkdown key={idx} remarkPlugins={[remarkGfm]} components={markdownComponents}>{block.content}</ReactMarkdown>
+            <ReactMarkdown key={idx} remarkPlugins={[remarkGfm, remarkSlackBullets]} components={markdownComponents}>{block.content}</ReactMarkdown>
           );
         })}
       </div>
@@ -553,30 +584,7 @@ export function MessageItem({
     const hiddenLinesCount = lines.length - 8;
     const displayContent = displayLines.join('\n');
 
-    const mediaNodes = mediaBlocks.map((block: { type: string; source?: { type: string; media_type: string; data?: string; url?: string } }, idx: number) => {
-      if (block.type === 'image' && block.source) {
-        const src = block.source.type === 'base64'
-          ? `data:${block.source.media_type};base64,${block.source.data}`
-          : block.source.url;
-        return (
-          <ImageWithPlaceholder
-            key={`img-${idx}`}
-            src={src}
-            alt="Attached"
-            className="max-w-[200px] max-h-[200px] rounded-md border border-line object-contain"
-          />
-        );
-      }
-      if (block.type === 'document') {
-        return (
-          <div key={`doc-${idx}`} className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-surface-2">
-            <FileText size={14} className="text-fg-2" />
-            <span className="text-xs text-fg-2">PDF</span>
-          </div>
-        );
-      }
-      return null;
-    });
+    const mediaNodes = attachmentMedia(mediaBlocks);
 
     // Another session sent this. It gets its own entry rather than the user's
     // card, so coordination is inspectable without reading as their own words.

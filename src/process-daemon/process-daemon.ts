@@ -1,12 +1,11 @@
 /**
  * Process Daemon - Long-running process that owns Claude CLI PTY processes
  *
- * This daemon runs independently of the web server and survives nodemon /
- * server restarts. The PTYs survive too, but stream events emitted while the
- * server is disconnected are NOT buffered — `broadcastEvent` writes
- * synchronously to currently-connected sockets and drops on close. So a
- * mid-response server restart loses the in-flight turn's output; the next
- * user message resumes via --resume rather than continuing the stream.
+ * This daemon runs independently of the web server and survives server
+ * restarts, and so do its processes. A process's events go to the server that
+ * owns it; while that server is gone they are kept, and the next server
+ * attaches and receives them (held-streams.ts), so a turn carries on through
+ * the restart.
  *
  * It communicates with lattice-server via Unix socket IPC.
  */
@@ -70,7 +69,12 @@ import {
   ClaudeControlRequestEventData,
   DaemonConfig,
   DEFAULT_SOCKET_PATH,
+  DaemonIdentityResult,
+  AttachParams,
+  AttachResult,
+  ActiveSession,
 } from './types.js';
+import { HeldStreams } from './held-streams.js';
 import { CONFIG_DIR } from '../utils/constants.js';
 import { claudePluginDir } from '../services/infrastructure/agent-skills.js';
 import { createLogger } from '../services/infrastructure/logger.js';
@@ -177,10 +181,13 @@ export class ProcessDaemon extends EventEmitter {
 
   private ipcServer: net.Server | null = null;
   private connectedClients: Set<net.Socket> = new Set();
+  /** Each process's events, kept while the server that owns it is gone (held-streams.ts). */
+  private readonly heldStreams = new HeldStreams<net.Socket>((socket) => this.connectedClients.has(socket));
   private socketPath: string;
   /** null when Claude Code is not installed: a Codex-only install still runs. */
   private claudeExecutablePath: string | null;
   private envOverrides: Record<string, string | undefined>;
+  private readonly identity: string | null;
   private readonly loginTerminals: ClaudeLoginTerminalManager;
 
   // Cached capability probes for the resolved `claude` CLI. Lazily populated
@@ -209,6 +216,7 @@ export class ProcessDaemon extends EventEmitter {
     this.socketPath = config.socketPath;
     this.claudeExecutablePath = config.claudeExecutablePath || this.findClaudeExecutable();
     this.envOverrides = config.envOverrides || {};
+    this.identity = config.identity ?? null;
     this.loginTerminals = new ClaudeLoginTerminalManager({
       spawn: (size) => this.spawnLoginTerminal(size),
       checkSignedIn: () => this.isClaudeSignedIn(),
@@ -468,6 +476,7 @@ export class ProcessDaemon extends EventEmitter {
   private handleClientConnection(socket: net.Socket): void {
     logger.info('Client connected');
     this.connectedClients.add(socket);
+    this.emit('clients', this.connectedClients.size);
 
     let buffer = '';
 
@@ -493,11 +502,13 @@ export class ProcessDaemon extends EventEmitter {
     socket.on('close', () => {
       logger.info('Client disconnected');
       this.connectedClients.delete(socket);
+      this.emit('clients', this.connectedClients.size);
     });
 
     socket.on('error', (err) => {
       logger.error('Client socket error', err);
       this.connectedClients.delete(socket);
+      this.emit('clients', this.connectedClients.size);
     });
   }
 
@@ -509,13 +520,15 @@ export class ProcessDaemon extends EventEmitter {
 
     try {
       let result: unknown;
+      // Events sent to this client once the response is.
+      let after: IPCEvent[] = [];
 
       switch (request.method) {
         case 'spawn':
-          result = await this.handleSpawn(request.params as unknown as SpawnParams);
+          result = await this.handleSpawn(request.params as unknown as SpawnParams, socket);
           break;
         case 'spawnOptimistic':
-          result = await this.handleSpawnOptimistic(request.params as unknown as SpawnParams);
+          result = await this.handleSpawnOptimistic(request.params as unknown as SpawnParams, socket);
           break;
         case 'stop':
           result = await this.handleStop(request.params as unknown as StopParams);
@@ -540,6 +553,19 @@ export class ProcessDaemon extends EventEmitter {
           break;
         case 'isActive':
           result = { active: this.isSessionActive((request.params as unknown as IsActiveParams).streamingId) };
+          break;
+        case 'attach': {
+          const { streamingId } = request.params as unknown as AttachParams;
+          const attached = this.heldStreams.attach(streamingId, socket);
+          if (!attached) throw new LatticeError('STREAM_NOT_FOUND', `No process ${streamingId} to attach to`, 404);
+          if (attached.dropped > 0) logger.warn('Attached with events dropped while no server was attached', { streamingId, dropped: attached.dropped });
+          logger.info('Server attached to a running process', { streamingId, replayed: attached.events.length });
+          result = { replayed: attached.events.length, dropped: attached.dropped } satisfies AttachResult;
+          after = attached.events;
+          break;
+        }
+        case 'identity':
+          result = { pid: process.pid, identity: this.identity } satisfies DaemonIdentityResult;
           break;
         case 'loginTerminalStart': {
           const params = request.params as unknown as LoginTerminalStartParams;
@@ -579,6 +605,7 @@ export class ProcessDaemon extends EventEmitter {
       }
 
       this.sendResponse(socket, { id: request.id, result });
+      for (const event of after) socket.write(JSON.stringify(event) + '\n');
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error));
       logger.error('IPC request failed', err, {
@@ -604,10 +631,21 @@ export class ProcessDaemon extends EventEmitter {
   }
 
   /**
-   * Broadcast an event to all connected clients
+   * Send an event: a process's events to the server that owns it (held-streams.ts), the rest to every client
    */
   private broadcastEvent(event: IPCEvent): void {
     const message = JSON.stringify(event) + '\n';
+    // A process's events go to the server that owns it, or are kept for the next one.
+    const streamingId = (event.data as { streamingId?: unknown }).streamingId;
+    if (typeof streamingId === 'string' && this.heldStreams.has(streamingId)) {
+      const owner = this.heldStreams.route(streamingId, event);
+      try {
+        owner?.write(message);
+      } catch (err) {
+        logger.error('Failed to send to the owning client', err);
+      }
+      return;
+    }
     for (const client of this.connectedClients) {
       try {
         client.write(message);
@@ -621,10 +659,11 @@ export class ProcessDaemon extends EventEmitter {
   // Process Management (extracted from ClaudeProcessManager)
   // ============================================================================
 
-  private async handleSpawn(params: SpawnParams): Promise<SpawnResult> {
+  private async handleSpawn(params: SpawnParams, owner: net.Socket | null = null): Promise<SpawnResult> {
     const { config } = params;
     const isResume = !!config.resumedSessionId;
     const streamingId = randomUUID();
+    this.heldStreams.own(streamingId, owner, config.conversationId ?? null);
     const spawnStartTime = Date.now();
     const hasMultimodalContent = !!(config.initialContent && config.initialContent.length > 0);
     const cwd = expandTilde(config.workingDirectory || process.cwd());
@@ -645,6 +684,7 @@ export class ProcessDaemon extends EventEmitter {
       const env = {
         ...this.childEnv(),
         ...claudeSpawnEnv(config.model),
+        ...silentTurnEnv(config),
         CUI_STREAMING_ID: streamingId,
         PWD: cwd,
         INIT_CWD: cwd,
@@ -811,10 +851,11 @@ export class ProcessDaemon extends EventEmitter {
    * This is used for resume flows where the frontend needs a streamingId
    * immediately to connect SSE and show a live indicator.
    */
-  private async handleSpawnOptimistic(params: SpawnParams): Promise<SpawnOptimisticResult> {
+  private async handleSpawnOptimistic(params: SpawnParams, owner: net.Socket | null = null): Promise<SpawnOptimisticResult> {
     const { config } = params;
     const isResume = !!config.resumedSessionId;
     const streamingId = randomUUID();
+    this.heldStreams.own(streamingId, owner, config.conversationId ?? null);
     const spawnStartTime = Date.now();
     const hasMultimodalContent = !!(config.initialContent && config.initialContent.length > 0);
     const cwd = expandTilde(config.workingDirectory || process.cwd());
@@ -856,6 +897,7 @@ export class ProcessDaemon extends EventEmitter {
     const env = {
       ...this.childEnv(),
       ...claudeSpawnEnv(config.model),
+      ...silentTurnEnv(config),
       CUI_STREAMING_ID: streamingId,
       PWD: cwd,
       INIT_CWD: cwd,
@@ -1101,6 +1143,7 @@ export class ProcessDaemon extends EventEmitter {
   private handleRespondToControlRequest(
     params: RespondToControlRequestParams,
   ): { success: boolean } {
+    this.heldStreams.answered(params.streamingId, params.requestId);
     const proc = this.processes.get(params.streamingId);
     if (!proc) {
       logger.warn('respondToControlRequest: process not found', { streamingId: params.streamingId });
@@ -1216,13 +1259,25 @@ export class ProcessDaemon extends EventEmitter {
     }
   }
 
-  private getActiveSessions(): Array<{ streamingId: string; sessionId: string; isIdle: boolean; initializing: boolean }> {
-    return Array.from(this.processes.keys()).map(streamingId => ({
+  private getActiveSessions(): ActiveSession[] {
+    const running: ActiveSession[] = Array.from(this.processes.keys()).map(streamingId => ({
       streamingId,
       sessionId: this.sessionIds.get(streamingId) || '',
+      conversationId: this.heldStreams.conversationId(streamingId),
       isIdle: this.idleTimeouts.has(streamingId) || this.idleDeferred.has(streamingId),
       initializing: !this.sessionIds.has(streamingId), // no sessionId yet = still waiting for system init
+      exited: false,
     })); // Include all sessions with processes, even those still initializing
+    // Exited while no server was attached: listed so the next one collects the ending.
+    const exited: ActiveSession[] = this.heldStreams.exitedWaiting().map((streamingId) => ({
+      streamingId,
+      sessionId: '',
+      conversationId: this.heldStreams.conversationId(streamingId),
+      isIdle: false,
+      initializing: false,
+      exited: true,
+    }));
+    return [...running, ...exited];
   }
 
   private isSessionActive(streamingId: string): boolean {
@@ -1902,4 +1957,15 @@ ${relevantLines.join('\n')}
     });
   }
 
+}
+
+/**
+ * Claude Code answers a turn that ends with no text by asking the model to
+ * "produce a user-visible response", which turns a coordinator's deliberate
+ * silence into a note about the silence. It skips that nudge when the turn's
+ * last tool call succeeded and is named in CLAUDE_CODE_TERMINAL_MCP_TOOLS;
+ * a coordinator's silent turn ends on a Bash call to the lattice CLI.
+ */
+function silentTurnEnv(config: ConversationConfig): Record<string, string> {
+  return config.coordinator ? { CLAUDE_CODE_TERMINAL_MCP_TOOLS: 'Bash' } : {};
 }

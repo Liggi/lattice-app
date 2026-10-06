@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { LazyCodeHighlight } from '../CodeHighlight';
-import { DIAGRAM_CSS, DIAGRAM_EXPAND_BELOW, DIAGRAM_MARKERS, completeSvg } from '../../../../utils/diagram-style';
+import { DIAGRAM_CSS, DIAGRAM_EXPAND_BELOW, DIAGRAM_MARKERS, diagramLayouts, naturalWidth, type DiagramLayouts } from '../../../../utils/diagram-style';
 
 /** True while the message holding the diagram is still arriving. */
 export const DiagramStreamingContext = createContext(false);
@@ -9,14 +9,16 @@ export const DiagramStreamingContext = createContext(false);
  * Renders an agent's ```diagram fence: an inline SVG drawn inside a sandboxed
  * iframe (scripts from the agent blocked, no network, no access to the app),
  * sized to the drawing and styled by the shared diagram classes. A fence still
- * arriving shows a placeholder. Whether it is drawn or shown as source is decided
- * by completeSvg alone, the rule `lattice diagram check` applies, and never by how
- * the frame measured: a frame laid out while hidden reports no size until shown.
+ * arriving shows a placeholder. A fence with a second, wider layout shows that one
+ * whenever the frame is at least as wide as it, and the phone layout otherwise.
+ * Whether it is drawn or shown as source is decided by diagramLayouts alone, the
+ * rule `lattice diagram check` applies, and never by how the frame measured: a
+ * frame laid out while hidden reports no size until shown.
  */
 export function DiagramBlock({ source }: { source: string }): React.JSX.Element {
   const streaming = useContext(DiagramStreamingContext);
-  const svg = completeSvg(source);
-  if (!svg) {
+  const layouts = diagramLayouts(source);
+  if (!layouts) {
     if (streaming) return <div className="not-prose my-3 text-[12px] text-fg-3" data-diagram-pending>Drawing a diagram…</div>;
     return (
       <div className="not-prose my-3" data-diagram-source>
@@ -25,18 +27,18 @@ export function DiagramBlock({ source }: { source: string }): React.JSX.Element 
       </div>
     );
   }
-  return <DiagramFrame svg={svg} />;
+  return <DiagramFrame layouts={layouts} source={source.trim()} />;
 }
 
-function DiagramFrame({ svg }: { svg: string }) {
+function DiagramFrame({ layouts, source }: { layouts: DiagramLayouts; source: string }) {
   const ref = useRef<HTMLIFrameElement>(null);
   const [height, setHeight] = useState(0);
   const [shrunk, setShrunk] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [showSource, setShowSource] = useState(false);
   const nonce = useMemo(() => Math.random().toString(36).slice(2), []);
-  const doc = useMemo(() => buildDocument(svg, nonce, false), [svg, nonce]);
-  const fullDoc = useMemo(() => buildDocument(svg, nonce, true), [svg, nonce]);
+  const doc = useMemo(() => buildDocument(layouts, nonce, false), [layouts, nonce]);
+  const fullDoc = useMemo(() => buildDocument(layouts, nonce, true), [layouts, nonce]);
 
   useEffect(() => {
     const onMessage = (e: MessageEvent) => {
@@ -70,7 +72,7 @@ function DiagramFrame({ svg }: { svg: string }) {
           {showSource ? 'Hide source' : 'Source'}
         </button>
       </div>
-      {showSource && <div className="mt-2"><DiagramSource source={svg} /></div>}
+      {showSource && <div className="mt-2"><DiagramSource source={source} /></div>}
       {expanded && (
         <div
           data-diagram-full
@@ -93,18 +95,29 @@ function DiagramSource({ source }: { source: string }) {
   return <LazyCodeHighlight code={source.replace(/\n$/, '')} language="xml" className="rounded-md border border-line max-w-full box-border" />;
 }
 
-function buildDocument(svg: string, nonce: string, full: boolean): string {
+/**
+ * The frame's page. Both layouts are in it and a container query on the
+ * frame's own width picks one, so the choice follows the real column (and the
+ * full-size view's viewport) rather than the device.
+ */
+function buildDocument({ narrow, wide }: DiagramLayouts, nonce: string, full: boolean): string {
+  const wideWidth = wide ? naturalWidth(wide) : null;
+  const pick = wide && wideWidth
+    ? `.l.w { display: none; } @container (min-width: ${wideWidth}px) { .l.n { display: none; } .l.w { display: block; } }`
+    : '';
+  const svg = `<div class="l n">${narrow}</div>${wide ? `<div class="l w">${wide}</div>` : ''}`;
   const csp = ["default-src 'none'", "style-src 'unsafe-inline'", 'img-src data:', `script-src 'nonce-${nonce}'`].join('; ');
   return `<!doctype html><html><head><meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="${csp}">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<style>${PAGE_CSS}${full ? FULL_CSS : ''}${DIAGRAM_CSS}</style></head><body>
+<style>${PAGE_CSS}${full ? FULL_CSS : ''}${pick}${DIAGRAM_CSS}</style></head><body>
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">${DIAGRAM_MARKERS}</svg>
 <div id="d">${svg}</div>
 <script nonce="${nonce}">
   const d = document.getElementById('d');
   const post = () => {
-    const svg = d.querySelector(':scope > svg');
+    const shown = [...d.children].find((l) => l.getClientRects().length > 0);
+    const svg = shown && shown.querySelector(':scope > svg');
     const box = svg && svg.getBoundingClientRect();
     const vb = svg && svg.viewBox && svg.viewBox.baseVal;
     const natural = svg ? (svg.width.baseVal.value || (vb && vb.width) || 0) : 0;
@@ -117,12 +130,12 @@ function buildDocument(svg: string, nonce: string, full: boolean): string {
 
 const PAGE_CSS = `
 html, body { margin: 0; background: transparent; color-scheme: dark; -webkit-font-smoothing: antialiased; }
-#d { padding: 1px 0; }
-#d > svg { display: block; max-width: 100%; height: auto; overflow: visible; }
+#d { padding: 1px 0; container-type: inline-size; }
+.l > svg { display: block; max-width: 100%; height: auto; overflow: visible; }
 `;
 
 const FULL_CSS = `
 html, body { height: 100%; }
 #d { padding: 16px; overflow: auto; height: 100%; box-sizing: border-box; }
-#d > svg { max-width: none; }
+.l > svg { max-width: none; }
 `;

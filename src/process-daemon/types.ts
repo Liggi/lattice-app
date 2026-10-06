@@ -16,7 +16,7 @@ import type { LoginAttemptState, LoginTerminalSize } from './claude-login-termin
 export interface IPCRequest {
   id: number;
   method: 'spawn' | 'spawnOptimistic' | 'stop' | 'forceKill' | 'interrupt' | 'write' | 'list' | 'isActive' | 'sendQuestionAnswer' | 'respondToControlRequest'
-    | LoginTerminalMethod;
+    | 'identity' | 'attach' | LoginTerminalMethod;
   params: Record<string, unknown>;
 }
 
@@ -241,6 +241,36 @@ export interface DaemonConfig {
   socketPath: string;
   claudeExecutablePath?: string;
   envOverrides?: Record<string, string | undefined>;
+  /** What the daemon was started with (daemon-identity.ts), answered to the `identity` request. */
+  identity?: string;
+}
+
+/** Take over a running process: its kept events follow the response. */
+export interface AttachParams {
+  streamingId: string;
+}
+
+export interface AttachResult {
+  replayed: number;
+  dropped: number;
+}
+
+/** A process the daemon runs, or one that exited while no server was attached. */
+export interface ActiveSession {
+  streamingId: string;
+  /** Claude's own session id, once it has started. */
+  sessionId: string;
+  /** The Lattice conversation it was spawned for. */
+  conversationId: string | null;
+  isIdle: boolean;
+  initializing: boolean;
+  exited: boolean;
+}
+
+/** The `identity` request's answer: which daemon this is and what it was started with. */
+export interface DaemonIdentityResult {
+  pid: number;
+  identity: string | null;
 }
 
 export const DEFAULT_SOCKET_PATH = '/tmp/lattice-daemon.sock';

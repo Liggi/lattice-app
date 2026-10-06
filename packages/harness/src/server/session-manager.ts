@@ -90,6 +90,8 @@ interface Session {
   pendingToolUseNames: Map<string, string>
   /** Pending scheduled wakeup (from ScheduleWakeup tool call). */
   scheduledWakeup: ScheduledWakeup | null
+  /** A start() is retiring the old process or awaiting its spawn. */
+  spawning: boolean
 }
 
 // ---- Config ----
@@ -143,6 +145,9 @@ export interface SessionDiagnostics {
 
 // ---- Kill escalation timings ----
 
+/** Stored events read back when taking over a running process: enough to span a long turn. */
+const ADOPT_TAIL_EVENTS = 2000
+
 const SIGTERM_DELAY_MS = 3000
 const SIGKILL_DELAY_MS = 5000
 
@@ -178,13 +183,25 @@ export class SessionManager {
         pendingTaskToolUseIds: new Map(),
         pendingToolUseNames: new Map(),
         scheduledWakeup: null,
+        spawning: false,
       }
       this.sessions.set(sessionId, session)
     }
 
-    if (session.process?.alive) {
-      const currentStatus = deriveStatus(session.log.all())
-      if (currentStatus === 'idle') {
+    // A second start while the first is still retiring the old process or
+    // spawning would find no process yet and launch another CLI on the session.
+    if (session.spawning) {
+      throw new Error('Session is already starting')
+    }
+    if (session.process?.alive && deriveStatus(session.log.all()) !== 'idle') {
+      throw new Error('Session already has an active process')
+    }
+
+    const runId = crypto.randomUUID()
+    let handle: ProcessHandle
+    session.spawning = true
+    try {
+      if (session.process?.alive) {
         // Process alive in keep-alive mode after turn completed — kill it before respawning
         this.logger.info('Killing idle keep-alive process before restart', { sessionId })
         session.process.signal('SIGTERM')
@@ -193,33 +210,31 @@ export class SessionManager {
           new Promise(resolve => setTimeout(resolve, 5000)),
         ])
         session.process = null
-      } else {
-        throw new Error('Session already has an active process')
       }
-    }
 
-    const runId = crypto.randomUUID()
-    session.runId = runId
+      session.runId = runId
 
-    // Attachments are per-turn input, not session configuration. `config` still
-    // carries them into spawn() below, but what we remember and what we log must
-    // not: lastConfig is reused verbatim by a later attachment-less respawn
-    // (which would replay a stale image), and run:start is persisted to storage
-    // (where base64 payloads would bloat every session's event log).
-    const rememberedConfig = stripTransientTurnData(config)
-    session.lastConfig = rememberedConfig
+      // Attachments are per-turn input, not session configuration. `config` still
+      // carries them into spawn() below, but what we remember and what we log must
+      // not: lastConfig is reused verbatim by a later attachment-less respawn
+      // (which would replay a stale image), and run:start is persisted to storage
+      // (where base64 payloads would bloat every session's event log).
+      const rememberedConfig = stripTransientTurnData(config)
+      session.lastConfig = rememberedConfig
 
-    this.appendEvent(session, 'run:start', { config: rememberedConfig }, runId, sessionId)
-    this.logger.info('Starting session', { sessionId, runId })
+      this.appendEvent(session, 'run:start', { config: rememberedConfig }, runId, sessionId)
+      this.logger.info('Starting session', { sessionId, runId })
 
-    let handle: ProcessHandle
-    try {
-      handle = await this.adapter.spawn(config)
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
-      this.appendEvent(session, 'run:error', { message, code: 'SPAWN_FAILED' }, runId, sessionId)
-      this.logger.error('Spawn failed', { sessionId, runId, error: message })
-      throw err
+      try {
+        handle = await this.adapter.spawn(config)
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        this.appendEvent(session, 'run:error', { message, code: 'SPAWN_FAILED' }, runId, sessionId)
+        this.logger.error('Spawn failed', { sessionId, runId, error: message })
+        throw err
+      }
+    } finally {
+      session.spawning = false
     }
 
     session.process = handle
@@ -300,7 +315,7 @@ export class SessionManager {
 
     const status = deriveStatus(session.log.all())
 
-    if (status === 'starting') {
+    if (status === 'starting' || session.spawning) {
       throw new Error('Cannot send while starting')
     }
     if (status === 'stopping') {
@@ -586,10 +601,94 @@ export class SessionManager {
       pendingTaskToolUseIds: new Map(),
       pendingToolUseNames: new Map(),
       scheduledWakeup: null,
+      spawning: false,
     }
     this.sessions.set(sessionId, session)
     this.logger.info('Recovered session from storage', { sessionId, count })
     return log
+  }
+
+  /**
+   * Take over a process a previous server spawned and the process host kept
+   * running: the session is recovered from storage as its last run left it,
+   * with no run:end, and the process's events go on into that run. What the
+   * previous server held in memory for the run — tool names awaiting results,
+   * background commands, a scheduled wakeup — is rebuilt from the stored
+   * events. Returns null, leaving the session alone, when storage has no
+   * events for it or its last run has already ended.
+   */
+  adopt(sessionId: string, handle: ProcessHandle): { runId: string; lastConfig: StartConfig | null } | null {
+    if (!this.storage || this.sessions.has(sessionId)) return null
+    const tail = this.storage.read(sessionId, { beforeSeq: Number.MAX_SAFE_INTEGER, limit: ADOPT_TAIL_EVENTS })
+    const last = tail[tail.length - 1]
+    if (!last || last.type === 'run:end' || last.type === 'run:error') return null
+
+    const runId = last.runId
+    const latestReady = this.storage.findLatestRunReady(sessionId)
+    const readyId = (latestReady?.data as { resumeId?: string } | undefined)?.resumeId
+    const resumeId = readyId && !readyId.startsWith('pending-') ? readyId : null
+    let lastConfig: StartConfig | null = null
+    for (let i = tail.length - 1; i >= 0 && !lastConfig; i--) {
+      if (tail[i].type === 'run:start') lastConfig = (tail[i].data as { config?: StartConfig }).config ?? null
+    }
+
+    const log = new EventLog({ maxSize: this.maxLogSize, storage: this.storage, sessionId })
+    // In memory, so the status, sends and wakeups read the running turn as running.
+    log.preload(tail)
+    const session: Session = {
+      log,
+      process: handle,
+      runId,
+      resumeId,
+      lastConfig,
+      pendingTaskToolUseIds: new Map(),
+      pendingToolUseNames: new Map(),
+      scheduledWakeup: null,
+      spawning: false,
+    }
+    const run = tail.filter((e) => e.runId === runId)
+    const answered = new Set<string>()
+    for (const e of run) {
+      if (e.type !== 'result') continue
+      for (const block of (e.data as { blocks?: Array<{ type: string; tool_use_id?: string }> }).blocks ?? []) {
+        if (block.type === 'tool_result' && block.tool_use_id) answered.add(block.tool_use_id)
+      }
+    }
+    for (const e of run) {
+      if (e.type === 'content') {
+        for (const block of (e.data as ContentData).blocks ?? []) {
+          if (block.type === 'tool_use' && !answered.has((block as ToolUseBlock).id)) {
+            session.pendingToolUseNames.set((block as ToolUseBlock).id, (block as ToolUseBlock).name)
+          }
+        }
+      } else if (e.type === 'task:started') {
+        const d = e.data as TaskStartedData
+        if (d.taskType === 'local_bash' && !answered.has(d.toolUseId)) session.pendingTaskToolUseIds.set(d.toolUseId, d.taskId)
+      }
+    }
+    this.sessions.set(sessionId, session)
+    this.rearmWakeup(session, sessionId, run)
+    this.pipeEvents(session, handle, runId, sessionId)
+    this.handleExit(session, handle, runId, sessionId)
+    this.logger.info('Adopted a running process', { sessionId, runId, processId: handle.processId })
+    return { runId, lastConfig }
+  }
+
+  /** A ScheduleWakeup the run asked for that has not fired yet, set again for the time it was due. */
+  private rearmWakeup(session: Session, sessionId: string, run: SessionEvent[]): void {
+    for (let i = run.length - 1; i >= 0; i--) {
+      const e = run[i]
+      if (e.type === 'input:sent' && (e.data as InputSentData).source === 'scheduled_wakeup') return
+      if (e.type !== 'content') continue
+      const wake = ((e.data as ContentData).blocks ?? []).find(
+        (b) => b.type === 'tool_use' && (b as ToolUseBlock).name === 'ScheduleWakeup',
+      ) as ToolUseBlock | undefined
+      const input = wake?.input as { delaySeconds?: number; prompt?: string; reason?: string } | undefined
+      if (!input?.delaySeconds || !input.prompt) continue
+      const remaining = Math.max(1, Math.ceil((e.timestamp + input.delaySeconds * 1000 - Date.now()) / 1000))
+      this.scheduleWakeup(session, sessionId, remaining, input.prompt, input.reason ?? '')
+      return
+    }
   }
 
   /** Return the EventLog for a session. */
@@ -989,6 +1088,13 @@ export class SessionManager {
     sessionId: string,
   ): void {
     handle.exited.then(({ code, signal, lost }) => {
+      // A process start() has already replaced (it outlived the wait for its
+      // exit) ends inside the new run. Its run:end would read as the new run's
+      // end, and clearing session.process would orphan the live process.
+      if (session.runId !== runId) {
+        this.logger.info('Replaced process exited', { sessionId, runId, code, signal })
+        return
+      }
       session.process = null
       this.cancelWakeup(session, sessionId)
       session.pendingTaskToolUseIds.clear()

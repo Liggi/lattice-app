@@ -98,6 +98,7 @@ function buildStateSnapshot(cache: InsightsRecord | null, insights?: SessionInsi
 }
 
 import { parseJson } from '../../utils/json.js';
+import { seqsOfTypes } from '../../session-history/repository.js';
 import type {
   ConversationMessage,
   SessionContext,
@@ -139,6 +140,31 @@ function launchFolder(): string | undefined {
 }
 
 const RECOMPUTE_COOLDOWN_MS = 60_000;
+
+/**
+ * After a failed turn-end call, the session waits this long before trying
+ * again. Without it every turn end retried at once: 589 failed attempts in the
+ * eleven hours after the ChatGPT plan paused on 2026-10-01.
+ */
+const FAILURE_BACKOFF_MS = 10 * 60_000;
+
+/** The largest of 2, 4, 8, 16… that is at most `count`; 0 below 2. */
+function namingMilestone(count: number): number {
+  return count < 2 ? 0 : 2 ** Math.floor(Math.log2(count));
+}
+
+/**
+ * Whether a turn end should name the session again. The first run waits for
+ * the user's second message (or a worker's brief); after that, only reaching
+ * the next of 4, 8, 16… does. Re-running on every message in a long session
+ * mostly swapped synonyms: 107 calls in a day for one coordinator whose
+ * mission cycled between "Fix de-identification and backfill user data" and
+ * "Ship de-identification fix and backfill affected data".
+ */
+export function namingDue(storedCount: number | null, count: number, hasBrief: boolean): boolean {
+  if (storedCount === null) return count >= 2 || hasBrief;
+  return namingMilestone(count) > namingMilestone(storedCount);
+}
 
 export class InsightsEngine {
   private static instance: InsightsEngine | null = null;
@@ -357,65 +383,84 @@ export class InsightsEngine {
   // Harness event reading (replaces JSONL/historyReader path)
   // ===========================================================================
 
+  /** The session's events of these types, in order, read through the type index. */
+  private readEventsOfTypes(sessionId: string, types: readonly string[]): Array<{ type: string; data: string }> {
+    return this.db.prepare(
+      `SELECT type, data FROM harness_events WHERE session_id = ? AND seq IN (${seqsOfTypes('session_id = ?', types)}) ORDER BY seq ASC`,
+    ).all(sessionId, sessionId, ...types) as Array<{ type: string; data: string }>;
+  }
+
   /**
-   * Read conversation content from harness events.
-   * Returns structured data for insight generation. `userPrompts` holds only
+   * What the user wrote to the session, from its `input:sent` events. Only
    * what the user wrote (see `human-input.ts`), never server-injected input.
+   * Read apart from the replies because most turn ends stop at the gates that
+   * need only this, and a coordinator's replies are tens of MB of JSON.
    */
+  private readUserInputs(sessionId: string): {
+    userPrompts: string[];
+    inputCount: number;
+    /** A worker's task as its coordinator wrote it at pickup; null for anything else. */
+    brief: string | null;
+  } {
+    const userPrompts: string[] = [];
+    let inputCount = 0;
+    let brief: string | null = null;
+    const name = userName();
+    for (const row of this.readEventsOfTypes(sessionId, ['input:sent'])) {
+      const text = (parseJson(row.data) as Record<string, unknown>).text as string | undefined;
+      if (text?.trim()) inputCount++;
+      const human = text ? humanTextOfInput(text, name) : null;
+      if (human) userPrompts.push(human);
+      brief ??= text ? pickupBriefOf(text) : null;
+    }
+    return { userPrompts, inputCount, brief };
+  }
+
+  /** The session's replies and its latest TodoWrite list, from its `content` events. */
+  private readAssistantContent(sessionId: string): {
+    assistantTexts: string[];
+    todoState: TodoItem[] | null;
+    contentCount: number;
+  } {
+    const assistantTexts: string[] = [];
+    let todoState: TodoItem[] | null = null;
+    let contentCount = 0;
+    // Codex streams a reply as many content events sharing one messageId; join
+    // them so "recent assistant responses" are replies, not ". play to".
+    let lastTextMessageId: string | null = null;
+    for (const row of this.readEventsOfTypes(sessionId, ['content'])) {
+      const data = parseJson(row.data) as Record<string, unknown>;
+      const blocks = data.blocks as Array<{ type: string; text?: string; thinking?: string; name?: string; input?: Record<string, unknown> }> | undefined;
+      if (!blocks) continue;
+      contentCount++;
+      const messageId = typeof data.messageId === 'string' ? data.messageId : null;
+      for (const block of blocks) {
+        if (block.type === 'text' && block.text?.trim()) {
+          if (messageId && messageId === lastTextMessageId && assistantTexts.length > 0) {
+            assistantTexts[assistantTexts.length - 1] += block.text;
+          } else {
+            assistantTexts.push(block.text);
+          }
+          lastTextMessageId = messageId;
+        } else if (block.type === 'tool_use' && block.name === 'TodoWrite' && block.input?.todos) {
+          todoState = block.input.todos as TodoItem[];
+        }
+      }
+    }
+    return { assistantTexts: assistantTexts.map((t) => t.trim()).filter(Boolean), todoState, contentCount };
+  }
+
+  /** Read conversation content from harness events, for insight generation. */
   private readConversationFromEvents(sessionId: string): {
     userPrompts: string[];
     assistantTexts: string[];
     todoState: TodoItem[] | null;
     messageCount: number;
-    /** A worker's task as its coordinator wrote it at pickup; null for anything else. */
     brief: string | null;
   } {
-    type EventRow = { type: string; data: string };
-    const rows = this.db.prepare(
-      'SELECT type, data FROM harness_events WHERE session_id = ? ORDER BY seq ASC'
-    ).all(sessionId) as EventRow[];
-
-    const userPrompts: string[] = [];
-    const assistantTexts: string[] = [];
-    let todoState: TodoItem[] | null = null;
-    let messageCount = 0;
-    const name = userName();
-    // Codex streams a reply as many content events sharing one messageId; join
-    // them so "recent assistant responses" are replies, not ". play to".
-    let lastTextMessageId: string | null = null;
-    let brief: string | null = null;
-
-    for (const row of rows) {
-      const data = parseJson(row.data) as Record<string, unknown>;
-
-      if (row.type === 'input:sent') {
-        const text = data.text as string | undefined;
-        if (text?.trim()) messageCount++;
-        const human = text ? humanTextOfInput(text, name) : null;
-        if (human) userPrompts.push(human);
-        brief ??= text ? pickupBriefOf(text) : null;
-      } else if (row.type === 'content') {
-        const blocks = data.blocks as Array<{ type: string; text?: string; thinking?: string; name?: string; input?: Record<string, unknown> }> | undefined;
-        if (!blocks) continue;
-        messageCount++;
-
-        const messageId = typeof data.messageId === 'string' ? data.messageId : null;
-        for (const block of blocks) {
-          if (block.type === 'text' && block.text?.trim()) {
-            if (messageId && messageId === lastTextMessageId && assistantTexts.length > 0) {
-              assistantTexts[assistantTexts.length - 1] += block.text;
-            } else {
-              assistantTexts.push(block.text);
-            }
-            lastTextMessageId = messageId;
-          } else if (block.type === 'tool_use' && block.name === 'TodoWrite' && block.input?.todos) {
-            todoState = block.input.todos as TodoItem[];
-          }
-        }
-      }
-    }
-
-    return { userPrompts, assistantTexts: assistantTexts.map((t) => t.trim()).filter(Boolean), todoState, messageCount, brief };
+    const { userPrompts, inputCount, brief } = this.readUserInputs(sessionId);
+    const { assistantTexts, todoState, contentCount } = this.readAssistantContent(sessionId);
+    return { userPrompts, assistantTexts, todoState, messageCount: inputCount + contentCount, brief };
   }
 
   /**
@@ -472,9 +517,11 @@ export class InsightsEngine {
     return `${projectContext}${briefSection}\n${promptsSection}\n${todoContext}${assistantContext}`;
   }
 
-  private isArchived(sessionId: string): boolean {
-    const row = this.db.prepare('SELECT archived FROM sessions WHERE session_id = ?').get(sessionId) as { archived?: number } | undefined;
-    return row?.archived === 1;
+  /** Archived, or named by hand: either way nobody reads a generated title. */
+  private skipsNaming(sessionId: string): boolean {
+    const row = this.db.prepare('SELECT archived, custom_name FROM sessions WHERE session_id = ?').get(sessionId) as
+      { archived?: number; custom_name?: string | null } | undefined;
+    return row?.archived === 1 || Boolean(row?.custom_name?.trim());
   }
 
   /**
@@ -494,6 +541,7 @@ export class InsightsEngine {
   }
 
   private turnEndInFlight = new Set<string>();
+  private failedUntil = new Map<string, number>();
 
   private async computeOnTurnEnd(sessionId: string): Promise<void> {
     try {
@@ -506,8 +554,12 @@ export class InsightsEngine {
       if (!anthropicService.isConfigured()) return;
 
       // Archived sessions are hidden from the sidebar, and a session created
-      // archived is a verification fixture; nobody reads their titles.
-      if (this.isArchived(sessionId)) return;
+      // archived is a verification fixture; a session named by hand shows that
+      // name. Nobody reads a generated title for any of them.
+      if (this.skipsNaming(sessionId)) return;
+
+      const failedUntil = this.failedUntil.get(sessionId);
+      if (failedUntil !== undefined && Date.now() < failedUntil) return;
 
       // Cooldown gate
       const lastComputed = this.lastComputedAt.get(sessionId);
@@ -517,15 +569,14 @@ export class InsightsEngine {
       }
 
       // Read events and check minimum threshold
-      const { userPrompts, assistantTexts, todoState, messageCount, brief } = this.readConversationFromEvents(sessionId);
+      const { userPrompts, inputCount, brief } = this.readUserInputs(sessionId);
       // A worker's brief says what it is for on its own; anything else waits for the user to say.
       if (userPrompts.length < MIN_USER_MESSAGES && !brief) return;
 
-      // Only a new message from the user can change what the session is for.
-      // Turns driven by worker reports, server notes or agent messages would
-      // otherwise re-run the same prompt and get the same answer.
+      // Only a new message from the user can change what the session is for,
+      // and in a long session one more message rarely does; see namingDue.
       const existing = await this.getInsightsRecord(sessionId);
-      if (existing && existing.message_count === userPrompts.length) return;
+      if (!namingDue(existing ? existing.message_count ?? 0 : null, userPrompts.length, brief !== null)) return;
 
       // Get working directory from conversation record
       let workingDirectory: string | undefined;
@@ -535,10 +586,11 @@ export class InsightsEngine {
         workingDirectory = conv?.workingDirectory;
       } catch { /* optional context */ }
 
+      const { assistantTexts, todoState, contentCount } = this.readAssistantContent(sessionId);
       this.logger.info('Computing insights from harness events', {
         sessionId: sessionId.slice(0, 8),
         userPromptCount: userPrompts.length,
-        messageCount,
+        messageCount: inputCount + contentCount,
       });
 
       // Build prompt and call Anthropic
@@ -590,6 +642,7 @@ export class InsightsEngine {
         theme: result.theme,
       });
     } catch (error) {
+      this.failedUntil.set(sessionId, Date.now() + FAILURE_BACKOFF_MS);
       this.logger.warn('Insights computation failed on turn:end', {
         sessionId: sessionId.slice(0, 8),
         error: error instanceof Error ? error.message : String(error),

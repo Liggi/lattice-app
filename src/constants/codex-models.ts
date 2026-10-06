@@ -16,6 +16,13 @@ export interface CodexEffortEntry {
 
 export const CODEX_MODELS: CodexModelEntry[] = [
   {
+    id: 'gpt-6.1-sol',
+    label: 'Sol 6.1',
+    description: 'Capable model for sustained coding and agent work',
+    composerSelectable: true,
+    efforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+  },
+  {
     id: 'gpt-6-astra',
     label: 'Astra 6',
     description: 'Most capable model for complex, demanding work',

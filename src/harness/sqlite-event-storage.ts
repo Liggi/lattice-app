@@ -45,8 +45,9 @@ const CREATE_INDEX = `
 // scanning the (session_id, seq) primary key for a type filter. Important
 // for sessions with thousands of stored events, where the run:ready can be
 // arbitrarily deep in history.
+export const SESSION_TYPE_INDEX = 'idx_harness_events_session_type_seq';
 const CREATE_INDEX_TYPE_SEQ = `
-  CREATE INDEX IF NOT EXISTS idx_harness_events_session_type_seq
+  CREATE INDEX IF NOT EXISTS ${SESSION_TYPE_INDEX}
   ON harness_events (session_id, type, seq DESC)
 `;
 
@@ -256,10 +257,15 @@ export class SqliteEventStorageAdapter implements EventStorageAdapter {
       LIMIT ?
     `);
 
+    // Seqs from the type index, rows by primary key: see seqsOfTypes. A plain
+    // type filter here walked the whole session on every status poll.
     this.stmtReadDecisions = db.prepare(`
       SELECT * FROM harness_events
       WHERE session_id = ?
-        AND type IN (${DECISION_EVENT_TYPES.map(() => '?').join(', ')})
+        AND seq IN (
+          SELECT seq FROM harness_events INDEXED BY ${SESSION_TYPE_INDEX}
+          WHERE session_id = ? AND type IN (${DECISION_EVENT_TYPES.map(() => '?').join(', ')})
+        )
       ORDER BY seq DESC
       LIMIT ?
     `);
@@ -325,7 +331,7 @@ export class SqliteEventStorageAdapter implements EventStorageAdapter {
 
   /** The session's latest question-card events (`types/decisions.ts`), oldest first. */
   readDecisionEvents(sessionId: string, limit = 50): SessionEvent[] {
-    const rows = this.stmtReadDecisions.all(sessionId, ...DECISION_EVENT_TYPES, limit) as Array<Record<string, unknown>>;
+    const rows = this.stmtReadDecisions.all(sessionId, sessionId, ...DECISION_EVENT_TYPES, limit) as Array<Record<string, unknown>>;
     rows.reverse();
     return rows.map(rowToEvent);
   }

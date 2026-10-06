@@ -3,7 +3,8 @@
  * SVG vocabulary the chat styles (src/utils/diagram-style.ts), and the look
  * step. Written from a trial on real replies (thread 26398): drafts drawn 340
  * wide read well on a phone and on desktop, and a look at the rendered image
- * caught the one real defect, a shape left with SVG's default black fill.
+ * caught the one real defect, a shape left with SVG's default black fill. The
+ * optional wide layout fills the desktop column (thread 31548).
  */
 export function diagramGuidance(cli: string): string[] {
   return [
@@ -11,7 +12,7 @@ export function diagramGuidance(cli: string): string[] {
     '- Draw a diagram only when position carries meaning: parts of a system and what flows between them, a map, what',
     '  lives inside what, a rough sketch of a screen, a branching decision. Steps, timelines, comparisons and yes/no',
     '  grids are markdown lists and tables, which the chat already renders well. Never draw ASCII-art diagrams.',
-    '- A diagram is one inline SVG in a fenced block with the language `diagram`, and nothing else in the fence. The chat',
+    '- A diagram is an inline SVG in a fenced block with the language `diagram`, and nothing else in the fence. The chat',
     '  draws it in a sandbox: no scripts, nothing loaded from the network. Keep the explanation in your prose.',
     '  ```diagram',
     '  <svg viewBox="0 0 340 60" width="340">',
@@ -21,10 +22,11 @@ export function diagramGuidance(cli: string): string[] {
     '    <rect class="box on" x="200" y="8" width="130" height="44" rx="6"/><text x="212" y="35">Backend</text>',
     '  </svg>',
     '  ```',
-    '- Size: draw 340 wide (`viewBox="0 0 340 H" width="340"`), as tall as it needs. That is the phone column, and it',
-    '  reads well on desktop too. Things side by side on a whiteboard go one above the other here unless both fit in',
-    '  340. Up to 680 wide only when the diagram is really for desktop and the width carries the point: on a phone it',
-    '  then shrinks to half size and the reader has to open it full size.',
+    '- Size: always draw 340 wide (`viewBox="0 0 340 H" width="340"`), as tall as it needs. That is the phone column.',
+    '  Things side by side on a whiteboard go one above the other here unless both fit in 340. When that stacking',
+    '  hides the point (parts that sit side by side, flows that run across), also draw a wide layout 600 wide',
+    '  (`viewBox="0 0 600 H" width="600"`) and put it in the same fence after the 340 one. Desktop shows the wide one,',
+    '  phones the 340 one. Keep both saying the same thing; most diagrams need only the 340 one.',
     '- SVG does not wrap text, so you must. 13px text (the default) averages 7px a character, `.sub` and `.faint` 6.5px,',
     '  `.label` capitals 7px. Work out each line\'s width, keep 12px padding inside a box, and break a long line into two',
     '  `<text>` lines 16px apart, or shorten it. Text never crosses a box edge or another element.',

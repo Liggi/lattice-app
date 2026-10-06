@@ -1,7 +1,7 @@
 import type { DisplayContentBlock } from '../../types';
 import type { Provider } from '@/types/unified-messages';
 
-import type { CoordinatorConfig } from '@/types/config';
+import type { BackgroundInferenceConfig, CoordinatorConfig, GenerationConfig } from '@/types/config';
 
 export interface AppConfigInterface {
   colorScheme?: 'light' | 'dark' | 'system';
@@ -28,11 +28,15 @@ export interface ClaudeEndpointSetting extends SecretKeyConfig {
   baseUrl: string;
   model: string;
   contextWindow?: number;
+  /** Absent means 'anthropic'. */
+  protocol?: 'anthropic' | 'openai';
 }
 
 export interface AppConfig {
   anthropic?: SecretKeyConfig;
   claudeEndpoints?: ClaudeEndpointSetting[];
+  backgroundInference?: BackgroundInferenceConfig;
+  generation?: GenerationConfig;
   coordinator?: CoordinatorConfig;
   gemini?: SecretKeyConfig;
   server?: {

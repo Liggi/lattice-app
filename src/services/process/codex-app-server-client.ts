@@ -37,6 +37,8 @@ export interface CodexThreadStartOptions {
   cwd: string;
   model: string;
   reasoningEffort: string;
+  /** Codex service tier id, e.g. `priority` (shown as Fast). Omitted runs at the default tier. */
+  serviceTier?: string;
 }
 
 export interface CodexTurnStartOptions {
@@ -138,6 +140,7 @@ export class CodexAppServerClient extends EventEmitter {
       experimentalRawEvents: false,
       persistExtendedHistory: false,
       config: { model_reasoning_effort: options.reasoningEffort },
+      ...(options.serviceTier ? { serviceTier: options.serviceTier } : {}),
     });
   }
 
@@ -151,6 +154,7 @@ export class CodexAppServerClient extends EventEmitter {
       sandbox: CODEX_SANDBOX_MODE,
       persistExtendedHistory: false,
       config: { model_reasoning_effort: options.reasoningEffort },
+      ...(options.serviceTier ? { serviceTier: options.serviceTier } : {}),
     });
   }
 

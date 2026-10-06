@@ -6,7 +6,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { SessionManager } from '../../src/server/session-manager.js'
-import { FakeAdapter } from '../helpers/fake-process.js'
+import { FakeAdapter, FakeProcess } from '../helpers/fake-process.js'
 import { MemoryStorage } from '../helpers/memory-storage.js'
 import { INIT_EVENT, TEXT_ASSISTANT, RESULT_SUCCESS, COMPACT_BOUNDARY } from '../helpers/fixtures.js'
 
@@ -321,6 +321,47 @@ describe('Regression suite', () => {
     expect(fake2).not.toBe(fake1)
   })
 
+  it('#15b — a replaced process that exits late does not end the new run', async () => {
+    // Bug (2026-09-29): the retired keep-alive outlived start()'s 5s wait, so
+    // its exit (code 143) landed inside the new run. The run:end read as the
+    // new turn failing, and nulling session.process made the next send spawn
+    // again and kill the live process — a loop on every message.
+    await manager.start('s1', { prompt: 'first' })
+    const fake1 = adapter.latest
+    fake1.emitLine(JSON.stringify(INIT_EVENT))
+    fake1.emitLine(JSON.stringify(RESULT_SUCCESS))
+    await vi.advanceTimersByTimeAsync(0)
+
+    const startPromise = manager.start('s1', { prompt: 'second' })
+    await vi.advanceTimersByTimeAsync(5000)
+    await startPromise
+    const fake2 = adapter.latest
+    fake2.emitLine(JSON.stringify(INIT_EVENT))
+    await vi.advanceTimersByTimeAsync(0)
+
+    fake1.exit(143)
+    await vi.advanceTimersByTimeAsync(0)
+
+    const events = manager.getLog('s1')!.all()
+    expect(events.filter(e => e.type === 'run:end')).toHaveLength(0)
+    expect(manager.getStatus('s1')).toBe('streaming')
+
+    fake2.emitLine(JSON.stringify(RESULT_SUCCESS))
+    await vi.advanceTimersByTimeAsync(0)
+    await manager.send('s1', 'third')
+    expect(adapter.spawned).toHaveLength(2)
+    expect(fake2.stdinWrites).toEqual(['third\n'])
+  })
+
+  it('#15c — a second start during the first one\'s spawn is refused', async () => {
+    // Bug (2026-09-29): two starts 4s apart both found no process and each
+    // spawned a CLI resuming the same session.
+    const first = manager.start('s1', { prompt: 'first' })
+    await expect(manager.start('s1', { prompt: 'second' })).rejects.toThrow('Session is already starting')
+    await first
+    expect(adapter.spawned).toHaveLength(1)
+  })
+
   it('#16 — /compact transitions to idle so next message can be sent', async () => {
     // Bug: normalizeClaude dropped compact_boundary events, so deriveStatus
     // stayed "streaming" after /compact. start() threw "Session already has
@@ -476,6 +517,53 @@ describe('Regression suite', () => {
     // No extra events injected
     expect(storage.count('s1')).toBe(countBefore)
     expect(manager2.getStatus('s1')).toBe('idle')
+  })
+
+  it('#17e — a process the previous server left running is taken over mid-turn', async () => {
+    // The process host outlived the server: the new server adopts the live
+    // process, and the turn carries on in the same run with no run:end.
+    const storage = new MemoryStorage()
+    const adapter1 = new FakeAdapter()
+    const manager1 = new SessionManager(adapter1, { storage })
+    await manager1.start('s1', { prompt: 'hello', cwd: '/project', args: ['--permission-mode=acceptEdits'] })
+    adapter1.latest.emitLine(JSON.stringify(INIT_EVENT))
+    adapter1.latest.emitLine(JSON.stringify(TEXT_ASSISTANT))
+    await vi.advanceTimersByTimeAsync(0)
+    const runId = storage.read('s1').at(-1)!.runId
+
+    // === SERVER RESTARTS; the process lives on ===
+    const manager2 = new SessionManager(new FakeAdapter(), { storage })
+    const live = new FakeProcess()
+    const taken = manager2.adopt('s1', live)
+    expect(taken).toMatchObject({ runId, lastConfig: { args: ['--permission-mode=acceptEdits'] } })
+    expect(manager2.getStatus('s1')).toBe('streaming')
+
+    live.emitLine(JSON.stringify(RESULT_SUCCESS))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(manager2.getStatus('s1')).toBe('idle')
+    const events = storage.read('s1')
+    expect(events.some((e) => e.type === 'run:end')).toBe(false)
+    expect(events.at(-1)).toMatchObject({ type: 'turn:end', runId })
+    expect(manager2.inspect('s1')!.processAlive).toBe(true)
+
+    // Its exit ends the run as any other would.
+    live.exit(0)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(storage.read('s1').at(-1)).toMatchObject({ type: 'run:end', runId, data: { reason: 'completed' } })
+  })
+
+  it('#17f — a session whose run already ended is not taken over', async () => {
+    const storage = new MemoryStorage()
+    const adapter1 = new FakeAdapter()
+    const manager1 = new SessionManager(adapter1, { storage })
+    await manager1.start('s1', { prompt: 'hello' })
+    adapter1.latest.emitLine(JSON.stringify(INIT_EVENT))
+    adapter1.latest.exit(1)
+    await vi.advanceTimersByTimeAsync(0)
+
+    const manager2 = new SessionManager(new FakeAdapter(), { storage })
+    expect(manager2.adopt('s1', new FakeProcess())).toBeNull()
+    expect(manager2.hasSession('s1')).toBe(false)
   })
 
   it('#17d — recoverFromStorage finds run:ready buried beyond the tail window', async () => {

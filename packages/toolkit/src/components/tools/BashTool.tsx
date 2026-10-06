@@ -152,6 +152,15 @@ function countOutputLines(text: string): number {
 
 const AUTO_EXPAND_THRESHOLD = 5;
 
+/**
+ * A command that posts an explain-back card (`lattice explain --rubric …`,
+ * not `lattice explain log`). Its rubric holds the ideas the card keeps
+ * hidden from the user, so the chat must not print it beside the card.
+ */
+export function postsExplainBack(command: string): boolean {
+  return /(?:^|[\s/])lattice\s+explain\s[\s\S]*--rubric\b/.test(command);
+}
+
 export function BashTool({ input, result: rawResult, isPending = false, fetchBackgroundOutput, backgroundState }: BashToolProps): React.JSX.Element {
   const result = stripRerunFooter(rawResult);
   const resultLines = countOutputLines(result);
@@ -165,6 +174,7 @@ export function BashTool({ input, result: rawResult, isPending = false, fetchBac
 
   const displayOutput = bgOutputPath && taskOutput.content ? taskOutput.content : result;
   const displayCommand = useMemo(() => summarizeCommand(command), [command]);
+  const concealed = useMemo(() => postsExplainBack(command), [command]);
 
   const outputRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -172,6 +182,16 @@ export function BashTool({ input, result: rawResult, isPending = false, fetchBac
       outputRef.current.scrollTop = outputRef.current.scrollHeight;
     }
   }, [taskOutput.content, isExpanded, bgOutputPath]);
+
+  if (concealed) {
+    return (
+      <div className={`flex items-center gap-2 px-3 py-2 rounded-lg border ${tk.card.border} text-xs ${tk.text.secondary}`} data-testid="bash-explain-concealed">
+        {isPending ? <Loader2 size={14} className={`${accent.orange.icon} animate-spin`} /> : <Terminal size={14} className={accent.orange.icon} />}
+        <span className="truncate">{isPending ? 'Posting an explain-back card' : 'Posted an explain-back card'}</span>
+        <span className={`ml-auto shrink-0 ${tk.text.faint}`}>Ideas hidden</span>
+      </div>
+    );
+  }
 
   return (
     <CollapsibleToolCard

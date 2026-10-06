@@ -18,6 +18,7 @@ import {
   DECISION_ASKED_EVENT,
   DECISION_MAX_OPTIONS,
   DECISION_MIN_OPTIONS,
+  DECISION_DISMISSED_EVENT,
   DECISION_SETTLED_EVENT,
   isOpenDecision,
   type DecisionAnsweredData,
@@ -30,6 +31,7 @@ import { enqueueInboxItem, withdrawInboxItem } from './session-inbox.js';
 import { handOverNow } from './immediate-delivery.js';
 import { UserName } from '../user-profile.js';
 import { noteUserSent } from './project-needs-you.js';
+import { noteStatusChanged } from './session-status-changes.js';
 import { decisionsIn, openDecision } from './open-decision.js';
 import { readProjectState } from './project-state.js';
 import type { SessionManager } from '@liggi/agent-ui-harness/server';
@@ -40,12 +42,12 @@ export class DecisionError extends Error {
   }
 }
 
-function isWorker(conversationId: string): boolean {
+export function isWorker(conversationId: string): boolean {
   const coordinator = ConversationService.getInstance().getConversation(conversationId)?.pickedUpFrom;
   return Boolean(coordinator && readWorkerStates(coordinator).some((worker) => worker.worker === conversationId));
 }
 
-const WORKER_ASK_REFUSAL = 'Workers do not ask the user directly: nobody reads a worker\'s thread for questions. End your turn with "Question for front:" and your coordinator will decide or ask the user.';
+export const WORKER_ASK_REFUSAL = 'Workers do not ask the user directly: nobody reads a worker\'s thread for questions. End your turn with "Question for front:" and your coordinator will decide or ask the user.';
 
 /** Refuses what the card cannot show well: the reason is written for the agent that asked. */
 function checkQuestion(question: string, options: DecisionOptionData[]): void {
@@ -151,6 +153,26 @@ export async function answerDecision(threadId: string, decisionId: string, rawAn
   noteUserSent(manager, threadId);
   await handOverNow(threadId, inboxId);
   return { delivered: correction ? 'correction' : replacement ? 'replacement' : 'answer' };
+}
+
+/**
+ * The user declines to answer an open question: the card closes as dismissed
+ * and the agent is told so in one line. Unlike dismissing the project thread
+ * it is about (`thread-dismissal.ts`), the thread stays open and its workers
+ * carry on; only the question is gone.
+ */
+export async function dismissDecision(threadId: string, decisionId: string): Promise<void> {
+  const manager = getHarnessSessionManager();
+  if (!manager) throw new Error('No harness session manager');
+  const decision = decisionsIn(threadId).get(decisionId);
+  if (!decision) throw new DecisionError('That question is not in this thread.', 404);
+  if (!isOpenDecision(decision)) throw new DecisionError('That question is no longer waiting on an answer.', 409);
+  if (!appendCustomHarnessEvent(manager, threadId, DECISION_DISMISSED_EVENT, { id: decisionId })) {
+    throw new Error(`The dismissal could not be written to ${threadId}`);
+  }
+  noteStatusChanged(threadId);
+  const inboxId = enqueueInboxItem({ sessionId: threadId, source: 'decision', text: `${UserName()} dismissed your question "${decision.asked.question}" without answering.` });
+  await handOverNow(threadId, inboxId);
 }
 
 /**

@@ -1,11 +1,13 @@
 import { EventEmitter } from 'node:events';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   CODEX_NOT_SIGNED_IN_MESSAGE,
   CodexProcessAdapter,
   type CodexAppServerLike,
 } from '../../src/harness/codex-process-adapter.js';
 import type { ProcessHandle, SteerStage } from '@liggi/agent-ui-harness/server';
+import { CodexRequestCoordinator } from '../../src/services/process/codex-request-coordinator.js';
+import type { PendingQuestionService } from '../../src/services/pending-question-service.js';
 import type {
   CodexServerNotification,
   CodexThreadGoal,
@@ -220,6 +222,30 @@ describe('CodexProcessAdapter', () => {
     expect(client.startTurnCalls[1]?.input[0]).toMatchObject({ type: 'text', text: 'follow up' });
     handle.signal('SIGINT');
     expect(client.interrupts[0]).toEqual({ threadId: 'thread-test-1', turnId: 'turn-2' });
+  });
+
+  it('expires a request_user_input question when its turn ends unanswered, interrupted turns included', async () => {
+    const client = new FakeCodexClient();
+    const addQuestion = vi.fn();
+    const markExpired = vi.fn();
+    const coordinator = new CodexRequestCoordinator({ addQuestion, markExpired } as unknown as PendingQuestionService);
+    const adapter = new CodexProcessAdapter(() => {}, () => client, coordinator);
+    await adapter.spawn({ prompt: 'ask me', cwd: '/tmp/codex-test', args: [], extra: { provider: 'codex', sessionId: 'conv-test' } });
+
+    client.emit('request', {
+      id: 'request-1',
+      method: 'item/tool/requestUserInput',
+      params: { threadId: 'thread-test-1', turnId: 'turn-1', itemId: 'item-1', questions: [{ id: 'q', question: 'Which?', options: [{ label: 'A' }] }] },
+    }, () => {});
+    const questionId = addQuestion.mock.calls[0][0] as string;
+    expect(markExpired).not.toHaveBeenCalled();
+
+    client.emitNotification({
+      method: 'turn/completed',
+      params: { threadId: 'thread-test-1', turn: { id: 'turn-1', status: 'interrupted', durationMs: 5 } },
+    });
+    expect(markExpired).toHaveBeenCalledWith(questionId);
+    expect(coordinator.answerPendingQuestion(questionId, { 'Which?': 'A' })).toBe(false);
   });
 
   it('converts base64 image attachments to Codex image inputs without dropping them', async () => {

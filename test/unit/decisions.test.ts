@@ -1,5 +1,6 @@
+import { EventEmitter } from 'node:events';
 import { describe, expect, it, vi } from 'vitest';
-import { foldDecisions, isOpenDecision, placeDecisionsAtTurnEnd } from '../../src/types/decisions.js';
+import { foldDecisions, isOpenDecision, placeDecisionsAtTurnEnd, shownOpenDecision } from '../../src/types/decisions.js';
 import { ClaudeQuestionCoordinator } from '../../src/services/process/claude-question-coordinator.js';
 import type { PendingQuestionService } from '../../src/services/pending-question-service.js';
 import type { ProcessManagerClient } from '../../src/process-daemon/process-manager-client.js';
@@ -75,6 +76,25 @@ describe('a message written while the card is open', () => {
   });
 });
 
+describe('shownOpenDecision', () => {
+  const at = (seq: number, event: { type: string; data: unknown }) => ({ ...event, seq });
+
+  it('is the open question once its turn has ended, with its message id', () => {
+    const events = [at(1, asked('a')), at(2, { type: 'content', data: {} })];
+    const byId = foldDecisions(events);
+    expect(shownOpenDecision(placeDecisionsAtTurnEnd(events), byId)).toBeNull();
+    const ended = [...events, at(3, { type: 'turn:end', data: {} })];
+    expect(shownOpenDecision(placeDecisionsAtTurnEnd(ended), foldDecisions(ended))).toMatchObject({ asked: { id: 'a' }, messageId: 'h-1' });
+  });
+
+  it('is nothing once the question is answered or dismissed', () => {
+    for (const closing of [answered('a', 'Worker types', 'in-1'), { type: 'decision:dismissed', data: { id: 'a' } }]) {
+      const events = [at(1, asked('a')), at(2, { type: 'turn:end', data: {} }), at(3, closing)];
+      expect(shownOpenDecision(placeDecisionsAtTurnEnd(events), foldDecisions(events))).toBeNull();
+    }
+  });
+});
+
 describe('placeDecisionsAtTurnEnd', () => {
   it('moves a question below the message its turn wrote after asking', () => {
     const events = [
@@ -137,12 +157,14 @@ describe('ClaudeQuestionCoordinator', () => {
   const setup = () => {
     const respond = vi.fn().mockResolvedValue(true);
     const addQuestion = vi.fn();
+    const markExpired = vi.fn();
+    const client = Object.assign(new EventEmitter(), { respondToControlRequest: respond });
     const coordinator = new ClaudeQuestionCoordinator(
-      { respondToControlRequest: respond } as unknown as ProcessManagerClient,
-      { addQuestion } as unknown as PendingQuestionService,
+      client as unknown as ProcessManagerClient,
+      { addQuestion, markExpired } as unknown as PendingQuestionService,
       { sessionIdForStreaming: () => 'session-1' } as unknown as PermissionTracker,
     );
-    return { coordinator, respond, addQuestion };
+    return { coordinator, respond, addQuestion, markExpired, client };
   };
   const input = { questions: [{ question: 'Tabs or spaces?', options: [{ label: 'Tabs' }, { label: 'Spaces' }] }] };
 
@@ -156,6 +178,19 @@ describe('ClaudeQuestionCoordinator', () => {
     expect(await coordinator.answer(id, { 'Tabs or spaces?': 'Tabs' })).toBe(true);
     expect(respond).toHaveBeenCalledWith('s', 'r', { behavior: 'allow', updatedInput: { ...input, answers: { 'Tabs or spaces?': 'Tabs' } } });
     expect(await coordinator.answer(id, { 'Tabs or spaces?': 'Spaces' })).toBe(false);
+  });
+
+  it('expires a question whose turn ended or process closed unanswered, and leaves other streams waiting', async () => {
+    const { coordinator, addQuestion, markExpired, client } = setup();
+    for (const s of ['stopped', 'closed', 'live']) coordinator.hold({ streamingId: s, requestId: 'r', toolName: 'AskUserQuestion', toolInput: input });
+    const [stopped, closed, live] = addQuestion.mock.calls.map((call) => call[0] as string);
+
+    client.emit('turn-idle', { streamingId: 'stopped' });
+    client.emit('process-closed', { streamingId: 'closed' });
+
+    expect(markExpired.mock.calls.map((call) => call[0])).toEqual([stopped, closed]);
+    expect(await coordinator.answer(stopped, {})).toBe(false);
+    expect(await coordinator.answer(live, { 'Tabs or spaces?': 'Tabs' })).toBe(true);
   });
 
   it('leaves input with no questions to the permission flow', () => {

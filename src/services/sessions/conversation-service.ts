@@ -273,6 +273,18 @@ export class ConversationService {
       logger.debug('Conversations coordinator migration check', { error });
     }
 
+    // Codex service tier the conversation was created on (e.g. `priority`,
+    // Codex's Fast). NULL is the default tier.
+    try {
+      const convTableInfo = this.db.pragma('table_info(conversations)') as Array<{ name: string }>;
+      if (!convTableInfo.some(col => col.name === 'service_tier')) {
+        this.db.exec('ALTER TABLE conversations ADD COLUMN service_tier TEXT DEFAULT NULL');
+        logger.info('Added service_tier column to conversations table');
+      }
+    } catch (error) {
+      logger.debug('Conversations service_tier migration check', { error });
+    }
+
     // Add reasoning_effort to segments if it doesn't exist. Nullable on
     // purpose: an existing segment's setting was never recorded, and NULL says
     // "unknown" rather than claiming a default was somebody's choice.
@@ -291,8 +303,8 @@ export class ConversationService {
   private prepareStatements(): void {
     this.stmts = {
       insertConversation: this.db.prepare(`
-        INSERT INTO conversations (conversation_id, created_at, updated_at, working_directory, workspace, latest_provider, latest_segment_id, initial_prompt, picked_up_from, coordinator)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO conversations (conversation_id, created_at, updated_at, working_directory, workspace, latest_provider, latest_segment_id, initial_prompt, picked_up_from, coordinator, service_tier)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `),
 
       insertSegment: this.db.prepare(`
@@ -433,6 +445,8 @@ export class ConversationService {
     model?: string;
     /** Codex only: the effort the first turn is actually started with. */
     reasoningEffort?: string;
+    /** Codex only: the service tier every run of this conversation asks for. */
+    serviceTier?: string;
     workspace?: string;
     streamingId?: string;
     initialPrompt?: string;
@@ -459,6 +473,7 @@ export class ConversationService {
         params.initialPrompt || null,
         params.pickedUpFrom || null,
         params.coordinator ? 1 : 0,
+        params.serviceTier || null,
       );
 
       this.stmts.insertSegment.run(
@@ -646,6 +661,13 @@ export class ConversationService {
    * Get a conversation with all its segments.
    */
   /** Whether the conversation was created hidden: a fixture, never meant to be seen. */
+  /** The Codex service tier this conversation was created on, or null for the default tier. */
+  getServiceTier(conversationId: string): string | null {
+    const row = this.db.prepare('SELECT service_tier FROM conversations WHERE conversation_id = ?')
+      .get(conversationId) as { service_tier: string | null } | undefined;
+    return row?.service_tier ?? null;
+  }
+
   wasCreatedHidden(conversationId: string): boolean {
     return this.stmts.getCreatedHidden.get(conversationId, conversationId) !== undefined;
   }

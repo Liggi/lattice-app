@@ -101,6 +101,7 @@ const { TurnRepository } = await import('../../src/services/sessions/turn-reposi
 const { CassetteAdapter } = await import('@liggi/agent-ui-harness/server');
 const { ScenarioProcessAdapter } = await import('./scenario-process-adapter.js');
 const { ProcessDaemon } = await import('../../src/process-daemon/process-daemon.js');
+const { daemonIdentity, loadClaudeEnvOverrides } = await import('../../src/process-daemon/daemon-identity.js');
 
 // =============================================================================
 // PHASE 3: In-process daemon (socket placeholder — never used for spawns)
@@ -115,6 +116,9 @@ const { ProcessDaemon } = await import('../../src/process-daemon/process-daemon.
 const daemon = new ProcessDaemon({
   socketPath: TEST_DAEMON_SOCKET,
   claudeExecutablePath: '/nonexistent/claude-blocked-by-behavioral-tests',
+  // The identity the server wants from a daemon it would start itself
+  // (ensure-daemon.ts); without it the server stops this daemon as stale.
+  identity: daemonIdentity(path.join(process.cwd(), 'src', 'process-daemon', 'index.ts'), loadClaudeEnvOverrides()),
 });
 await daemon.start();
 console.log(`[behavioral] Test daemon ready on ${TEST_DAEMON_SOCKET} (harness-connection only)`);

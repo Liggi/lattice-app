@@ -23,8 +23,9 @@ import React, { useState } from 'react';
 import { X } from 'lucide-react';
 import type { WorkerCardState } from '@/types/worker-events';
 import type { ProjectState } from '@/types/project-state';
-import { StateOfPlaySection } from './StateOfPlaySection';
+import { StateOfPlaySection, type OpenQuestion } from './StateOfPlaySection';
 import { ProjectPurpose } from './ProjectSection';
+import { useWatchWorkers } from '../../hooks/useWorkers';
 
 interface CoordinatorPanelProps {
   isOpen: boolean;
@@ -35,6 +36,12 @@ interface CoordinatorPanelProps {
   onOpenWorker?: (conversationId: string) => void;
   /** The coordinator's own id, so a wait naming it reads "the coordinator". */
   coordinatorId?: string;
+  /** The chat's open question card, listed under Needs you. */
+  openQuestion?: OpenQuestion | null;
+  /** Brings the open question's card into view in the chat. */
+  onJumpToQuestion?: () => void;
+  /** Dismisses the open question without answering it. */
+  onDismissQuestion?: () => Promise<void>;
 }
 
 const mobileSafeAreaInsetsStyle: React.CSSProperties = {
@@ -44,9 +51,10 @@ const mobileSafeAreaInsetsStyle: React.CSSProperties = {
   paddingLeft: 'env(safe-area-inset-left, 0px)',
 };
 
-export function CoordinatorPanel({ isOpen, onClose, workers, project, coordinatorRunning, onOpenWorker, coordinatorId }: CoordinatorPanelProps): JSX.Element | null {
+export function CoordinatorPanel({ isOpen, onClose, workers, project, coordinatorRunning, onOpenWorker, coordinatorId, openQuestion, onJumpToQuestion, onDismissQuestion }: CoordinatorPanelProps): JSX.Element | null {
   // The worker whose name is under the pointer in a wait line, lit in the list.
   const [pointedWorker, setPointedWorker] = useState<string | null>(null);
+  useWatchWorkers(coordinatorId ?? null, isOpen && workers.some((worker) => worker.phase === 'working'));
   if (!isOpen) return null;
   const waitContext = { workers, coordinatorId, onPointWorker: setPointedWorker };
 
@@ -60,6 +68,13 @@ export function CoordinatorPanel({ isOpen, onClose, workers, project, coordinato
         onOpenWorker={onOpenWorker}
         waitContext={waitContext}
         pointedWorker={pointedWorker}
+        openQuestion={openQuestion}
+        onJumpToQuestion={onJumpToQuestion && (() => {
+          // On a phone the panel covers the chat, so it closes to show the card.
+          if (!window.matchMedia('(min-width: 768px)').matches) onClose?.();
+          onJumpToQuestion();
+        })}
+        onDismissQuestion={onDismissQuestion}
       />
       {project && <ProjectPurpose project={project} />}
     </div>

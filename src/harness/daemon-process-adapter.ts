@@ -25,7 +25,10 @@ export class DaemonProcessAdapter implements ProcessAdapter {
   /** StreamingIds spawned by the harness — used to gate old-pathway message persistence. */
   readonly managedStreamingIds = new Set<string>();
 
-  constructor(private client: ProcessManagerClient) {}
+  constructor(
+    private client: ProcessManagerClient,
+    private isCoordinator: (conversationId: string) => boolean = () => false,
+  ) {}
 
   async spawn(config: SpawnConfig): Promise<ProcessHandle> {
     // Map harness SpawnConfig to Lattice ConversationConfig
@@ -50,6 +53,11 @@ export class DaemonProcessAdapter implements ProcessAdapter {
     // Adapter-specific fields from SpawnConfig.extra
     if (config.extra?.systemPrompt) {
       daemonConfig.systemPrompt = config.extra.systemPrompt as string;
+    }
+    const conversationId = config.extra?.sessionId;
+    if (typeof conversationId === 'string') {
+      daemonConfig.conversationId = conversationId;
+      if (this.isCoordinator(conversationId)) daemonConfig.coordinator = true;
     }
     // Spawn-time attachments reach the daemon as ConversationConfig.initialContent,
     // which process-daemon merges into the CLI's first stdin message. Callers spell
@@ -105,7 +113,33 @@ export class DaemonProcessAdapter implements ProcessAdapter {
       this.client.removeListener('process-error', captureError);
     }
   }
+
+  /**
+   * A handle on a process a previous server spawned, which the daemon kept
+   * running. Its listeners are in place before the attach request goes out,
+   * so the events it missed, which the daemon sends after its answer, reach
+   * the handle in order; take the handle over in the same tick. A failed
+   * attach ends the handle as a failed process.
+   */
+  attach(streamingId: string): { handle: AttachableHandle; attached: Promise<void> } {
+    const handle = createProcessHandle(this.client, streamingId);
+    this.managedStreamingIds.add(streamingId);
+    const attached = this.client.attach(streamingId).then(({ replayed, dropped }) => {
+      logger.info('Attached to a process a previous server ran', { streamingId, replayed, dropped });
+    }, (err: unknown) => {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error('Could not attach to a process a previous server ran', new Error(message), { streamingId });
+      handle.fail(message);
+    });
+    return { handle, attached };
+  }
 }
+
+type AttachableHandle = ProcessHandle & {
+  fail(error: string): void;
+  /** What the process's system/init advertised, as a previous server stored it. */
+  learnCapabilities(capabilities: string[]): void;
+};
 
 function createProcessHandle(
   client: ProcessManagerClient,
@@ -115,7 +149,7 @@ function createProcessHandle(
     earlyClosed?: ProcessClosedEventData;
     earlyError?: { streamingId: string; error: string };
   },
-): ProcessHandle {
+): AttachableHandle {
   let alive = true;
   // Reads the CLI's receipts for steered messages off the same frames the
   // harness parses; every frame, buffered or live, passes through it first.
@@ -147,9 +181,9 @@ function createProcessHandle(
     client.removeListener('process-closed', onProcessClosed);
     client.removeListener('process-error', onProcessError);
     client.removeListener('daemon-disconnected', onDaemonDisconnected);
-    for (const r of exitResolvers) {
-      r.resolve({ code: data.code ?? 1 });
-    }
+    void stdout.drained.then(() => {
+      for (const r of exitResolvers) r.resolve({ code: data.code ?? 1 });
+    });
   };
 
   const onProcessError = (data: { streamingId: string; error: string }) => {
@@ -160,9 +194,9 @@ function createProcessHandle(
     client.removeListener('process-closed', onProcessClosed);
     client.removeListener('process-error', onProcessError);
     client.removeListener('daemon-disconnected', onDaemonDisconnected);
-    for (const r of exitResolvers) {
-      r.resolve({ code: 1 });
-    }
+    void stdout.drained.then(() => {
+      for (const r of exitResolvers) r.resolve({ code: 1 });
+    });
   };
 
   // The daemon went away, and this process with it; no process-closed will
@@ -175,9 +209,9 @@ function createProcessHandle(
     client.removeListener('process-closed', onProcessClosed);
     client.removeListener('process-error', onProcessError);
     client.removeListener('daemon-disconnected', onDaemonDisconnected);
-    for (const r of exitResolvers) {
-      r.resolve({ code: 1, lost: true });
-    }
+    void stdout.drained.then(() => {
+      for (const r of exitResolvers) r.resolve({ code: 1, lost: true });
+    });
   };
 
   client.on('process-closed', onProcessClosed);
@@ -267,6 +301,13 @@ function createProcessHandle(
       }
     },
     exited,
+    /** End the handle as if the process had failed; for a process that turned out not to be there. */
+    fail(error: string) {
+      onProcessError({ streamingId, error });
+    },
+    learnCapabilities(capabilities: string[]) {
+      tracker.learnCapabilities(capabilities);
+    },
     get alive() {
       return alive;
     },
@@ -285,10 +326,15 @@ function createStdoutIterable(
   isDead: () => boolean,
   observe: (message: unknown) => void,
   initialMessages: unknown[] = [],
-): AsyncIterable<string> & { terminate: () => void } {
+): AsyncIterable<string> & { terminate: () => void; drained: Promise<void> } {
   const queue: string[] = [];
   let waiter: (() => void) | null = null;
   let terminated = false;
+  // Resolves once the reader has taken every frame that arrived before
+  // terminate(), or stopped reading. The handle's `exited` waits for it, so
+  // the harness records a run's end after the run's last output, not among it.
+  let markDrained!: () => void;
+  const drained = new Promise<void>((resolve) => { markDrained = resolve; });
 
   const push = (message: unknown): void => {
     observe(message);
@@ -313,6 +359,7 @@ function createStdoutIterable(
     if (terminated) return;
     terminated = true;
     client.removeListener('claude-message', handler);
+    if (queue.length === 0) markDrained();
     if (waiter) {
       const w = waiter;
       waiter = null;
@@ -320,8 +367,9 @@ function createStdoutIterable(
     }
   };
 
-  const iterable: AsyncIterable<string> & { terminate: () => void } = {
+  const iterable: AsyncIterable<string> & { terminate: () => void; drained: Promise<void> } = {
     terminate,
+    drained,
     [Symbol.asyncIterator]() {
       return {
         async next(): Promise<IteratorResult<string>> {
@@ -333,6 +381,12 @@ function createStdoutIterable(
           if (queue.length > 0) {
             return { value: queue.shift()!, done: false };
           }
+          markDrained();
+          return { value: undefined as unknown as string, done: true };
+        },
+        async return(): Promise<IteratorResult<string>> {
+          queue.length = 0;
+          markDrained();
           return { value: undefined as unknown as string, done: true };
         },
       };

@@ -160,6 +160,7 @@ export class CodexRequestCoordinator {
     return true;
   }
 
+  /** Expires every question still waiting on this process, once its turn has ended or the process has closed. */
   cancelForStreamingId(streamingId: string): void {
     for (const [questionId, pending] of this.pendingQuestions) {
       if (pending.streamingId !== streamingId) continue;

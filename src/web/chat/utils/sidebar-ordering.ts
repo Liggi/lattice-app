@@ -18,7 +18,9 @@ const lastUsedFirst = (a: UnifiedConversationSummary, b: UnifiedConversationSumm
  * The one move is falling asleep: a project or session whose card shows
  * Sleeping (deriveSessionActivity, so it needs nothing from the user, is not
  * working and holds no pending work) drops into its list's Sleeping group, and
- * returns to its place when it wakes. Pinned sessions never move. A Sleeping
+ * returns to its place when it wakes. A row put to sleep by hand (sleptAt)
+ * drops there too, even while it works or waits, and stays until its next turn
+ * starts; needing the user or failing still keeps it in view. Pinned sessions never move. A Sleeping
  * group is ordered by last use, most recent first (asked 2026-09-29); nothing
  * in it is active, so that order holds still too.
  *
@@ -39,8 +41,10 @@ export function sidebarLists(
 } {
   const ids = new Set(conversations.map(c => c.conversationId));
   const live = conversations.filter(c => !c.archived).sort(newestCreatedFirst);
-  const asleep = (c: UnifiedConversationSummary): boolean =>
-    deriveSessionActivity(c, conversations, (sessionAttention[c.conversationId] ?? 0) > 0, now).kind === 'sleeping';
+  const asleep = (c: UnifiedConversationSummary): boolean => {
+    const { kind } = deriveSessionActivity(c, conversations, (sessionAttention[c.conversationId] ?? 0) > 0, now);
+    return kind === 'sleeping' || (Boolean(c.sleptAt) && kind !== 'needs-you' && kind !== 'failed');
+  };
   const projects = live.filter(c => c.coordinator);
   const others = live.filter(c => !c.coordinator && !(c.pickedUpFrom && ids.has(c.pickedUpFrom)));
   const unpinned = others.filter(c => !c.pinned);

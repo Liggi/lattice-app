@@ -16,6 +16,11 @@ const INPUT = 'w-full px-3 py-2 bg-bg border border-line-2 rounded-md text-sm fo
 const QUIET_BTN = 'px-2.5 py-1.5 rounded-md text-[13px] text-fg-3 hover:text-fg hover:bg-surface-2 transition-colors cursor-pointer disabled:opacity-50';
 const PRIMARY_BTN = 'flex items-center gap-2 px-3 py-1.5 rounded-md bg-accent-soft text-accent text-[13px] font-medium hover:bg-accent/20 transition-colors cursor-pointer disabled:opacity-50';
 
+/** Models the session picker lists, which must not repeat; OpenAI-compatible endpoints are not in it. */
+function sessionModels(endpoints: ClaudeEndpointSetting[]): string[] {
+  return endpoints.filter((endpoint) => endpoint.protocol !== 'openai').map((endpoint) => endpoint.model);
+}
+
 function newId(): string {
   return `ep-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 }
@@ -64,7 +69,7 @@ export function ClaudeEndpointsCard({ endpoints, onSave }: ClaudeEndpointsCardPr
         <div className="min-w-0 flex-1">
           <p className="text-sm font-medium text-fg">Custom endpoints</p>
           <p className="mt-1 text-[13px] text-fg-3">
-            Claude Code on another server that speaks the Anthropic Messages API, such as llama.cpp. Pick one per session; other sessions keep the Claude sign-in.
+            Servers that speak the Anthropic Messages API, such as llama.cpp, can run a session: pick one per session; other sessions keep the Claude sign-in. OpenAI-compatible servers, such as Ollama, LM Studio or OpenRouter, run background calls only.
           </p>
         </div>
         {editing !== 'new' && (
@@ -79,7 +84,7 @@ export function ClaudeEndpointsCard({ endpoints, onSave }: ClaudeEndpointsCardPr
         <EndpointForm
           key={endpoint.id}
           initial={endpoint}
-          others={endpoints.filter((other) => other.id !== endpoint.id).map((other) => other.model)}
+          others={sessionModels(endpoints.filter((other) => other.id !== endpoint.id))}
           busy={busyId === endpoint.id}
           error={error}
           onCancel={() => { setEditing(null); setError(null); }}
@@ -91,7 +96,9 @@ export function ClaudeEndpointsCard({ endpoints, onSave }: ClaudeEndpointsCardPr
             <p className="text-[13px] font-mono text-fg break-all">{endpoint.model}</p>
             <p className="mt-0.5 text-xs text-fg-3 break-all">
               {endpointHost(endpoint.baseUrl)}
-              {endpoint.contextWindow ? <span className="whitespace-nowrap"> · {endpoint.contextWindow.toLocaleString('en-US')} tokens</span> : null}
+              {endpoint.protocol === 'openai'
+                ? <span className="whitespace-nowrap"> · OpenAI API, background calls only</span>
+                : endpoint.contextWindow ? <span className="whitespace-nowrap"> · {endpoint.contextWindow.toLocaleString('en-US')} tokens</span> : null}
             </p>
           </div>
           <div className="flex items-center gap-1 shrink-0">
@@ -108,7 +115,7 @@ export function ClaudeEndpointsCard({ endpoints, onSave }: ClaudeEndpointsCardPr
       {editing === 'new' && (
         <EndpointForm
           initial={null}
-          others={endpoints.map((other) => other.model)}
+          others={sessionModels(endpoints)}
           busy={busyId !== null}
           error={error}
           onCancel={() => { setEditing(null); setError(null); }}
@@ -130,6 +137,7 @@ function EndpointForm({ initial, others, busy, error, onCancel, onSubmit }: {
   onCancel: () => void;
   onSubmit: (endpoint: ClaudeEndpointUpdate) => Promise<void>;
 }): JSX.Element {
+  const [protocol, setProtocol] = useState<'anthropic' | 'openai'>(initial?.protocol ?? 'anthropic');
   const [baseUrl, setBaseUrl] = useState(initial?.baseUrl ?? '');
   const [model, setModel] = useState(initial?.model ?? '');
   const [contextWindow, setContextWindow] = useState(initial?.contextWindow ? String(initial.contextWindow) : '');
@@ -138,11 +146,12 @@ function EndpointForm({ initial, others, busy, error, onCancel, onSubmit }: {
   const [showKey, setShowKey] = useState(false);
 
   const keySaved = initial?.apiKeyConfigured === true;
-  const modelProblem = model.trim() ? endpointModelProblem(model, others) : null;
+  const openai = protocol === 'openai';
+  const modelProblem = model.trim() && !openai ? endpointModelProblem(model, others) : null;
   // "32,768" and "32 768" read as 32768; anything else is shown as a problem.
   const windowText = contextWindow.replace(/[\s,_]/g, '');
   const windowValue = windowText === '' ? undefined : /^\d+$/.test(windowText) ? Number(windowText) : NaN;
-  const windowProblem = windowText === '' ? null : contextWindowProblem(windowValue);
+  const windowProblem = windowText === '' || openai ? null : contextWindowProblem(windowValue);
   const ready = baseUrl.trim() !== '' && model.trim() !== '' && !modelProblem && !windowProblem;
 
   const submit = (): void => {
@@ -151,7 +160,7 @@ function EndpointForm({ initial, others, busy, error, onCancel, onSubmit }: {
       id: initial?.id ?? newId(),
       baseUrl: baseUrl.trim(),
       model: model.trim(),
-      ...(windowValue !== undefined ? { contextWindow: windowValue } : {}),
+      ...(openai ? { protocol } : windowValue !== undefined ? { contextWindow: windowValue } : {}),
       ...(apiKey.trim() ? { apiKey: apiKey.trim() } : removeKey ? { apiKey: null } : {}),
     });
   };
@@ -162,13 +171,31 @@ function EndpointForm({ initial, others, busy, error, onCancel, onSubmit }: {
       onKeyDown={(e) => { if (e.key === 'Enter') submit(); if (e.key === 'Escape') onCancel(); }}
       data-testid="claude-endpoint-form"
     >
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+        <span className="text-xs font-medium text-fg-2">Speaks</span>
+        <div role="radiogroup" aria-label="The API the server speaks" className="inline-flex items-center gap-0.5 rounded-md border border-line p-0.5">
+          {([['anthropic', 'Anthropic API'], ['openai', 'OpenAI API']] as const).map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              role="radio"
+              aria-checked={protocol === value}
+              onClick={() => setProtocol(value)}
+              disabled={busy}
+              className={`px-2.5 py-1 text-xs rounded transition-colors cursor-pointer ${protocol === value ? 'bg-surface-2 text-fg' : 'text-fg-3 hover:text-fg'}`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
       <div className="space-y-2">
         <label htmlFor="claude-endpoint-url" className="text-xs font-medium text-fg-2">Server URL</label>
         <input
           id="claude-endpoint-url"
           value={baseUrl}
           onChange={(e) => setBaseUrl(e.target.value)}
-          placeholder="http://127.0.0.1:8080"
+          placeholder={openai ? 'http://127.0.0.1:11434/v1' : 'http://127.0.0.1:8080'}
           autoComplete="off"
           spellCheck={false}
           autoFocus
@@ -177,12 +204,12 @@ function EndpointForm({ initial, others, busy, error, onCancel, onSubmit }: {
         />
       </div>
       <div className="space-y-2">
-        <label htmlFor="claude-endpoint-model" className="text-xs font-medium text-fg-2">Model</label>
+        <label htmlFor="claude-endpoint-model" className="text-xs font-medium text-fg-2">{openai ? 'Default model' : 'Model'}</label>
         <input
           id="claude-endpoint-model"
           value={model}
           onChange={(e) => setModel(e.target.value)}
-          placeholder="The name the server serves, e.g. qwen3-coder"
+          placeholder={openai ? 'e.g. qwen3:4b. Each background job can name another' : 'The name the server serves, e.g. qwen3-coder'}
           autoComplete="off"
           spellCheck={false}
           disabled={busy}
@@ -190,7 +217,7 @@ function EndpointForm({ initial, others, busy, error, onCancel, onSubmit }: {
         />
         {modelProblem && <p className="text-xs text-amber-300">{modelProblem}</p>}
       </div>
-      <div className="space-y-2">
+      {!openai && <div className="space-y-2">
         <label htmlFor="claude-endpoint-context" className="text-xs font-medium text-fg-2 flex items-center gap-2">
           Context window
           <span className="text-xs text-fg-3">Optional</span>
@@ -207,7 +234,7 @@ function EndpointForm({ initial, others, busy, error, onCancel, onSubmit }: {
           className={INPUT}
         />
         {windowProblem && <p className="text-xs text-amber-300">{windowProblem}</p>}
-      </div>
+      </div>}
       <div className="space-y-2">
         <div className="flex items-center justify-between gap-2">
           <label htmlFor="claude-endpoint-key" className="text-xs font-medium text-fg-2 flex items-center gap-2">

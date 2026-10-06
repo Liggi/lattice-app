@@ -18,6 +18,7 @@ const log: { events: Array<{ seq: number; type: string; data: unknown }> } = { e
 const appended: Array<{ conversationId: string; type: string; data: unknown }> = [];
 const messagesCreate = vi.fn();
 const client: { value: unknown } = { value: { messages: { create: messagesCreate } } };
+vi.mock('../../src/services/infrastructure/config-service.js', () => ({ ConfigService: { getInstance: () => ({ getConfig: () => ({}) }) } }));
 
 vi.mock('../../src/session-history/repository.js', async () =>
   (await import('./fake-event-reads.js')).fakeEventReads(() => log.events as never));
@@ -184,6 +185,9 @@ describe('noteWorkerReport', () => {
     await settle();
 
     expect(appended).toHaveLength(1);
+    const request = messagesCreate.mock.calls[0][0];
+    expect(request.system).toEqual([{ type: 'text', text: buildSummaryPrompt('Simplify the header and sidebar', REPORT).system, cache_control: { type: 'ephemeral' } }]);
+    expect(request.messages[0].content).toContain(REPORT);
     expect(appended[0].conversationId).toBe('conv-c');
     expect(appended[0].type).toBe(WORKER_REPORT_SUMMARY_EVENT);
     expect(appended[0].data).toMatchObject({

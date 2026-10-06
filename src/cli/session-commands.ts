@@ -929,6 +929,10 @@ async function cmdNew(cmd: ParsedCommand): Promise<void> {
   if (reasoningEffort && provider && provider !== 'codex') {
     fail(`--reasoning-effort is a Codex setting; --provider ${provider} has none`);
   }
+  const fast = bool(cmd, 'fast');
+  if (fast && provider && provider !== 'codex') {
+    fail(`--fast is a Codex setting; --provider ${provider} has none`);
+  }
 
   const cwdFlag = str(cmd, 'cwd');
   // A worker picked up from a parent lands in the parent's cwd; the server
@@ -954,6 +958,7 @@ async function cmdNew(cmd: ParsedCommand): Promise<void> {
     ...(bool(cmd, 'archived') ? { archived: true } : {}),
     ...(model ? { model } : {}),
     ...(reasoningEffort ? { reasoningEffort } : {}),
+    ...(fast ? { serviceTier: 'fast' } : {}),
     ...(workspace ? { workspace } : {}),
     ...(permissionMode ? { permissionMode } : {}),
   };

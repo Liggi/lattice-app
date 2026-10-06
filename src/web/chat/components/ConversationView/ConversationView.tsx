@@ -1,6 +1,8 @@
 /* oxlint-disable react-doctor/no-cascading-set-state, react-doctor/no-giant-component, react-doctor/prefer-useReducer, react-doctor/no-render-in-render, react-doctor/no-effect-event-handler */
 import React, { useState, useEffect, useCallback, useRef, useMemo, Profiler } from 'react';
-import { DecisionsProvider } from '../Decision/DecisionAskCard';
+import { DecisionsProvider, dismissQuestion } from '../Decision/DecisionAskCard';
+import { ExplainsProvider } from '../Explain/ExplainCard';
+import { OpenQuestionStrip } from '../Decision/OpenQuestionStrip';
 import { CLAUDE_QUESTION_ID_PREFIX, isOpenDecision } from '@/types/decisions';
 import type { QuestionRequest } from '../../types';
 import { QueuedMessages } from './QueuedMessages';
@@ -179,6 +181,8 @@ export function ConversationView({ sidebarOpen, onToggleSidebar }: ConversationV
     reactions: harnessReactions,
     agentReactions: harnessAgentReactions,
     decisions: harnessDecisions,
+    explains: harnessExplains,
+    openDecision: harnessOpenDecision,
   } = useHarnessSession(conversationId ?? null);
   // A message from another session arrives on the harness stream, which carries
   // no worker event and need not change our status — so nothing else here would
@@ -233,10 +237,8 @@ export function ConversationView({ sidebarOpen, onToggleSidebar }: ConversationV
   }, [pendingModel, harnessSessionModel]);
 
 
-  // Models offered by the composer badge for mid-session switching. Scoped to
-  // Claude sessions — a Codex switch also has to carry reasoning effort, which
-  // the mid-session path doesn't support yet. No entry is marked default: with
-  // nothing selected the badge shows the session's actual serving model.
+  // Models offered by the composer badge for mid-session switching. No entry
+  // is a creation default: choosing any model here is an explicit switch.
   // A saved endpoint's model is offered alongside: switching to it moves this
   // session onto that server, and switching back returns it to the sign-in.
   const switchableClaudeModels = useMemo(
@@ -257,7 +259,7 @@ export function ConversationView({ sidebarOpen, onToggleSidebar }: ConversationV
       id: model.id,
       label: model.label,
       description: model.description,
-      isDefault: model.id === DEFAULT_CODEX_MODEL_ID,
+      isDefault: false,
     })),
     [],
   );
@@ -992,6 +994,19 @@ export function ConversationView({ sidebarOpen, onToggleSidebar }: ConversationV
   const isProviderBusy = isActive;
   // A turn held on its own question card (a Codex request_user_input_async) waits on the user, not on the agent.
   const awaitingAnswer = isProviderBusy && [...harnessDecisions.byId.values()].some((decision) => decision.asked.holdsTurn && isOpenDecision(decision));
+  // The open question stays in reach once its card is out of sight: a strip
+  // above the composer, and a Needs you row in the panel. Either takes the
+  // user back to the card to answer it.
+  const [cardInSight, setCardInSight] = useState<{ id: string; inSight: boolean } | null>(null);
+  const handleCardInSight = useCallback((id: string, inSight: boolean) => setCardInSight({ id, inSight }), []);
+  const openCardOutOfSight = harnessOpenDecision !== null
+    && !(cardInSight?.id === harnessOpenDecision.asked.id && cardInSight.inSight);
+  const jumpToOpenCard = useCallback(() => {
+    if (harnessOpenDecision) setJumpToMessageId(harnessOpenDecision.messageId);
+  }, [harnessOpenDecision, setJumpToMessageId]);
+  const dismissOpenCard = useCallback(async () => {
+    if (harnessOpenDecision && conversationId) await dismissQuestion(conversationId, harnessOpenDecision.asked.id);
+  }, [harnessOpenDecision, conversationId]);
 
   const wasIdleRef = useRef(isIdle);
   useEffect(() => {
@@ -1164,7 +1179,8 @@ export function ConversationView({ sidebarOpen, onToggleSidebar }: ConversationV
       <TeamColorProvider teamName={conversationSummary?.teamName ?? null}>
       <SenderNamesProvider senders={senders}>
       <ReactionsProvider key={conversationId} sessionId={conversationId ?? undefined} reactions={harnessReactions} agentReactions={harnessAgentReactions}>
-      <DecisionsProvider sessionId={conversationId ?? undefined} decisions={harnessDecisions}>
+      <DecisionsProvider sessionId={conversationId ?? undefined} decisions={harnessDecisions} onCardInSight={handleCardInSight}>
+      <ExplainsProvider sessionId={conversationId ?? undefined} explains={harnessExplains}>
       <ToolkitBridge>
       <div className="h-full w-full flex flex-col bg-background relative overflow-hidden" role="main" aria-label="Conversation view">
       <ConversationHeader
@@ -1296,6 +1312,7 @@ export function ConversationView({ sidebarOpen, onToggleSidebar }: ConversationV
                   />
                 </div>
               )}
+              {harnessOpenDecision && openCardOutOfSight && <OpenQuestionStrip key={harnessOpenDecision.asked.id} question={harnessOpenDecision.asked.question} onJump={jumpToOpenCard} onDismiss={dismissOpenCard} />}
               {/* Pending mid-turn injected messages — floating above composer */}
               <QueuedMessages key={conversationId} messages={harnessPendingMessages} />
               {/*
@@ -1386,6 +1403,9 @@ export function ConversationView({ sidebarOpen, onToggleSidebar }: ConversationV
             coordinatorRunning={harnessStatus === 'streaming' || harnessStatus === 'initializing'}
             onOpenWorker={(workerId) => navigate(`/c/${workerId}`)}
             coordinatorId={conversationId}
+            openQuestion={harnessOpenDecision ? { question: harnessOpenDecision.asked.question, thread: harnessOpenDecision.asked.thread } : null}
+            onJumpToQuestion={jumpToOpenCard}
+            onDismissQuestion={dismissOpenCard}
           />
           ) : isWorkerSession ? null : (
           <InsightsPanel
@@ -1409,6 +1429,7 @@ export function ConversationView({ sidebarOpen, onToggleSidebar }: ConversationV
 
       </div>
       </ToolkitBridge>
+      </ExplainsProvider>
       </DecisionsProvider>
       </ReactionsProvider>
       </SenderNamesProvider>

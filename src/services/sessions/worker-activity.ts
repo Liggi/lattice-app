@@ -20,6 +20,11 @@
  * on a user's action:
  *
  * - Gated by `generation.workerActivity`, closed by default.
+ * - Only while some browser has the coordinator's panel open: the panel
+ *   says so with `watchPanel` every `WATCH_HEARTBEAT_MS`, and a coordinator
+ *   nobody has looked at for `WATCH_TTL_MS` gets no assessments at all.
+ *   Opening the panel assesses its working workers once, so the line it
+ *   shows is at most one gap old.
  * - One assessment per worker at a time. Evidence arriving during a run
  *   schedules exactly one more; it does not queue a run per event.
  * - `MIN_GAP_MS` between a worker's assessments.
@@ -43,7 +48,7 @@
 import { EventEmitter } from 'node:events';
 import type Database from 'better-sqlite3';
 import type { SessionEvent } from '@liggi/agent-ui-harness/protocol';
-import { anthropicClientFactory } from '../infrastructure/anthropic-client-factory.js';
+import { backgroundTextClient, backgroundProvenance } from '../infrastructure/background-text-client.js';
 import { ConfigService } from '../infrastructure/config-service.js';
 import { DatabaseProvider } from '../infrastructure/database-provider.js';
 import { allowGeneration } from '../infrastructure/generation-gates.js';
@@ -59,10 +64,17 @@ import { userName } from '../user-profile.js';
 const logger = createLogger('WorkerActivity');
 
 /**
- * Least time between one worker's assessments. A starting policy, not a
- * measured ideal — `scripts/ambient-watch.ts` uses the same 20s floor.
+ * Least time between one worker's assessments. It was 20s; at that rate a
+ * day's 3,609 calls mostly rewrote the same line in other words ("Verifying
+ * lost-image fix", "Verifying the lost-image fix"), and used up the ChatGPT
+ * plan on 2026-10-01.
  */
-export const MIN_GAP_MS = 20_000;
+export const MIN_GAP_MS = 120_000;
+
+/** How often an open panel tells the server it is still open. */
+export const WATCH_HEARTBEAT_MS = 60_000;
+/** A panel not heard from for this long counts as closed: two missed heartbeats and some slack. */
+export const WATCH_TTL_MS = 150_000;
 
 /** Events read back per assessment. Bounded: a long turn must not grow the read. */
 const TAIL_EVENTS = 600;
@@ -300,6 +312,23 @@ class WorkerActivityService extends EventEmitter {
   private queued = new Set<string>();
   private timers = new Map<string, ReturnType<typeof setTimeout>>();
   private lastRunAt = new Map<string, number>();
+  /** Coordinator → when its panel's last heartbeat stops counting. */
+  private watchedUntil = new Map<string, number>();
+
+  isWatched(coordinator: string): boolean {
+    return (this.watchedUntil.get(coordinator) ?? 0) > Date.now();
+  }
+
+  /**
+   * A browser has this coordinator's panel open. A panel that was not already
+   * open has its working workers assessed now, so the line it shows is fresh;
+   * workers whose evidence has not moved cost nothing.
+   */
+  watch(coordinator: string, workingWorkers: () => readonly string[]): void {
+    const opened = !this.isWatched(coordinator);
+    this.watchedUntil.set(coordinator, Date.now() + WATCH_TTL_MS);
+    if (opened) for (const worker of workingWorkers()) this.note(worker);
+  }
 
   /**
    * A worker's log moved. Schedules an assessment if one is due; a worker
@@ -345,6 +374,7 @@ class WorkerActivityService extends EventEmitter {
     this.running.clear();
     this.queued.clear();
     this.lastRunAt.clear();
+    this.watchedUntil.clear();
   }
 }
 
@@ -383,15 +413,34 @@ export function noteWorkerRuntimeChange(conversationId: string): void {
 }
 
 /**
+ * A browser has this coordinator's panel open; called on the panel's
+ * heartbeat. Never throws.
+ */
+export function watchPanel(coordinator: string): void {
+  if (!allowGeneration('workerActivity')) return;
+  try {
+    // Folding the coordinator's log is only worth it when the panel has just opened.
+    getWorkerActivityService().watch(coordinator, () => readWorkerStates(coordinator)
+      .filter((state) => state.phase === 'working')
+      .map((state) => state.worker));
+  } catch (err) {
+    logger.debug('Panel watch failed', { coordinator, error: err instanceof Error ? err.message : String(err) });
+  }
+}
+
+/**
  * Called from the turn side effects for every conversation; a no-op unless
- * this one is a worker and the feature is on. Never rejects.
+ * this one is a worker, the feature is on and its coordinator's panel is
+ * open. Never rejects.
  */
 export function noteWorkerActivity(conversationId: string): void {
   if (!allowGeneration('workerActivity')) return;
   try {
     const conversation = ConversationService.getInstance().getConversation(conversationId);
     if (!conversation?.pickedUpFrom) return;
-    getWorkerActivityService().note(conversationId);
+    const service = getWorkerActivityService();
+    if (!service.isWatched(conversation.pickedUpFrom)) return;
+    service.note(conversationId);
   } catch (err) {
     logger.debug('Activity note failed', { worker: conversationId, error: err instanceof Error ? err.message : String(err) });
   }
@@ -403,6 +452,8 @@ async function assessWorker(worker: string, onChanged: (coordinator: string) => 
   const conversation = conversationService.getConversation(worker);
   const coordinator = conversation?.pickedUpFrom;
   if (!coordinator) return;
+  // Scheduled while the panel was open, due after it closed.
+  if (!getWorkerActivityService().isWatched(coordinator)) return;
 
   const events = getEventStorage().readTail(worker, TAIL_EVENTS);
   const evidence = readActivityEvidence(events);
@@ -416,7 +467,7 @@ async function assessWorker(worker: string, onChanged: (coordinator: string) => 
   // its question or report is what the card shows.
   if (!card || card.phase !== 'working') return;
 
-  const client = anthropicClientFactory.getClient();
+  const client = backgroundTextClient.getClient('workerActivity');
   if (!client) {
     logger.debug('No Anthropic client; worker cards keep their lifecycle line', { worker });
     return;
@@ -427,6 +478,8 @@ async function assessWorker(worker: string, onChanged: (coordinator: string) => 
   const response = await client.messages.create({
     model,
     max_tokens: MAX_OUTPUT_TOKENS,
+    // With a short label budget, adaptive thinking can leave no visible text.
+    thinking: { type: 'disabled' },
     system: prompt.system,
     messages: [{ role: 'user', content: prompt.user }],
   });
@@ -435,7 +488,7 @@ async function assessWorker(worker: string, onChanged: (coordinator: string) => 
     getCostTracker().log({
       sessionId: worker,
       operation: 'WORKER_ACTIVITY',
-      model,
+      ...backgroundProvenance(response, model),
       inputTokens: response.usage?.input_tokens ?? 0,
       outputTokens: response.usage?.output_tokens ?? 0,
       cacheCreationInputTokens: response.usage?.cache_creation_input_tokens ?? 0,
@@ -467,7 +520,7 @@ async function assessWorker(worker: string, onChanged: (coordinator: string) => 
     text: phrase,
     turn_seq: evidence.turnSeq,
     evidence_seq: evidence.evidenceSeq,
-    model,
+    model: response.model || model,
     at: new Date().toISOString(),
   });
   logger.info('Worker activity written', { worker, model, ms: durationMs, text: phrase });

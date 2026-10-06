@@ -8,7 +8,9 @@ import {
 } from '@/types/index.js';
 import { createLogger, type Logger } from '@/services/infrastructure/logger.js';
 import { ConfigService } from '../infrastructure/config-service.js';
+import type { BackgroundJob } from '@/types/config.js';
 import { anthropicClientFactory } from '../infrastructure/anthropic-client-factory.js';
+import { backgroundTextClient, backgroundProvenance, backgroundUsesPlan, type BackgroundTextClient } from '../infrastructure/background-text-client.js';
 import { getCostTracker } from '../infrastructure/cost-tracker.js';
 import type { LLMOperationType } from './insight-types.js';
 import { parseJson } from '../../utils/json.js';
@@ -174,11 +176,14 @@ export function normalizeProjectName(raw: string): string | null {
  * Determines if an error is retryable (transient network/rate limit issues).
  * Non-retryable: auth errors, credit exhaustion, invalid requests.
  */
-function isRetryableError(error: unknown): boolean {
+export function isRetryableError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   const errorName = error instanceof Error ? error.name : '';
 
   // Non-retryable errors - don't waste retries on these
+  // A ChatGPT plan at its usage limit stays there for hours, and once paused it
+  // refuses every call locally until someone resumes it in Settings.
+  if (message.includes('usage_limit_exceeded')) return false;
   if (message.includes('credit balance') || message.includes('billing')) return false;
   if (message.includes('invalid_api_key') || message.includes('authentication')) return false;
   if (message.includes('invalid_request_error')) return false;
@@ -221,12 +226,12 @@ export type { AnthropicHealthResponse } from '@/types/index.js';
 export const DEFAULT_MODELS = {
   /** Full insight generation - Sonnet balances quality/cost well for structured extraction */
   generation: 'claude-sonnet-5',
-  /** Quick staleness checks - needs speed over capability */
-  quickCheck: 'claude-haiku-4-5-20251001',
-  /** Fast patch generation - speed over quality */
-  patch: 'claude-haiku-4-5-20251001',
+  /** Short labels and checks still need the same clarity as report summaries. */
+  quickCheck: 'claude-sonnet-5',
+  /** Short session-purpose patches. */
+  patch: 'claude-sonnet-5',
   /** Full patch generation (fallback) - for complex patches when fast path fails */
-  fullPatch: 'claude-haiku-4-5-20251001',
+  fullPatch: 'claude-sonnet-5',
 } as const;
 
 /**
@@ -234,14 +239,13 @@ export const DEFAULT_MODELS = {
  * means adaptive thinking is ON (measured 2026-08-28), and the caps in this
  * file (50–500 tokens) were tuned for text output only — adaptive thinking
  * spending them returns empty results with no error. Extraction is
- * classification, not reasoning. Harmless on the Haiku calls, load-bearing on
- * the generation ones.
+ * classification and short-form writing, so reserve the budget for visible text.
  */
 const THINKING: Anthropic.ThinkingConfigParam = { type: 'disabled' };
 
 export class AnthropicService extends EventEmitter {
   private logger: Logger;
-  private client: Anthropic | null = null;
+  private client: BackgroundTextClient | null = null;
 
   // Credit status tracking — reactive, no polling
   private _creditsExhausted = false;
@@ -301,7 +305,7 @@ export class AnthropicService extends EventEmitter {
     }
 
     this.client = this.getClient();
-    const factoryState = anthropicClientFactory.getState();
+    const factoryState = backgroundUsesPlan('insights') ? { mode: 'chatgpt-plan' } : anthropicClientFactory.getState();
     if (!this.client) {
       this.logger.warn('Anthropic service initialized without active client', {
         mode: factoryState.mode,
@@ -315,9 +319,11 @@ export class AnthropicService extends EventEmitter {
     });
   }
 
-  private getClient(): Anthropic | null {
-    this.client = anthropicClientFactory.getClient();
-    return this.client;
+  /** Insight calls (missions, session names, patches) unless the caller names its own job. */
+  private getClient(job: BackgroundJob = 'insights'): BackgroundTextClient | null {
+    const client = backgroundTextClient.getClient(job);
+    if (job === 'insights') this.client = client;
+    return client;
   }
 
   /**
@@ -423,7 +429,7 @@ export class AnthropicService extends EventEmitter {
       costTracker.log({
         sessionId: sessionId || 'unknown',
         operation,
-        model,
+        ...backgroundProvenance(response, model),
         inputTokens: response.usage?.input_tokens || 0,
         outputTokens: response.usage?.output_tokens || 0,
         cacheCreationInputTokens: response.usage?.cache_creation_input_tokens || 0,
@@ -445,7 +451,7 @@ export class AnthropicService extends EventEmitter {
    * too long is kept whole; nothing here cuts it.
    */
   private async fitMission(
-    client: Anthropic,
+    client: BackgroundTextClient,
     system: string,
     userContent: string,
     firstReply: string,
@@ -470,7 +476,7 @@ export class AnthropicService extends EventEmitter {
         model: this.models.generation,
         max_tokens: 100,
         thinking: THINKING,
-        system,
+        system: [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }],
         messages: [
           { role: 'user', content: userContent },
           { role: 'assistant', content: firstReply },
@@ -568,7 +574,9 @@ JSON Structure:
           model: this.models.generation,
           max_tokens: 500,  // Reduced - only extracting context, theme, tags now
           thinking: THINKING,
-          system: systemPrompt,
+          // Reuse the instructions across sessions and fit requests. The input
+          // and output stay fresh; only this identical prefix is cached.
+          system: [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }],
           // No assistant prefill: the 5-family rejects a trailing assistant
           // turn with a 400. The system prompt's ONLY-JSON instructions plus
           // the brace-extraction fallbacks below carry the same guarantee.
@@ -701,7 +709,7 @@ JSON Structure:
   }
 
   /**
-   * Quick check using Haiku to determine if insights need patching.
+   * Quick check to determine if insights need patching.
    *
    * This is a fast, cheap call that just answers "has anything meaningful changed?"
    * based on recent actions. If yes, we'll follow up with Sonnet for actual patching.
@@ -760,7 +768,7 @@ Respond with JSON only:
       this.logCost(response, 'QUICK_CHECK', this.models.quickCheck, duration, sessionId);
 
       // Log for observability
-      this.logger.info('Quick check (Haiku) completed', {
+      this.logger.info('Quick check completed', {
         durationMs: duration,
         inputTokens: response.usage?.input_tokens,
         outputTokens: response.usage?.output_tokens,
@@ -854,7 +862,6 @@ Respond with ONLY valid JSON:
           model: this.models.patch,
           max_tokens: 100,  // Reduced - only extracting purpose now
           thinking: THINKING,
-          temperature: 0,
           messages: [{
             role: 'user',
             content: prompt
@@ -863,7 +870,7 @@ Respond with ONLY valid JSON:
       );
       const durationMs = Date.now() - startTime;
 
-      // Log cost for FAST_PATCH operation (Haiku)
+      // Log cost for FAST_PATCH operation
       this.logCost(response, 'FAST_PATCH', this.models.patch, durationMs, sessionId);
 
       const textContent = response.content.find(block => block.type === 'text');
@@ -914,7 +921,7 @@ Respond with ONLY valid JSON:
    * Called when quickCheckInsightsStale returns needsPatch=true.
    * Returns specific patches to apply rather than regenerating everything.
    *
-   * @param useFastPath - If true, only generate currentState using fast Haiku-only pipeline (~5s vs ~12s)
+   * @param useFastPath - If true, only generate currentState through the short patch path
    */
   async generateInsightsPatch(
     currentInsights: {
@@ -939,7 +946,7 @@ Respond with ONLY valid JSON:
     const startTime = Date.now();
 
     try {
-      // Fast path: Generate purpose using Haiku (~1-2s vs ~12s full patch)
+      // Fast path: generate purpose without recomputing the other fields.
       if (useFastPath) {
         this.logger.debug('Using fast path for patch generation');
         const fastPatch = await this.generateFastPatch(
@@ -1000,7 +1007,6 @@ Response format (JSON only):
           model: this.models.fullPatch,
           max_tokens: 150,  // Only extracting purpose now
           thinking: THINKING,
-          temperature: 0,
           messages: [{ role: 'user', content: prompt }]
         })
       );
@@ -1058,7 +1064,7 @@ Response format (JSON only):
    * description that makes sense even if the user just said "do it" - because
    * we provide recent conversation context.
    *
-   * Uses Haiku for speed (~1-2s). The goal is "what would you tell someone
+   * The goal is "what would you tell someone
    * who walked in and asked what you're working on right now?"
    */
   async summarizeCurrentWork(
@@ -1098,10 +1104,9 @@ Respond with ONLY the summary text, nothing else. No quotes, no explanation.`;
 
       const response = await this.withRetry('summarizeCurrentWork', () =>
         client.messages.create({
-          model: this.models.quickCheck,  // Haiku - speed is critical
+          model: this.models.quickCheck,
           max_tokens: 50,
           thinking: THINKING,
-          temperature: 0,
           messages: [{ role: 'user', content: prompt }]
         })
       );
@@ -1142,7 +1147,7 @@ Respond with ONLY the summary text, nothing else. No quotes, no explanation.`;
    * the outcome does not; a second answer that is still long is kept whole.
    */
   private async fitProjectName(
-    client: Anthropic,
+    client: BackgroundTextClient,
     prompt: string,
     firstReply: string,
     name: string,
@@ -1162,7 +1167,6 @@ Respond with ONLY the summary text, nothing else. No quotes, no explanation.`;
         model: this.models.quickCheck,
         max_tokens: 30,
         thinking: THINKING,
-        temperature: 0,
         messages: [
           { role: 'user', content: prompt },
           { role: 'assistant', content: firstReply },
@@ -1207,7 +1211,7 @@ Respond with ONLY the summary text, nothing else. No quotes, no explanation.`;
    * than one labelled with a drifting mission.
    */
   async generateProjectName(outcome: string, sessionId?: string): Promise<string | null> {
-    const client = this.getClient();
+    const client = this.getClient('projectName');
     if (!client) return null;
 
     const startTime = Date.now();
@@ -1235,7 +1239,6 @@ Respond with ONLY the name, nothing else.`;
           model: this.models.quickCheck,
           max_tokens: 30,
           thinking: THINKING,
-          temperature: 0,
           messages: [{ role: 'user', content: prompt }]
         })
       );
@@ -1332,10 +1335,9 @@ Respond with ONLY valid JSON:
 
       const response = await this.withRetry('evaluateSessionMetadata', () =>
         client.messages.create({
-          model: this.models.quickCheck,  // Haiku - speed is critical
+          model: this.models.quickCheck,
           max_tokens: 150,
           thinking: THINKING,
-          temperature: 0,
           messages: [{ role: 'user', content: prompt }]
         })
       );
@@ -1382,7 +1384,7 @@ Respond with ONLY valid JSON:
   }
 
   /**
-   * Generate intelligent permission pattern suggestions using Haiku.
+   * Generate permission pattern suggestions.
    *
    * Called immediately when a permission request arrives, this generates
    * contextually-aware pattern options. By the time the user clicks
@@ -1396,7 +1398,7 @@ Respond with ONLY valid JSON:
     toolName: string,
     toolInput: Record<string, unknown>
   ): Promise<string[]> {
-    const client = this.getClient();
+    const client = this.getClient('permissionPatterns');
     if (!client) {
       return [];
     }
@@ -1458,10 +1460,9 @@ Respond with ONLY a JSON array of pattern strings:
 
       const response = await this.withRetry('suggestPermissionPatterns', () =>
         client.messages.create({
-          model: this.models.quickCheck,  // Haiku - speed is critical
+          model: this.models.quickCheck,
           max_tokens: 200,
           thinking: THINKING,
-          temperature: 0,
           messages: [{ role: 'user', content: prompt }]
         })
       );

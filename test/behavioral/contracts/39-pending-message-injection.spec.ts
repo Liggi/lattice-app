@@ -54,11 +54,11 @@ async function sendMessage(page: Page, text: string) {
 
 /** Inject a message directly via the harness API, bypassing the Composer UI.
  *  Use this for mid-turn injection since the Composer may show stop button during streaming. */
-async function injectMessage(conversationId: string, text: string) {
+async function injectMessage(conversationId: string, text: string, attachments?: unknown[]) {
   const resp = await fetch(`${BASE_URL}/api/harness/${conversationId}/send`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ input: text }),
+    body: JSON.stringify({ input: text, ...(attachments ? { attachments } : {}) }),
   });
   if (!resp.ok) throw new Error(`inject failed: ${await resp.text()}`);
 }
@@ -218,5 +218,32 @@ test.describe('Pending Message Injection', () => {
       injectionBox!.y,
       `Injected message (y=${injectionBox!.y}) should appear above response (y=${responseBox!.y})`
     ).toBeLessThan(responseBox!.y);
+  });
+
+  test('an image sent mid-turn shows while it waits, once taken in, and after reload', async ({ page }) => {
+    // Regression: the waiting bubble and the placed message were drawn from
+    // the inbox's queued event, which carried only the text, so the user's
+    // screenshot went missing from their own view of a mid-turn message.
+    const onePixelPng = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+    await setScenario('injection-text-only-response');
+    const convId = await seedConversation();
+    await page.goto(`/c/${convId}`);
+    await sendMessage(page, 'start the search');
+    await page.waitForTimeout(1500);
+
+    await injectMessage(convId, 'see this screenshot', [
+      { type: 'image', source: { type: 'base64', media_type: 'image/png', data: onePixelPng } },
+    ]);
+
+    const pendingMessage = page.getByTestId('pending-message');
+    await expect(pendingMessage).toContainText('see this screenshot', { timeout: 15000 });
+    await expect(pendingMessage.locator('img[alt="Attached"]')).toHaveCount(1);
+
+    await expect(pendingMessage).not.toBeVisible({ timeout: 30000 });
+    const placed = page.locator('[data-testid="user-message"]', { hasText: 'see this screenshot' });
+    await expect(placed.locator('img[alt="Attached"]')).toHaveCount(1);
+
+    await page.reload();
+    await expect(placed.locator('img[alt="Attached"]')).toHaveCount(1, { timeout: 15000 });
   });
 });

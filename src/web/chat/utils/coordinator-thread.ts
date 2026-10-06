@@ -9,7 +9,9 @@
  * brief) is machinery the user may want to know happened but not to read. So
  * dispatch and send calls are dropped, and every other tool call and thinking
  * block between two pieces of conversation is folded into one quiet line that
- * opens to the ordinary rows.
+ * opens to the ordinary rows. A tool call that waits on the user (a question,
+ * a plan to approve) is conversation: its card is where the user answers, so
+ * it stays in the thread like text.
  *
  * Pure: takes the render items the harness built and returns new ones. A
  * message that is all conversation keeps its identity; only a message that
@@ -18,6 +20,7 @@
  */
 
 import type { RenderItem } from '../hooks/useHarnessSession';
+import { isBlankText } from './blank-text';
 import type { DisplayContentBlock } from '../types';
 
 type FoldedItem = Extract<RenderItem, { kind: 'folded' }>;
@@ -38,6 +41,14 @@ export function isSessionDispatchOrSend(block: DisplayContentBlock): boolean {
   if (block.type !== 'tool_use') return false;
   const command = commandOf(block);
   return command !== null && SESSION_DISPATCH_OR_SEND.test(command);
+}
+
+/** Tool calls that wait on the user, answered on their own card. */
+const WAITS_ON_USER = new Set(['AskUserQuestion', 'ExitPlanMode', 'exit_plan_mode']);
+
+/** Text, or a tool call the user answers on its own card. */
+function isConversation(block: DisplayContentBlock): boolean {
+  return block.type === 'text' || (block.type === 'tool_use' && WAITS_ON_USER.has((block as { name?: string }).name ?? ''));
 }
 
 const READ_TOOLS = new Set(['Read', 'Glob', 'Grep', 'LS', 'WebFetch', 'WebSearch', 'ToolSearch', 'ListMcpResourcesTool', 'ReadMcpResourceTool']);
@@ -172,10 +183,6 @@ function isInterruption(item: RenderItem): boolean {
   return message.type === 'system';
 }
 
-function isBlankText(block: DisplayContentBlock): boolean {
-  return block.type === 'text' && !(typeof block.text === 'string' && block.text.trim().length > 0);
-}
-
 /**
  * Fold a coordinator's render items. While `isStreaming`, the fold the
  * coordinator is still working in is marked active and says so in the present
@@ -203,14 +210,17 @@ export function foldCoordinatorMachinery(items: readonly RenderItem[], isStreami
       continue;
     }
     const message = item.message;
-    if (message.type !== 'assistant' || !Array.isArray(message.content) || message.content.every((block) => block.type === 'text')) {
+    // A quiet turn's blank reply is not the coordinator speaking, so it
+    // neither shows nor splits the fold around it.
+    if (message.type === 'assistant' && Array.isArray(message.content) && message.content.every(isBlankText)) continue;
+    if (message.type !== 'assistant' || !Array.isArray(message.content) || message.content.every(isConversation)) {
       flush();
       out.push(item);
       continue;
     }
 
     // A message that is all machinery folds whole, keeping its identity.
-    if (!message.content.some((block) => block.type === 'text' || isSessionDispatchOrSend(block))) {
+    if (!message.content.some((block) => isConversation(block) || isSessionDispatchOrSend(block))) {
       pending.push(item);
       continue;
     }
@@ -229,7 +239,7 @@ export function foldCoordinatorMachinery(items: readonly RenderItem[], isStreami
     };
     for (const block of message.content) {
       if (isBlankText(block)) continue;
-      if (block.type === 'text') {
+      if (isConversation(block)) {
         pushMachinery();
         flush();
         const id = textParts === 0 ? baseId : `${baseId}#t${part++}`;

@@ -46,6 +46,7 @@ class FakeDaemon extends EventEmitter {
   interrupts = 0;
   async interruptConversation(): Promise<boolean> { this.interrupts++; return true; }
   async stopConversation(): Promise<boolean> { return true; }
+  async attach(): Promise<{ replayed: number; dropped: number }> { return { replayed: 0, dropped: 0 }; }
   async forceKillConversation(): Promise<boolean> { return true; }
   frame(message: unknown): void {
     this.emit('claude-message', { streamingId: STREAMING_ID, message });
@@ -101,6 +102,19 @@ describe('daemon adapter steering', () => {
     await settle();
     daemon.frame({ type: 'command_lifecycle', command_uuid: UUID, state: 'queued' });
     expect(await steering).toMatchObject({ status: 'accepted' });
+  });
+
+  it('steers into a process taken over mid-turn, from the capabilities its stored run:ready kept', async () => {
+    // A process taken over mid-turn sends its next system/init only with its next turn.
+    const daemon = new FakeDaemon();
+    const { handle } = new DaemonProcessAdapter(daemon as unknown as ProcessManagerClient).attach(STREAMING_ID);
+    handle.learnCapabilities(LIFECYCLE_INIT.capabilities);
+
+    const steering = handle.steer!({ input: 'correction', deliveryId: UUID });
+    await settle();
+    daemon.frame({ type: 'command_lifecycle', command_uuid: UUID, state: 'queued' });
+    expect(await steering).toMatchObject({ status: 'accepted' });
+    expect(steeredMessage(daemon)).toMatchObject({ uuid: UUID, priority: 'next' });
   });
 
   it('stamps the stdin message with the delivery uuid and priority next, never now', async () => {

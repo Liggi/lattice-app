@@ -23,6 +23,7 @@ export type LLMOperationType =
   | 'WORKER_ACTIVITY'
   | 'WORKER_REPORT_SUMMARY'
   | 'PROJECT_NAME'
+  | 'CHATGPT_PLAN_SETUP'
   // Non-Anthropic spenders, added 2026-08-28. These billed real money for
   // months while writing nothing here, which is why every cost figure Lattice
   // produced before today was Anthropic-only and read like the whole bill.
@@ -30,7 +31,8 @@ export type LLMOperationType =
   | 'GEMINI_IMAGE'
   | 'AMBIENT_SCAN'
   | 'NEEDS_YOU'
-  | 'MISSION_FIT';
+  | 'MISSION_FIT'
+  | 'EXPLAIN_BACK';
 
 // Canonical trigger vocabulary
 export type InsightTrigger =

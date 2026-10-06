@@ -130,9 +130,10 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
   const onModelChange = props.runtimeConfig?.onModelChange;
   const isModelSelectorEnabled = availableModels.length > 0 && !!onModelChange;
   const defaultModel = availableModels.find((m) => m.isDefault);
-  const effectiveModel = selectedModel
-    ? availableModels.find((m) => m.id === selectedModel)
-    : defaultModel;
+  // A creation default cannot identify an existing session. Keep an unlisted
+  // model's id too: a stale catalog must never relabel it as another model.
+  const effectiveModelId = selectedModel ?? sessionModel ?? defaultModel?.id;
+  const effectiveModel = availableModels.find((m) => m.id === effectiveModelId);
 
   const availableEfforts = props.runtimeConfig?.availableEfforts ?? [];
   const selectedEffort = props.runtimeConfig?.selectedEffort ?? null;
@@ -936,8 +937,9 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
               </div>
             )}
 
-            {/* Attachment preview strip */}
-            {hasAttachments && (
+            {/* Attachment preview strip; also the only place a rejected file
+                says why, so it shows when the error is all there is. */}
+            {(hasAttachments || attachmentError) && (
               <div className="flex gap-1.5 px-3 pt-3 w-full overflow-x-auto">
                 {attachments.map((att) => (
                   <div
@@ -1067,7 +1069,7 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
                             data-model={selectedModel ?? undefined}
                             data-effort={selectedEffort ?? undefined}
                           >
-                            {effectiveModel?.label ?? (sessionModel ? formatModelName(sessionModel) : 'Model')}
+                            {effectiveModel?.label ?? (effectiveModelId ? formatModelName(effectiveModelId) : 'Model')}
                             {badgeEffortLabel && <span> · {badgeEffortLabel}</span>}
                           </span>
                           <ChevronDown
@@ -1284,7 +1286,7 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
               role="menu"
               data-testid="model-menu"
               onKeyDown={handleModelMenuKeyDown}
-              className="composer-model-menu absolute right-0 bottom-full z-50 mb-2 min-w-[200px] max-w-[min(300px,calc(100vw-2rem))] rounded-[10px] border border-composer-border bg-composer-surface p-1"
+              className="composer-model-menu absolute right-0 bottom-full z-50 mb-2 min-w-[200px] max-w-[min(300px,calc(100vw-2rem))] max-h-[60dvh] overflow-y-auto overscroll-contain rounded-[10px] border border-composer-border bg-composer-surface p-1"
             >
               {isEffortSelectorEnabled && sectionHeader('Model')}
               {availableModels.map((model, i) =>

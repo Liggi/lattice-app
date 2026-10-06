@@ -27,6 +27,8 @@ import {
   LoginTerminalInputResult,
   LoginTerminalOutputEventData,
   LoginTerminalStateEventData,
+  ActiveSession,
+  AttachResult,
 } from './types.js';
 import type { LoginAttemptState, LoginTerminalSize } from './claude-login-terminal.js';
 import { createLogger, type Logger } from '../services/infrastructure/logger.js';
@@ -459,9 +461,17 @@ export class ProcessManagerClient extends EventEmitter {
   /**
    * Get active sessions with their session IDs
    */
-  async getActiveSessions(): Promise<Array<{ streamingId: string; sessionId: string; isIdle?: boolean }>> {
-    const result = await this.sendRequest<{ sessions: Array<{ streamingId: string; sessionId: string; isIdle?: boolean }> }>('list');
+  async getActiveSessions(): Promise<ActiveSession[]> {
+    const result = await this.sendRequest<{ sessions: ActiveSession[] }>('list');
     return result.sessions;
+  }
+
+  /**
+   * Take over a process a previous server ran. The events it missed arrive
+   * after the answer, on the usual events; listen before calling.
+   */
+  async attach(streamingId: string): Promise<AttachResult> {
+    return this.sendRequest<AttachResult>('attach', { streamingId });
   }
 
   /**

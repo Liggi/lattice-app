@@ -402,6 +402,10 @@ export function registerUnifiedConversationControlRoutes(
     }
 
     let existingInfo = sessionInfoService.getSessionInfoSync(conversationId);
+    // Only the conv-* row carries it, and only an existing row can be put to sleep.
+    if (updates.slept !== undefined && existingInfo) {
+      sessionInfoService.setSleptAt(conversationId, updates.slept ? new Date().toISOString() : null);
+    }
     const isMissingPinnedCharacter = updates.pinned === true
       && !(existingInfo?.pin_character_name && existingInfo.pin_character_image);
     const shouldCreatePinnedCharacter = isMissingPinnedCharacter

@@ -88,6 +88,7 @@ export const SESSION_VERBS: VerbSpec[] = [
       { name: 'model', kind: 'string', value: 'ID', desc: 'Model id, e.g. claude-opus-5-5.' },
       { name: 'provider', kind: 'string', value: 'P', desc: 'claude (default) or codex.' },
       { name: 'reasoning-effort', kind: 'string', value: 'E', desc: 'Codex only: minimal | low | medium | high | xhigh. Without it the session takes the configured default.' },
+      { name: 'fast', kind: 'boolean', desc: 'Codex only: run every turn on Codex\'s Fast tier (about 1.5x speed, more usage). Models Codex does not list with a Fast tier run at normal speed.' },
 
       { name: 'cwd', kind: 'string', value: 'DIR', desc: 'Working directory (default: $PWD, or the --from parent\'s).' },
       { name: 'from', kind: 'string', value: 'CONV', desc: 'Start as a worker picked up from this coordinator conversation.' },

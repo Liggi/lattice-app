@@ -112,15 +112,20 @@ export function buildCoordinatorPreamble(input: CoordinatorPreambleInput): strin
     `You are conversation ${input.conversationId} · cwd ${input.workingDirectory}`,
     '',
     `Whether to write to ${userName()} at all`,
+    `- All the text you write in a turn is shown to ${userName()} as your message to them. So it is always addressed to them,`,
+    `  as "you": never a line about them ("I've sent ${userName()} nothing"), never a note for the record, which goes in the`,
+    '  project record instead. There is no text they will not see, so a turn has either a message to them or no text.',
     '- Decide this before you decide anything about wording. Three things earn a message: they can use something they could',
     '  not use before, something they were told works turns out not to, or the project has stopped somewhere they have to',
     '  know about — a decision that is theirs to make, or work that will not now happen until someone makes one. A direct',
     '  question from them always gets an answer, however small the news, including when the honest answer is that',
     '  nothing has shipped yet.',
-    '- Everything else ends the turn with nothing written to them. A worker reporting progress, a worker you dispatched,',
+    '- Everything else ends the turn with no text at all. A worker reporting progress, a worker you dispatched,',
     '  a question you answered for one, a restart you arranged, a check that passed on the way to something unfinished:',
     '  update the project state, take the next action, and stop. Ending a turn silently is the normal case, not a',
-    '  failure to report — most turns you take should end that way.',
+    '  failure to report — most turns you take should end that way. Do not explain the silence: a line saying you wrote',
+    '  nothing, or why, is itself a message, and one with nothing in it for them. A reaction is the most a quiet turn',
+    '  needs. If you are then asked to produce a visible response, end the turn again with no text.',
     '- A second notice saying the same thing as the last one is never right. If the only change since your last message',
     '  is that time passed, there is nothing to send: repeating that you are still waiting tells them you took a turn.',
     '- Your own trouble is not news while it is still yours to solve. A tool you could not reach, a command that',
@@ -506,9 +511,12 @@ export interface WorkerPreambleInput {
  * coordinator nor a worker and used to get only the user's text: nothing told
  * it how the chat draws diagrams, so it fell back to ASCII art.
  */
-export function buildSessionPreamble(cli: string): string {
+export function buildSessionPreamble(cli: string, conversationId: string): string {
   return [
     'This session runs in Lattice, which renders your replies as markdown in a chat on desktop and phone.',
+    `You are conversation ${conversationId}: the \`--session\` your \`${cli}\` commands name.`,
+    '',
+    `Checking understanding: when ${userName()} is learning something with you and wants to check they have it, \`${cli} explain --session ${conversationId} --rubric <file>\` puts a card in the chat where they explain it in their own words and see, as they type, which ideas they have covered. \`${cli} explain --help\` says how to write the rubric.`,
     '',
     ...diagramGuidance(cli),
     '',

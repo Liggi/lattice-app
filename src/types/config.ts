@@ -131,6 +131,12 @@ export interface ClaudeEndpointConfig {
   apiKey?: string;
   /** Tokens the served model holds, passed as CLAUDE_CODE_MAX_CONTEXT_TOKENS so auto-compact runs in time. */
   contextWindow?: number;
+  /**
+   * The API the server speaks. 'anthropic' (the default) can run sessions and
+   * background calls; 'openai' (Chat Completions: Ollama, LM Studio,
+   * OpenRouter…) runs background calls only, and `model` is its default.
+   */
+  protocol?: 'anthropic' | 'openai';
 }
 
 export interface AnthropicConfig {
@@ -310,6 +316,7 @@ export interface LatticeConfig {
    * Background model-backed generation.
    */
   generation?: GenerationConfig;
+  backgroundInference?: BackgroundInferenceConfig;
 
   /**
    * Sending feedback to the Lattice maintainer's collector.
@@ -394,6 +401,29 @@ export interface GenerationConfig {
    * work moves.
    */
   projectName?: boolean;
+}
+
+/** The model calls Lattice makes on its own, each routable on its own. */
+export type BackgroundJob = Exclude<keyof GenerationConfig, 'gemini'>;
+export const BACKGROUND_JOBS: BackgroundJob[] = ['insights', 'projectName', 'workerActivity', 'workerReportSummary', 'sessionSummary', 'sessionReview', 'permissionPatterns', 'turnCapture'];
+
+/**
+ * Where a background call goes. `model` overrides the caller's own choice on
+ * the Anthropic API, is required on the ChatGPT plan, and defaults to the
+ * endpoint's model on an endpoint.
+ */
+export interface BackgroundRoute {
+  provider: 'anthropic-api' | 'chatgpt-plan' | 'endpoint';
+  model?: string;
+  /** A saved `claudeEndpoints` id, when provider is 'endpoint'. */
+  endpointId?: string;
+}
+
+/** The top-level route is every job's default; `jobs` overrides it per job. */
+export interface BackgroundInferenceConfig extends BackgroundRoute {
+  jobs?: Partial<Record<BackgroundJob, BackgroundRoute>>;
+  /** Used instead of the ChatGPT plan while the plan is paused at its usage limit. Absent: calls wait. */
+  whenPlanPaused?: BackgroundRoute | null;
 }
 
 /**

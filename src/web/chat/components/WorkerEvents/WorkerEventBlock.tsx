@@ -25,6 +25,7 @@ import React, { useState } from 'react';
 import { ArrowRightLeft, ChevronDown, ChevronRight, ExternalLink, MessageSquare, Play, SquarePen } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { remarkSlackBullets } from '../../utils/slack-bullets';
 import { markdownComponents } from '../MessageList/MessageItem';
 import { AddReactionButton, ReactionChips, firstLine, type ReactionTarget } from '../MessageReactions/MessageReactions';
 import type { ChatMessage } from '../../types';
@@ -184,14 +185,14 @@ function AnsweredLine({ data, time }: { data: WorkerAnsweredData; time: string }
             <div className="flex flex-col gap-0.5">
               <div className="text-[11.5px] font-medium text-fg-3">Worker asked</div>
               <div className={PROSE}>
-                <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{stripWorkerQuestionMarker(data.question)}</ReactMarkdown>
+                <ReactMarkdown remarkPlugins={[remarkGfm, remarkSlackBullets]} components={markdownComponents}>{stripWorkerQuestionMarker(data.question)}</ReactMarkdown>
               </div>
             </div>
           )}
           <div className="flex flex-col gap-0.5">
             <div className="text-[11.5px] font-medium text-fg-3">{data.passedOn ? 'Coordinator, passing on your answer' : 'Coordinator'}</div>
             <div className={PROSE}>
-              <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{data.text}</ReactMarkdown>
+              <ReactMarkdown remarkPlugins={[remarkGfm, remarkSlackBullets]} components={markdownComponents}>{data.text}</ReactMarkdown>
             </div>
           </div>
         </div>
@@ -288,7 +289,7 @@ function ReportedBlock({
             style={expanded ? undefined : { maxHeight: REPORT_CLIP_PX, overflow: 'hidden' }}
             data-testid="worker-report-body"
           >
-            <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{data.text}</ReactMarkdown>
+            <ReactMarkdown remarkPlugins={[remarkGfm, remarkSlackBullets]} components={markdownComponents}>{data.text}</ReactMarkdown>
           </div>
           {!expanded && clipped && (
             <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-surface to-transparent" />

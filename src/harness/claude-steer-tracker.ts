@@ -106,6 +106,15 @@ export class ClaudeSteerTracker {
   constructor(private readonly processName: string) {}
 
   /**
+   * Capabilities a previous server read off this process's system/init, for a
+   * process taken over mid-turn: its next system/init comes only with its next
+   * turn. One already seen here is newer and stays.
+   */
+  learnCapabilities(capabilities: string[]): void {
+    if (this.capabilities.size === 0) this.capabilities = new Set(capabilities);
+  }
+
+  /**
    * Read the frames a steered message's receipt is made of, on the way past.
    * The frames still go wherever they were going; this only looks.
    */

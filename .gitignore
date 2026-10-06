@@ -19,6 +19,8 @@ public/node_modules/
 .env
 .env.local
 .env.*.local
+chatgpt-plan/
+*.chatgpt-credentials.json
 
 # IDE and editor files
 .vscode/

@@ -3,7 +3,7 @@ import { contextWindowProblem, endpointModelProblem } from '../../constants/clau
 import fs from 'fs';
 import path from 'path';
 import { execFile } from 'child_process';
-import { LatticeConfig, DEFAULT_CONFIG, InterfaceConfig, ServerConfig } from '@/types/config.js';
+import { LatticeConfig, DEFAULT_CONFIG, InterfaceConfig, ServerConfig, BACKGROUND_JOBS, type BackgroundJob } from '@/types/config.js';
 import { CONFIG_DIR } from '@/utils/constants.js';
 import { createLogger, type Logger } from '../infrastructure/logger.js';
 import { EventEmitter } from 'events';
@@ -36,6 +36,30 @@ function readTailscaleIp(cli: string): Promise<string | null> {
  * Loads from ~/.lattice/config.json
  * Creates default config on first run
  */
+function assertBackgroundRoute(route: unknown, where: string): void {
+  const value = route as Record<string, unknown> | null;
+  if (!value || typeof value !== 'object') throw new LatticeError('INVALID_CONFIG', `${where} must be a route`, 400);
+  if (!['anthropic-api', 'chatgpt-plan', 'endpoint'].includes(value.provider as string)) throw new LatticeError('INVALID_CONFIG', `Invalid background inference provider in ${where}`, 400);
+  if (value.model !== undefined && typeof value.model !== 'string') throw new LatticeError('INVALID_CONFIG', `Invalid background inference model in ${where}`, 400);
+  if (value.provider === 'endpoint' && (typeof value.endpointId !== 'string' || !value.endpointId)) throw new LatticeError('INVALID_CONFIG', `${where} names no endpoint`, 400);
+}
+
+function assertBackgroundInference(config: unknown): void {
+  assertBackgroundRoute(config, 'backgroundInference');
+  const { jobs, whenPlanPaused } = config as { jobs?: unknown; whenPlanPaused?: unknown };
+  if (jobs !== undefined) {
+    if (!jobs || typeof jobs !== 'object') throw new LatticeError('INVALID_CONFIG', 'backgroundInference.jobs must be an object', 400);
+    for (const [job, route] of Object.entries(jobs)) {
+      if (!BACKGROUND_JOBS.includes(job as BackgroundJob)) throw new LatticeError('INVALID_CONFIG', `Unknown background job ${job}`, 400);
+      assertBackgroundRoute(route, `backgroundInference.jobs.${job}`);
+    }
+  }
+  if (whenPlanPaused !== undefined && whenPlanPaused !== null) {
+    assertBackgroundRoute(whenPlanPaused, 'backgroundInference.whenPlanPaused');
+    if ((whenPlanPaused as { provider: string }).provider === 'chatgpt-plan') throw new LatticeError('INVALID_CONFIG', 'The plan cannot stand in for itself while paused', 400);
+  }
+}
+
 export class ConfigService {
   private static instance: ConfigService;
   private static overrideConfigDir?: string;
@@ -273,6 +297,7 @@ export class ConfigService {
     }
 
     // Field names only: an update can carry an API key.
+    if (updates.backgroundInference) assertBackgroundInference({ ...(this.config.backgroundInference ?? { provider: 'anthropic-api' }), ...updates.backgroundInference });
     this.logger.info('Updating configuration', {
       sections: Object.fromEntries(Object.entries(updates).map(([section, value]) => [
         section,
@@ -312,7 +337,8 @@ export class ConfigService {
       : current.gemini;
 
     const mergedAnthropic = updates.anthropic
-      ? { ...(current.anthropic || {}), ...updates.anthropic }
+      ? { ...(current.anthropic || {}), ...updates.anthropic,
+          models: { ...current.anthropic?.models, ...updates.anthropic.models } }
       : current.anthropic;
 
     const mergedMessageLifecycle = updates.messageLifecycle
@@ -328,6 +354,9 @@ export class ConfigService {
       'anthropic',
       'messageLifecycle',
       'plugins',
+      'generation',
+      'coordinator',
+      'backgroundInference',
     ]);
     const passthroughUpdates = Object.fromEntries(
       Object.entries(updates as Record<string, unknown>).filter(([key]) => !knownTopLevelKeys.has(key))
@@ -337,6 +366,11 @@ export class ConfigService {
     const newConfig: LatticeConfig & Record<string, unknown> = {
       ...current,
       ...passthroughUpdates,
+      generation: { ...current.generation, ...updates.generation },
+      coordinator: { ...current.coordinator, ...updates.coordinator },
+      backgroundInference: updates.backgroundInference
+        ? { ...current.backgroundInference, ...updates.backgroundInference }
+        : current.backgroundInference,
       server: mergedServer,
       interface: mergedInterface,
       gemini: mergedGemini,
@@ -373,6 +407,9 @@ export class ConfigService {
    * Validate provided fields in a partial config. Throws on incompatible values.
    */
   private validateProvidedFields(partial: Partial<LatticeConfig>): void {
+    if (partial.backgroundInference) {
+      assertBackgroundInference(partial.backgroundInference);
+    }
     // server
     if (partial.server) {
       this.assertServerConfig(partial.server);
@@ -443,6 +480,11 @@ export class ConfigService {
       if (!/^https?:\/\/[^/\s]+/.test((endpoint.baseUrl as string).trim())) {
         throw new LatticeError('INVALID_CONFIG', `The server URL must start with http:// or https:// (got ${endpoint.baseUrl as string})`, 400);
       }
+      if (endpoint.protocol !== undefined && endpoint.protocol !== 'anthropic' && endpoint.protocol !== 'openai') {
+        throw new LatticeError('INVALID_CONFIG', 'An endpoint speaks the anthropic or openai API', 400);
+      }
+      // An OpenAI-compatible endpoint never appears in the session picker, so its model needs no unique name.
+      if (endpoint.protocol === 'openai') continue;
       const problem = endpointModelProblem(endpoint.model as string, models);
       if (problem) throw new LatticeError('INVALID_CONFIG', problem, 400);
       models.push((endpoint.model as string).trim());

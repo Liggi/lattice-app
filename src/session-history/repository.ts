@@ -7,6 +7,7 @@
 
 import type Database from 'better-sqlite3';
 import type { SessionEvent } from '@liggi/agent-ui-harness/protocol';
+import { SESSION_TYPE_INDEX } from '../harness/sqlite-event-storage.js';
 import { DatabaseProvider } from '../services/infrastructure/database-provider.js';
 import { parseJson } from '../utils/json.js';
 import type {
@@ -505,6 +506,18 @@ function excerptAround(text: string, q: string, around = 60): string {
   return (start > 0 ? '…' : '') + flat.slice(start, end) + (end < flat.length ? '…' : '');
 }
 
+/**
+ * The seqs of a session's events of these types, for `seq IN (...)`. The
+ * covering type index finds them without reading `data`, and the primary key
+ * then reads just those rows, in seq order. Left to the planner, a filter on
+ * several types walks the whole session instead: its statistics average ~200
+ * events a session, and a coordinator has 30,000, so the decision read took
+ * 8-10s from a cold cache (2026-09-30).
+ */
+export function seqsOfTypes(where: string, types: ReadonlyArray<string>): string {
+  return `SELECT seq FROM harness_events INDEXED BY ${SESSION_TYPE_INDEX} WHERE ${where} AND type IN (${types.map(() => '?').join(',')})`;
+}
+
 export interface EventQueryOptions {
   fromSeq?: number;
   toSeq?: number;
@@ -525,14 +538,12 @@ export function getEvents(conversationId: string, opts: EventQueryOptions = {}):
     clauses.push('seq <= ?');
     params.push(opts.toSeq);
   }
-  if (opts.types && opts.types.length > 0) {
-    const placeholders = opts.types.map(() => '?').join(',');
-    clauses.push(`type IN (${placeholders})`);
-    params.push(...opts.types);
-  }
 
-  const sql = `SELECT * FROM harness_events WHERE ${clauses.join(' AND ')} ORDER BY seq ASC`;
-  const rows = db.prepare(sql).all(...params) as Array<Record<string, unknown>>;
+  const sql = opts.types && opts.types.length > 0
+    ? `SELECT * FROM harness_events WHERE session_id = ? AND seq IN (${seqsOfTypes(clauses.join(' AND '), opts.types)}) ORDER BY seq ASC`
+    : `SELECT * FROM harness_events WHERE ${clauses.join(' AND ')} ORDER BY seq ASC`;
+  const args = opts.types && opts.types.length > 0 ? [conversationId, ...params, ...opts.types] : params;
+  const rows = db.prepare(sql).all(...args) as Array<Record<string, unknown>>;
   return rows.map(rowToEvent);
 }
 
@@ -548,8 +559,8 @@ export function getEventsVersion(conversationId: string, types: ReadonlyArray<st
 /** Events of the given types, newest first, read lazily so a caller that stops early parses only what it read. */
 export function* iterateEventsNewestFirst(conversationId: string, types: readonly string[]): Generator<RawEvent> {
   const rows = getDb()
-    .prepare(`SELECT * FROM harness_events WHERE session_id = ? AND type IN (${types.map(() => '?').join(',')}) ORDER BY seq DESC`)
-    .iterate(conversationId, ...types) as IterableIterator<Record<string, unknown>>;
+    .prepare(`SELECT * FROM harness_events WHERE session_id = ? AND seq IN (${seqsOfTypes('session_id = ?', types)}) ORDER BY seq DESC`)
+    .iterate(conversationId, conversationId, ...types) as IterableIterator<Record<string, unknown>>;
   for (const row of rows) yield rowToEvent(row);
 }
 

@@ -19,6 +19,7 @@ const log: { events: SessionEvent[] } = { events: [] };
 const card = { phase: 'working' };
 const messagesCreate = vi.fn();
 const client: { value: unknown } = { value: { messages: { create: messagesCreate } } };
+vi.mock('../../src/services/infrastructure/config-service.js', () => ({ ConfigService: { getInstance: () => ({ getConfig: () => ({}) }) } }));
 
 vi.mock('../../src/harness/event-message-reader.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../src/harness/event-message-reader.js')>()),
@@ -46,6 +47,8 @@ const {
   MIN_GAP_MS,
   noteWorkerActivity,
   readActivityEvidence,
+  watchPanel,
+  WATCH_TTL_MS,
   readWorkerActivity,
   turnStillOpen,
   usablePhrase,
@@ -293,13 +296,43 @@ describe('scheduling', () => {
     noteWorkerActivity('conv-w');
     expect(vi.getTimerCount()).toBe(0);
   });
+
+  it('spends nothing while nobody has the coordinator\'s panel open', () => {
+    __setGenerationOverridesForTests({ workerActivity: true });
+    vi.useFakeTimers();
+    noteWorkerActivity('conv-w');
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('assesses working workers when the panel opens, and not on each heartbeat', async () => {
+    __setGenerationOverridesForTests({ workerActivity: true });
+    vi.useFakeTimers();
+    watchPanel('conv-c');
+    expect(vi.getTimerCount()).toBe(1);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(vi.getTimerCount()).toBe(0);
+    watchPanel('conv-c');
+    expect(vi.getTimerCount()).toBe(0);
+    // While it stays open, the worker's own events schedule assessments.
+    noteWorkerActivity('conv-w');
+    expect(vi.getTimerCount()).toBe(1);
+  });
+
+  it('counts the panel closed once its heartbeats stop', async () => {
+    __setGenerationOverridesForTests({ workerActivity: true });
+    vi.useFakeTimers();
+    watchPanel('conv-c');
+    await vi.advanceTimersByTimeAsync(WATCH_TTL_MS + 1);
+    noteWorkerActivity('conv-w');
+    expect(vi.getTimerCount()).toBe(0);
+  });
 });
 
 describe('assessing a worker', () => {
   function reply(text: string) {
     return { content: [{ type: 'text', text }], usage: { input_tokens: 10, output_tokens: 4 } };
   }
-  // The scheduler's 20s floor is exercised above; here the assessment is run
+  // The scheduler's 120s floor is exercised above; here the assessment is run
   // directly so each case is one pass over the real path.
   const assess = () => (getWorkerActivityService() as unknown as {
     run(worker: string): Promise<void>;
@@ -316,6 +349,7 @@ describe('assessing a worker', () => {
     messagesCreate.mockResolvedValue(reply('Testing the composer'));
     __setGenerationOverridesForTests({ workerActivity: true });
     getWorkerActivityService().reset();
+    getWorkerActivityService().watch('conv-c', () => []);
   });
   afterEach(() => {
     __setGenerationOverridesForTests(null);
@@ -323,10 +357,19 @@ describe('assessing a worker', () => {
     DatabaseProvider.resetInstance();
   });
 
+  it('does not pay for a phrase once the panel has closed', async () => {
+    getWorkerActivityService().reset();
+    log.events = [input('Fix the composer sweep.'), said('Starting on the composer.', 'm1')];
+    await assess();
+    expect(messagesCreate).not.toHaveBeenCalled();
+  });
+
   it('writes a phrase the card can show', async () => {
     log.events = [input('Fix the composer sweep.'), said('Starting on the composer.', 'm1')];
     await assess();
     expect(messagesCreate).toHaveBeenCalledTimes(1);
+    // A small output budget must go to the visible label, not adaptive thinking.
+    expect(messagesCreate.mock.calls[0][0]).toMatchObject({ model: 'claude-sonnet-5', thinking: { type: 'disabled' } });
     expect(readWorkerActivity('conv-w', 'working')).toBe('Testing the composer');
   });
 

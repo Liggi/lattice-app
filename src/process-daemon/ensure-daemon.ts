@@ -2,8 +2,11 @@
  * Ensure the process daemon is running and reachable.
  *
  * Published npm installs don't ship with a systemd unit, so the server
- * auto-spawns the daemon as a child process when the socket isn't reachable.
- * If a daemon is already running (systemd-managed dev setup), this short-circuits.
+ * auto-spawns the daemon when the socket isn't reachable. It is started in its
+ * own session and outlives the server: a server restart, or a Ctrl-C in the
+ * terminal the server runs in, leaves it and its agents running for the next
+ * server. A daemon already running is kept unless it was started with other
+ * code or Claude settings (daemon-identity.ts), in which case it is restarted.
  */
 
 import * as net from 'net';
@@ -12,9 +15,12 @@ import * as path from 'path';
 import { spawn, type ChildProcess } from 'child_process';
 import { fileURLToPath } from 'url';
 import { LatticeError } from '../types/index.js';
+import { parseJson } from '../utils/json.js';
 import { createLogger } from '../services/infrastructure/logger.js';
 import { decideSocketPath } from './resolve-socket-path.js';
 import { ensureLatticeLogDir } from '../services/infrastructure/structured-log-files.js';
+import { daemonIdentity, loadClaudeEnvOverrides } from './daemon-identity.js';
+import type { DaemonIdentityResult, IPCResponse } from './types.js';
 
 const logger = createLogger('EnsureDaemon');
 
@@ -26,6 +32,64 @@ export interface EnsureDaemonResult {
   socketPath: string;
   spawned: boolean;
   child: ChildProcess | null;
+  /** The running daemon this call stopped because it was started with other code or settings. */
+  replaced?: { pid: number; identity: string | null; wanted: string };
+}
+
+const IDENTITY_REQUEST_TIMEOUT_MS = 2_000;
+/** A daemon started here stops after this long with no server connected. */
+const EXIT_WITHOUT_SERVER_MS = 30 * 60_000;
+const STOP_WAIT_MS = 15_000;
+
+/** Ask the daemon on the socket which it is. Null when it predates the `identity` request. */
+async function requestIdentity(socketPath: string): Promise<DaemonIdentityResult | null> {
+  return new Promise((resolve, reject) => {
+    const socket = net.createConnection(socketPath);
+    let buffer = '';
+    const timer = setTimeout(() => finish(new Error('Daemon did not answer the identity request')), IDENTITY_REQUEST_TIMEOUT_MS);
+    const finish = (err: Error | null, value?: DaemonIdentityResult | null) => {
+      clearTimeout(timer);
+      socket.destroy();
+      if (err) reject(err);
+      else resolve(value ?? null);
+    };
+    socket.once('connect', () => socket.write(JSON.stringify({ id: 1, method: 'identity', params: {} }) + '\n'));
+    socket.once('error', (err) => finish(err));
+    socket.on('data', (data) => {
+      buffer += data.toString();
+      for (const line of buffer.split('\n').slice(0, -1)) {
+        const message = parseJson(line) as IPCResponse;
+        if (message.id !== 1) continue;
+        if (message.error) {
+          if (message.error.message.startsWith('Unknown method')) finish(null, null);
+          else finish(new Error(message.error.message));
+        } else {
+          finish(null, message.result as DaemonIdentityResult);
+        }
+        return;
+      }
+    });
+  });
+}
+
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Stop a daemon and wait for it to exit; its own shutdown stops its agents first. */
+async function stopDaemon(pid: number): Promise<void> {
+  process.kill(pid, 'SIGTERM');
+  const deadline = Date.now() + STOP_WAIT_MS;
+  while (isAlive(pid) && Date.now() < deadline) await new Promise((r) => setTimeout(r, READY_POLL_INTERVAL_MS));
+  if (isAlive(pid)) {
+    logger.warn('Daemon did not exit after SIGTERM; killing it', { pid });
+    process.kill(pid, 'SIGKILL');
+  }
 }
 
 /**
@@ -110,14 +174,33 @@ export function resolveSocketPath(): string {
 export async function ensureDaemon(): Promise<EnsureDaemonResult> {
   const socketPath = resolveSocketPath();
 
+  const daemonEntry = resolveDaemonEntry();
+  let replaced: EnsureDaemonResult['replaced'];
+
   if (await probeSocket(socketPath)) {
-    logger.info('Daemon already running', { socketPath });
-    return { socketPath, spawned: false, child: null };
+    const running = await requestIdentity(socketPath);
+    if (!running) {
+      // Started by a server from before the identity request; it goes when it next stops.
+      logger.warn('Daemon already running, and too old to say what it was started with; keeping it', { socketPath });
+      return { socketPath, spawned: false, child: null };
+    }
+    const wanted = daemonIdentity(daemonEntry, loadClaudeEnvOverrides());
+    if (running.identity === wanted) {
+      logger.info('Daemon already running', { socketPath, pid: running.pid, identity: wanted });
+      return { socketPath, spawned: false, child: null };
+    }
+    logger.warn('Daemon was started with other code or Claude settings; restarting it', {
+      socketPath,
+      pid: running.pid,
+      running: running.identity,
+      wanted,
+    });
+    await stopDaemon(running.pid);
+    replaced = { pid: running.pid, identity: running.identity, wanted };
   }
 
   unlinkStaleSocket(socketPath);
 
-  const daemonEntry = resolveDaemonEntry();
   if (!fs.existsSync(daemonEntry)) {
     throw new LatticeError(
       'DAEMON_ENTRY_MISSING',
@@ -133,14 +216,18 @@ export async function ensureDaemon(): Promise<EnsureDaemonResult> {
   logger.info('Spawning daemon child process', { daemonEntry, socketPath, logPath });
 
   // execArgv carries tsx's loader when running from source, so the child can load index.ts.
+  // Its own session: a signal to the server's process group (Ctrl-C) does not reach it.
   const child = spawn(process.execPath, [...process.execArgv, daemonEntry], {
     stdio: ['ignore', logStream, logStream],
     env: {
       ...process.env,
       LATTICE_DAEMON_SOCKET: socketPath,
+      LATTICE_DAEMON_EXIT_WITHOUT_SERVER_MS: String(EXIT_WITHOUT_SERVER_MS),
     },
-    detached: false,
+    detached: true,
   });
+  child.unref();
+  fs.closeSync(logStream);
 
   child.once('error', (err) => {
     logger.error('Daemon child process error', err);
@@ -162,5 +249,5 @@ export async function ensureDaemon(): Promise<EnsureDaemonResult> {
   }
 
   logger.info('Daemon child process ready', { socketPath, pid: child.pid });
-  return { socketPath, spawned: true, child };
+  return { socketPath, spawned: true, child, ...(replaced ? { replaced } : {}) };
 }

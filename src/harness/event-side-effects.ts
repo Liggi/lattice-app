@@ -18,7 +18,9 @@
  * - turn:end / run:end / run:error → drain the session's inbox into its next turn
  * - turn:end → keep the conversation's hand-off record current
  * - run:end / run:error → push session-idle + flush the hand-off record
- * - run:end of reason process_lost → hold a carry-on note until the daemon is back
+ * - run:ready / input:sent / task:notification → wake a session put to sleep by
+ *   hand, before the session-started push so the sidebar's refetch sees it awake
+ * - run:end of reason process_lost → queue a carry-on note, drained when the daemon is back
  * - context:compaction / task:started / task:updated → push session-status-changed
  *   (compacting and armed work change without a turn starting or ending)
  *
@@ -39,6 +41,7 @@ import { settleHeldDeliveries } from '../services/sessions/held-delivery-settlem
 import { maybeAutoCompact } from '../services/sessions/context-compaction.js';
 import { noteStatusChanged } from '../services/sessions/session-status-changes.js';
 import { getHarnessSessionManager } from './setup.js';
+import { SessionInfoService } from '../services/sessions/session-info-service.js';
 import type { ActiveConversationRegistry } from '../services/process/active-conversation-registry.js';
 
 const logger = createLogger('HarnessEventSideEffects');
@@ -53,6 +56,7 @@ export function createEventSideEffectsCallback(
     switch (event.type) {
       case 'run:ready':
         handleRunReady(event, registry);
+        SessionInfoService.getInstance().wakeFromSleep(event.sessionId);
         // Each of run:ready / input:sent / task:notification is a way a turn
         // can begin: a fresh or respawned process booting, a user send, a
         // background task finishing. A ScheduledWakeup revival emits ONLY a
@@ -62,6 +66,7 @@ export function createEventSideEffectsCallback(
         break;
       case 'input:sent':
       case 'task:notification': {
+        SessionInfoService.getInstance().wakeFromSleep(event.sessionId);
         registry.notifyActive(event.sessionId);
         noteWorkerActivity(event.sessionId);
         break;
@@ -117,10 +122,11 @@ export function createEventSideEffectsCallback(
         // the worker was last doing — which is how four cards sat at Working
         // with dead processes on 2026-09-21.
         noteWorkerRuntimeChange(event.sessionId);
-        if (event.type === 'run:end') noteRunEnd(event);
+        // A process the daemon took down drains when the daemon is back.
+        const drainLater = event.type === 'run:end' && noteRunEnd(event);
         // With the process gone, a message it had queued but not started is
         // settled from the transcript before the drain looks for work.
-        void settleHeldDeliveries(event.sessionId).then(() => drainInbox(event.sessionId));
+        void settleHeldDeliveries(event.sessionId).then(() => (drainLater ? undefined : drainInbox(event.sessionId)));
         break;
       }
       default:

@@ -272,6 +272,13 @@ export interface ConversationConfig {
    */
   sessionIndexBlock?: string;
   claudeExecutablePath?: string;
+  /**
+   * The session is a coordinator, for which a turn ending with no text is the
+   * normal case; process-daemon switches off Claude Code's nudge for one.
+   */
+  coordinator?: boolean;
+  /** The Lattice conversation the process is for, so a later server can take it over. */
+  conversationId?: string;
   previousMessages?: ConversationMessage[]; // Messages from previous session for resume context
   permissionMode?: string; // Permission mode: "acceptEdits" | "bypassPermissions" | "default" | "plan"
 }
@@ -477,6 +484,7 @@ export interface SessionInfo {
   paused_reason?: string;       // User-written reason for pausing session (empty/undefined = not paused)
   conversation_id?: string;     // Unified conversation ID (conv-*) this session belongs to
   project_name?: string;        // Generated title for a coordinator's project; custom_name still wins when set
+  slept_at?: string;            // When the user put it to sleep by hand; cleared when its next turn starts
   mcp_servers?: Array<{ name: string; status: string }>; // MCP servers connected at session start
   imported_at?: string;         // ISO timestamp if this session was imported (read-only)
   last_turn_usage?: TurnUsage;  // Token usage from the most recent turn
@@ -500,6 +508,7 @@ export interface SessionUpdateRequest {
   permissionMode?: string;       // Optional: update permission mode
   workspace?: string;            // Optional: update workspace
   pausedReason?: string | null;  // Optional: set pause reason (null to unpause)
+  slept?: boolean;               // Optional: put to sleep by hand (true) or take it back (false)
 }
 
 // Notification types

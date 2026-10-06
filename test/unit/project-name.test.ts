@@ -13,6 +13,7 @@ const messagesCreate = vi.fn();
 const updateSessionInfo = vi.fn(async () => ({}));
 let storedProjectName: string | null = null;
 let isCoordinator = true;
+vi.mock('../../src/services/infrastructure/config-service.js', () => ({ ConfigService: { getInstance: () => ({ getConfig: () => ({}) }) } }));
 
 vi.mock('../../src/services/infrastructure/anthropic-client-factory.js', () => ({
   anthropicClientFactory: {
@@ -128,6 +129,7 @@ describe('generating and storing a project name', () => {
     expect(name).toBe('Detector platform alignment');
     const followUp = messagesCreate.mock.calls[1][0].messages[2].content as string;
     expect(followUp).toContain(`has to fit in ${PROJECT_NAME_MAX_CHARS}`);
+    for (const [request] of messagesCreate.mock.calls) expect(request).not.toHaveProperty('temperature');
   });
 
   it('drops a name that keeps naming something the outcome does not', async () => {

@@ -12,6 +12,7 @@ import {
 describe('codex-models registry', () => {
   it('holds the known model ids in order', () => {
     expect(CODEX_MODELS.map((m) => m.id)).toEqual([
+      'gpt-6.1-sol',
       'gpt-6-astra',
       'gpt-5.6-sol',
       'gpt-5.6-terra',
@@ -22,8 +23,8 @@ describe('codex-models registry', () => {
     ]);
   });
 
-  it('marks astra and the 5.6 line as composer-selectable', () => {
-    for (const id of ['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']) {
+  it('marks Sol 6.1, Astra and the 5.6 line as composer-selectable', () => {
+    for (const id of ['gpt-6.1-sol', 'gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']) {
       expect(getCodexModel(id)?.composerSelectable).toBe(true);
     }
   });
@@ -88,6 +89,7 @@ describe('codex-models registry', () => {
   });
 
   it('formats known ids to their label and falls back to the raw id', () => {
+    expect(formatCodexModelLabel('gpt-6.1-sol')).toBe('Sol 6.1');
     expect(formatCodexModelLabel('gpt-6-astra')).toBe('Astra 6');
     expect(formatCodexModelLabel('gpt-5.6-sol')).toBe('Sol 5.6');
     expect(formatCodexModelLabel('gpt-5.4')).toBe('GPT-5.4');

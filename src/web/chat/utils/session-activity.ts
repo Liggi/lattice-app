@@ -96,7 +96,8 @@ export function liveWorkers(
  * held on its question card), a last run that ended in an
  * error, a project ask Jev judges needs the user made within the hour, compaction, whether the
  * session or any of its workers is running a turn, work it armed that will report
- * back or a wait it declared, and how long it has been quiet. Working has three
+ * back or a wait it declared, and how long it has been quiet or whether it was
+ * put to sleep by hand. Working has three
  * levels by running workers — none or one, two or three, four or more. A
  * project whose workers are all parked is Waiting, not Working.
  */
@@ -123,7 +124,7 @@ export function deriveSessionActivity(
   if (conversation.pendingWork || waitingOn || waitingWorkers > 0) {
     return { kind: 'waiting', ...(waitingOn ? { waitingOn } : {}), waitingWorkers };
   }
-  return now - lastUsedAt(conversation) > SLEEP_AFTER_MS ? { kind: 'sleeping' } : { kind: 'idle' };
+  return conversation.sleptAt || now - lastUsedAt(conversation) > SLEEP_AFTER_MS ? { kind: 'sleeping' } : { kind: 'idle' };
 }
 
 const PENDING_WORK_WORDS: Record<NonNullable<UnifiedConversationSummary['pendingWork']>, string> = {

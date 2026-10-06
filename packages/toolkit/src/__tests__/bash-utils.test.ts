@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { summarizeCommand, parseBackgroundOutputPath } from '../components/tools/BashTool.js';
+import { summarizeCommand, parseBackgroundOutputPath, postsExplainBack } from '../components/tools/BashTool.js';
 import { stripRerunFooter } from '../utils/tool-utils.js';
 
 describe('summarizeCommand', () => {
@@ -91,5 +91,17 @@ describe('stripRerunFooter', () => {
     expect(stripRerunFooter('normal output')).toBe('normal output');
     expect(stripRerunFooter('')).toBe('');
     expect(stripRerunFooter('contains [rerun: b1] in middle\nmore text')).toBe('contains [rerun: b1] in middle\nmore text');
+  });
+});
+
+describe('postsExplainBack', () => {
+  it('matches a command that posts an explain-back rubric, so its ideas stay hidden', () => {
+    expect(postsExplainBack("lattice explain --session conv-1 --rubric - <<'EOF'\n{\"prompt\":\"x\"}\nEOF")).toBe(true);
+    expect(postsExplainBack("cat > /tmp/r.json <<'EOF'\n{}\nEOF\n/tmp/bin/lattice explain --session conv-1 --rubric /tmp/r.json")).toBe(true);
+  });
+
+  it('leaves the log and help commands alone', () => {
+    expect(postsExplainBack('lattice explain log --session conv-1')).toBe(false);
+    expect(postsExplainBack('lattice explain --help')).toBe(false);
   });
 });

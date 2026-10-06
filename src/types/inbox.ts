@@ -15,7 +15,7 @@
  *
  * The thread sees two events, appended to the session's own log:
  *
- *   `input:queued { id, source, text, worker?, sender?, passedOn?, sourceSeq? }`
+ *   `input:queued { id, source, text, blocks?, worker?, sender?, passedOn?, sourceSeq? }`
  *                                                 the item is in the inbox
  *   `input:read   { ids }`                        a turn has taken these items;
  *                                                 appended right after the
@@ -51,13 +51,16 @@ import { INPUT_DELIVERED_EVENT, type InputDeliveredData } from './immediate-deli
  * `decision`: the user's answer to the session's own question (`lattice ask`,
  * see `decisions.ts`), as one attributed line. The thread shows the answer as
  * the user's message from its `decision:answered` event, not from this item.
+ * `explain`: the user finished the session's own explain-back (`lattice
+ * explain`, see `explain-back.ts`), as one attributed line; the thread shows
+ * the card, not this item.
  * `dismissal`: the user dismissed one of a coordinator's threads from the
  * panel, or brought one back (see `thread-dismissal.ts`), as one attributed
  * line; the thread shows it from the park note, not from this item.
  * Logs from before 2026-09-26 may also hold `quick-answer` items from a
  * removed feature; the thread skips them like any source it does not show.
  */
-export type InboxSource = 'user' | 'agent' | 'worker-report' | 'worker-question' | 'coordination-review' | 'reaction' | 'worker-stopped' | 'worker-permission' | 'decision' | 'dismissal';
+export type InboxSource = 'user' | 'agent' | 'worker-report' | 'worker-question' | 'coordination-review' | 'reaction' | 'worker-stopped' | 'worker-permission' | 'decision' | 'explain' | 'dismissal';
 
 export const INBOX_QUEUED_EVENT = 'input:queued';
 export const INBOX_READ_EVENT = 'input:read';
@@ -71,6 +74,8 @@ export interface InboxQueuedData {
   source: InboxSource;
   /** The user's message as written, or the worker's turn text. */
   text: string;
+  /** The attachments sent with it (images, documents), as the `input:sent` that carries it will hold them. */
+  blocks?: Array<Record<string, unknown>>;
   worker?: string;
   /** For `agent`: the conversation that declared itself the sender; absent when none did. */
   sender?: string;

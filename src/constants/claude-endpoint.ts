@@ -8,6 +8,8 @@ export interface ClaudeEndpoint {
   apiKey?: string;
   /** Tokens the served model holds; absent means the CLI's 200k assumption. */
   contextWindow?: number;
+  /** Absent means 'anthropic'. 'openai' endpoints serve background calls only. */
+  protocol?: 'anthropic' | 'openai';
 }
 
 export const MIN_CONTEXT_WINDOW = 16_000;
@@ -19,9 +21,15 @@ function text(value: unknown): string | undefined {
 
 /**
  * The saved endpoints that can run a session: each needs a base URL and a
- * model. Takes the raw config file, the parsed config or the browser's copy.
+ * model, and speaks the Anthropic API. Takes the raw config file, the parsed
+ * config or the browser's copy.
  */
 export function claudeEndpoints(config: unknown): ClaudeEndpoint[] {
+  return modelEndpoints(config).filter((endpoint) => endpoint.protocol !== 'openai');
+}
+
+/** Every usable saved endpoint, whatever API it speaks: the ones a background call can use. */
+export function modelEndpoints(config: unknown): ClaudeEndpoint[] {
   const list = (config as { claudeEndpoints?: unknown } | null | undefined)?.claudeEndpoints;
   if (!Array.isArray(list)) return [];
   return list.flatMap((entry: Record<string, unknown> | null) => {
@@ -30,7 +38,8 @@ export function claudeEndpoints(config: unknown): ClaudeEndpoint[] {
     if (!baseUrl || !model) return [];
     const apiKey = text(entry?.apiKey);
     const contextWindow = contextWindowProblem(entry?.contextWindow) ? undefined : entry?.contextWindow as number | undefined;
-    return [{ id: text(entry?.id) ?? model, baseUrl, model, ...(apiKey ? { apiKey } : {}), ...(contextWindow ? { contextWindow } : {}) }];
+    const protocol = entry?.protocol === 'openai' ? 'openai' as const : undefined;
+    return [{ id: text(entry?.id) ?? model, baseUrl, model, ...(apiKey ? { apiKey } : {}), ...(contextWindow ? { contextWindow } : {}), ...(protocol ? { protocol } : {}) }];
   });
 }
 

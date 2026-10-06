@@ -139,6 +139,12 @@ export class ConversationApi extends ApiCore {
     return this.apiCall(`/api/conv/${encodeURIComponent(conversationId)}/workers`);
   }
 
+  /** Heartbeat while this coordinator's panel is open; worker activity lines are written only then. */
+  async watchWorkers(conversationId: string): Promise<void> {
+    this.assertUnifiedConversationId(conversationId);
+    await this.apiCall(`/api/conv/${encodeURIComponent(conversationId)}/workers/watch`, { method: 'POST' });
+  }
+
   async getConversationStatus(sessionId: string): Promise<{
     sessionId: string;
     status: 'completed' | 'ongoing' | 'idle' | 'pending';
@@ -420,6 +426,7 @@ export class ConversationApi extends ApiCore {
       initialCommitHead?: string;
       pausedReason?: string | null;
       permissionMode?: string;
+      slept?: boolean;
     }
   ): Promise<{
     success: boolean;

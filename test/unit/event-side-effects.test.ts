@@ -34,6 +34,11 @@ vi.mock('../../src/services/sessions/worker-report-delivery.js', () => ({
   deliverWorkerReport,
 }));
 
+const { wakeFromSleep } = vi.hoisted(() => ({ wakeFromSleep: vi.fn(() => false) }));
+vi.mock('../../src/services/sessions/session-info-service.js', () => ({
+  SessionInfoService: { getInstance: () => ({ wakeFromSleep }) },
+}));
+
 const { harnessStatus } = vi.hoisted(() => ({ harnessStatus: { value: 'idle' } }));
 vi.mock('../../src/harness/setup.js', () => ({
   getHarnessSessionManager: () => ({ inspect: () => ({ status: harnessStatus.value, processAlive: false }) }),
@@ -172,6 +177,26 @@ describe('createEventSideEffectsCallback — lifecycle pushes', () => {
     onEvent(event('run:ready', 'conv-f'));
 
     expect(startedPushes).toEqual(['conv-f']);
+  });
+
+  // The session-started push makes the sidebar refetch, so a row put to sleep
+  // by hand must already be awake in the database when it goes out.
+  it('wakes a session put to sleep by hand before pushing session-started, on each way a turn begins', () => {
+    registerActive(registry, 'conv-s');
+    onEvent(event('turn:end', 'conv-s'));
+    const order: string[] = [];
+    wakeFromSleep.mockImplementation(() => { order.push('wake'); return true; });
+    registry.on('session-started', () => order.push('started'));
+
+    onEvent(event('input:sent', 'conv-s', { text: 'x' }));
+    expect(order).toEqual(['wake', 'started']);
+
+    wakeFromSleep.mockClear();
+    onEvent(event('task:notification', 'conv-s'));
+    onEvent(event('run:ready', 'conv-s', {}));
+    onEvent(event('turn:end', 'conv-s'));
+    onEvent(event('content', 'conv-s'));
+    expect(wakeFromSleep.mock.calls.map(([id]) => id)).toEqual(['conv-s', 'conv-s']);
   });
 
   it('is a no-op for events on an unregistered session', () => {

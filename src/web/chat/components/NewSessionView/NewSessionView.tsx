@@ -31,8 +31,11 @@ const PROVIDER_LABELS: Record<Provider, string> = {
 /** Providers a new session can start on. OpenCode stays wired but is not offered yet. */
 const NEW_SESSION_PROVIDERS = ['claude', 'codex'] as const;
 
-/** A new project's Claude coordinator runs on this model; a Codex one on DEFAULT_CODEX_MODEL_ID. */
-const NEW_PROJECT_MODEL = 'claude-opus-5-5';
+import {
+  coordinatorClaudeModelFrom,
+  coordinatorCodexDefaultsFrom,
+  coordinatorProviderFor,
+} from '@/constants/coordinator-defaults';
 import { Composer } from '@/web/chat/components/Composer';
 import { ComposerGoalControl } from '@/web/chat/components/Composer/ComposerGoalControl';
 import { api } from '../../services/api';
@@ -48,6 +51,7 @@ import { launchQueueSession } from '../ConversationHeader/queue-session';
 import type { DevNote, StoredRecommendation } from '../../types';
 import { TooltipProvider } from '../ui/tooltip';
 import { SettingsDialog } from '../SettingsDialog/SettingsDialog';
+import { planSignInWaiting } from '../SettingsDialog/ChatGPTPlanCard';
 import { useProviderSignIn } from '../../hooks/useProviderSignIn';
 import { ProviderSignInStatus } from './ProviderSignInStatus';
 import { reportMilestone } from '../../utils/timeline-reporter';
@@ -85,7 +89,7 @@ function createPendingLaunchId(): string {
 export function NewSessionView({ sidebarOpen, onToggleSidebar }: NewSessionViewProps): JSX.Element {
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
-  const { serverConfig, claudeEndpoints } = usePreferencesContext();
+  const { serverConfig, coordinatorConfig, claudeEndpoints, isLoading: preferencesLoading } = usePreferencesContext();
   const {
     addOptimisticSession,
     addPendingLaunch,
@@ -93,7 +97,7 @@ export function NewSessionView({ sidebarOpen, onToggleSidebar }: NewSessionViewP
     invalidateConversations,
   } = useConversations();
   const { data: signIn } = useProviderSignIn();
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(planSignInWaiting);
   const workspaceId = 'main';
 
   const [isCreating, setIsCreating] = useState(false);
@@ -106,7 +110,13 @@ export function NewSessionView({ sidebarOpen, onToggleSidebar }: NewSessionViewP
   // no model to pick; the server prepends the `front` preamble when the create
   // call says so.
   const coordinator = searchParams.get('coordinator') === '1';
-  const searchParamProvider: Provider = _paramProvider === 'codex' ? 'codex' : 'claude';
+  const coordinatorSettings = {
+    coordinator: coordinatorConfig ?? undefined,
+    server: serverConfig ?? undefined,
+  };
+  const searchParamProvider: Provider = _paramProvider === 'codex' ? 'codex'
+    : _paramProvider === 'claude' ? 'claude'
+    : coordinator ? coordinatorProviderFor(coordinatorSettings, signIn) : 'claude';
   const [provider, setProvider] = useState<Provider>(searchParamProvider);
   const [goalObjective, setGoalObjective] = useState('');
   const [selectedModel, setSelectedModel] = useState<string | null>(null);
@@ -132,10 +142,11 @@ export function NewSessionView({ sidebarOpen, onToggleSidebar }: NewSessionViewP
   const effectiveDefaultModel = endpoint
     ? endpoint.model
     : coordinator
-    ? NEW_PROJECT_MODEL
+    ? coordinatorClaudeModelFrom(coordinatorSettings) ?? CLAUDE_CLI_DEFAULT_MODEL
     : serverConfig?.defaultModel?.trim() || CLAUDE_CLI_DEFAULT_MODEL;
-  const codexDefaultModel = DEFAULT_CODEX_MODEL_ID;
-  const codexDefaultEffort = DEFAULT_CODEX_EFFORT;
+  const coordinatorCodexDefaults = coordinatorCodexDefaultsFrom(coordinatorSettings);
+  const codexDefaultModel = coordinator ? coordinatorCodexDefaults.model : DEFAULT_CODEX_MODEL_ID;
+  const codexDefaultEffort = coordinator ? coordinatorCodexDefaults.reasoningEffort : DEFAULT_CODEX_EFFORT;
 
   // Codex only: reasoning-effort options depend on the selected model. If the
   // current effort choice isn't offered by the newly-selected model, reset it.
@@ -300,7 +311,7 @@ export function NewSessionView({ sidebarOpen, onToggleSidebar }: NewSessionViewP
     // A bare screenshot paste with no typed text is a valid first message —
     // /api/conv/create accepts message-or-initialContent.
     const hasAttachments = Array.isArray(attachments) && attachments.length > 0;
-    if ((!message.trim() && !hasAttachments) || isCreating) return;
+    if ((!message.trim() && !hasAttachments) || isCreating || (coordinator && preferencesLoading)) return;
 
     setIsCreating(true);
 
@@ -314,7 +325,7 @@ export function NewSessionView({ sidebarOpen, onToggleSidebar }: NewSessionViewP
     const fallbackModel = model || providerFallbackModel;
     // No --model at all lets the Claude CLI pick its own default.
     const requestModel = fallbackModel === CLAUDE_CLI_DEFAULT_MODEL ? undefined : fallbackModel;
-    const requestedEffort = effort;
+    const requestedEffort = effort ?? (coordinator ? codexDefaultEffort : undefined);
     // Always use the permission mode from URL params (set by sidebar controls),
     // not the Composer's internal selectedPermissionMode.
     const effectiveMode = permissionMode;
@@ -383,6 +394,7 @@ export function NewSessionView({ sidebarOpen, onToggleSidebar }: NewSessionViewP
     }
   }, [
     isCreating,
+    preferencesLoading,
     provider,
     coordinator,
     permissionMode,
@@ -390,6 +402,7 @@ export function NewSessionView({ sidebarOpen, onToggleSidebar }: NewSessionViewP
     workspaceId,
     goalObjective,
     codexDefaultModel,
+    codexDefaultEffort,
     effectiveDefaultModel,
     addOptimisticSession,
     addPendingLaunch,
@@ -553,7 +566,7 @@ export function NewSessionView({ sidebarOpen, onToggleSidebar }: NewSessionViewP
               core={{
                 onSubmit: handleSubmit,
                 isLoading: isCreating,
-                disabled: isCreating,
+                disabled: isCreating || (coordinator && preferencesLoading),
                 placeholder: coordinator ? 'Describe the outcome you want' : 'Start a session',
               }}
               features={{

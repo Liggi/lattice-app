@@ -49,6 +49,18 @@ export class EventLog {
     }
   }
 
+  /**
+   * Hold already-stored events in memory, oldest first and ending at the
+   * stored tail, so what is derived from all() sees them; nothing is written
+   * or announced. Only on a log with nothing in memory yet.
+   */
+  preload(events: readonly SessionEvent[]): void {
+    if (this.events.length > 0 || events.length === 0) return
+    this.events = [...events]
+    this.seq = Math.max(this.seq, events[events.length - 1].seq)
+    this.evict()
+  }
+
   append(
     type: EventType,
     data: unknown,

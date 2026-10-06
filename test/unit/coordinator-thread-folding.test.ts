@@ -55,6 +55,12 @@ describe('foldCoordinatorMachinery', () => {
     expect(folded.map((i) => (i.kind === 'message' ? i.message.id : i.summary))).toEqual(['Reasoning', 'a1', 'Ran 1 command', 'a1#t2']);
   });
 
+  it('drops a quiet turn whose only text is a zero-width space, without splitting the fold', () => {
+    const items = [assistant('a1', [text('Both are fine.')]), assistant('a2', [bash('ls')]), assistant('a3', [text('\u200B')]), assistant('a4', [bash('pwd'), text(' \u200B\n')])];
+    const folded = foldCoordinatorMachinery(items, false);
+    expect(folded.map((i) => (i.kind === 'message' ? i.message.id : i.summary))).toEqual(['a1', 'Ran 2 commands']);
+  });
+
   it('marks a trailing fold active while streaming and says what is running', () => {
     const items = [assistant('a1', [text('On it.')]), assistant('a2', [bash("/bin/zsh -lc 'lattice session transcript conv-w --last 3'")])];
     const fold = foldCoordinatorMachinery(items, true)[1];
@@ -87,6 +93,19 @@ describe('foldCoordinatorMachinery', () => {
     const items = [assistant('a1', [thinking('done with this')]), assistant('a2', [text('Answer.')]), workerBlock('w1')];
     const folds = foldCoordinatorMachinery(items, true).filter((i) => i.kind === 'folded');
     expect(folds.map((f) => (f.kind === 'folded' ? f.temporalState : null))).toEqual(['historical']);
+  });
+
+  it('keeps a tool call that waits on the user in the thread, mid-turn and after, instead of folding it away', () => {
+    for (const name of ['AskUserQuestion', 'ExitPlanMode', 'exit_plan_mode']) {
+      const waits = { type: 'tool_use', id: `tu-${name}`, name, input: {} } as DisplayContentBlock;
+      for (const isStreaming of [true, false]) {
+        const items = [assistant('a1', [thinking('which way?'), bash('ls'), waits])];
+        const folded = foldCoordinatorMachinery(items, isStreaming);
+        expect(folded.map((i) => i.kind)).toEqual(['folded', 'message']);
+        const card = folded[1];
+        expect(card.kind === 'message' && card.message.content).toEqual([waits]);
+      }
+    }
   });
 
   it('leaves a thread with no machinery untouched', () => {

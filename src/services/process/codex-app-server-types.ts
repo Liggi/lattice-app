@@ -27,6 +27,7 @@ export interface CodexThreadStartResponse {
   modelProvider: string;
   cwd: string;
   reasoningEffort: string | null;
+  serviceTier?: string | null;
   approvalPolicy?: unknown;
 }
 

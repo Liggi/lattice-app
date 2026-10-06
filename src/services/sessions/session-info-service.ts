@@ -37,6 +37,7 @@ type SessionRow = {
   imported_at: string | null;
   last_turn_usage_json: string | null;
   project_name: string | null;
+  slept_at?: string | null;
 };
 
 /** @deprecated Use InsightsRecord from InsightsEngine directly */
@@ -346,6 +347,7 @@ export class SessionInfoService {
       imported_at: row.imported_at ?? undefined,
       last_turn_usage: row.last_turn_usage_json ? parseJson(row.last_turn_usage_json) as SessionInfo['last_turn_usage'] : undefined,
       project_name: row.project_name ?? undefined,
+      slept_at: row.slept_at ?? undefined,
     };
   }
 
@@ -721,6 +723,19 @@ export class SessionInfoService {
       this.logger.error('Failed to check identity image', { sessionId, error });
       return false;
     }
+  }
+
+  /**
+   * Put a session to sleep by hand, or take that back. Its own column, left
+   * out of updateSessionInfo's full-row write so nothing else resets it.
+   */
+  setSleptAt(sessionId: string, sleptAt: string | null): void {
+    this.db.prepare('UPDATE sessions SET slept_at = ? WHERE session_id = ?').run(sleptAt, sessionId);
+  }
+
+  /** A turn is starting, so a session put to sleep by hand wakes. True when it was asleep. */
+  wakeFromSleep(sessionId: string): boolean {
+    return this.db.prepare('UPDATE sessions SET slept_at = NULL WHERE session_id = ? AND slept_at IS NOT NULL').run(sessionId).changes > 0;
   }
 
   /**

@@ -48,7 +48,8 @@ import {
   type ImmediateDeliveryResult,
 } from '../services/sessions/immediate-delivery.js';
 import { agentReact, reactToMessage } from '../services/sessions/message-reactions.js';
-import { answerDecision, askDecision, DecisionError, settleOpenDecision } from '../services/sessions/decisions.js';
+import { answerDecision, askDecision, DecisionError, dismissDecision, settleOpenDecision } from '../services/sessions/decisions.js';
+import { askExplain, checkExplain, disputeIdea, ExplainError, explainTimeline, finishExplain, noteHintOpened, type ExplainRubric } from '../services/sessions/explain-back.js';
 import { isFromLatticePage } from '../middleware/trusted-origin.js';
 import { isSingleEmoji } from '../types/message-reactions.js';
 import { INBOX_READ_EVENT, INBOX_UNDELIVERABLE_EVENT, type InboxReadData, type InboxUndeliverableData } from '../types/inbox.js';
@@ -992,6 +993,69 @@ export function createHarnessRoutes(sessionManager: SessionManager, resolvers: H
       if (!(err instanceof DecisionError)) throw err;
       res.status(err.status).json({ error: err.message });
     }
+  }));
+
+  // The user declining to answer one of those questions, from the page only.
+  router.post('/:sessionId/decisions/:decisionId/dismiss', asyncHandler(async (req, res) => {
+    if (!isFromLatticePage(req.headers)) {
+      res.status(403).json({ error: 'Questions are dismissed from the Lattice page, by the user.' });
+      return;
+    }
+    const { sessionId, decisionId } = req.params;
+    try {
+      await dismissDecision(sessionId, decisionId);
+      res.json({ dismissed: true });
+    } catch (err) {
+      if (!(err instanceof DecisionError)) throw err;
+      res.status(err.status).json({ error: err.message });
+    }
+  }));
+
+  // An agent's explain-back, as a card in its own thread (`lattice explain`).
+  const explainRoute = (handler: (req: Request, res: Response) => Promise<void> | void) => asyncHandler(async (req: Request, res: Response) => {
+    try {
+      await handler(req, res);
+    } catch (err) {
+      if (!(err instanceof ExplainError)) throw err;
+      res.status(err.status).json({ error: err.message });
+    }
+  });
+  // From the page only: what the user types, the hints they open and their
+  // finish are theirs, and an agent must not be able to write them.
+  const fromPage = (req: Request, res: Response): boolean => {
+    if (isFromLatticePage(req.headers)) return true;
+    res.status(403).json({ error: 'Explain-backs are answered from the Lattice page, by the user.' });
+    return false;
+  };
+  const bodyText = (req: Request, field: string): string => {
+    const value = ((req.body ?? {}) as Record<string, unknown>)[field];
+    return typeof value === 'string' ? value : '';
+  };
+
+  router.post('/:sessionId/explain', explainRoute(async (req, res) => {
+    res.json(await askExplain(req.params.sessionId, (req.body ?? {}) as ExplainRubric));
+  }));
+  router.get('/:sessionId/explain/log', explainRoute((req, res) => {
+    const id = typeof req.query.id === 'string' && req.query.id ? req.query.id : undefined;
+    res.type('text/plain').send(explainTimeline(req.params.sessionId, id));
+  }));
+  router.post('/:sessionId/explain/:explainId/check', explainRoute(async (req, res) => {
+    if (!fromPage(req, res)) return;
+    res.json(await checkExplain(req.params.sessionId, req.params.explainId, bodyText(req, 'text')));
+  }));
+  router.post('/:sessionId/explain/:explainId/hint', explainRoute((req, res) => {
+    if (!fromPage(req, res)) return;
+    noteHintOpened(req.params.sessionId, req.params.explainId, bodyText(req, 'idea'));
+    res.json({ ok: true });
+  }));
+  router.post('/:sessionId/explain/:explainId/dispute', explainRoute((req, res) => {
+    if (!fromPage(req, res)) return;
+    disputeIdea(req.params.sessionId, req.params.explainId, bodyText(req, 'idea'), bodyText(req, 'text'));
+    res.json({ ok: true });
+  }));
+  router.post('/:sessionId/explain/:explainId/finish', explainRoute(async (req, res) => {
+    if (!fromPage(req, res)) return;
+    res.json(await finishExplain(req.params.sessionId, req.params.explainId, bodyText(req, 'text')));
   }));
 
   // Compact provider context through the harness's semantic action. Claude's

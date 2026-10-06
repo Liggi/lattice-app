@@ -61,17 +61,19 @@ export interface CodexAppServerLike {
   respondToServerRequest(id: CodexRequestId, result: unknown): void;
   respondToServerRequestError(id: CodexRequestId, code: number, message: string, data?: unknown): void;
   refreshChatGptAuth(): Promise<unknown>;
-  startThread(options: { cwd: string; model: string; reasoningEffort: string }): Promise<{
+  startThread(options: { cwd: string; model: string; reasoningEffort: string; serviceTier?: string }): Promise<{
     thread: { id: string };
     model: string;
     cwd: string;
     reasoningEffort: string | null;
+    serviceTier?: string | null;
   }>;
-  resumeThread(threadId: string, options: { cwd: string; model: string; reasoningEffort: string }): Promise<{
+  resumeThread(threadId: string, options: { cwd: string; model: string; reasoningEffort: string; serviceTier?: string }): Promise<{
     thread: { id: string };
     model: string;
     cwd: string;
     reasoningEffort: string | null;
+    serviceTier?: string | null;
   }>;
   startTurn(options: {
     threadId: string;
@@ -302,6 +304,8 @@ export class CodexProcessAdapter implements ProcessAdapter {
     private readonly clientFactory: CodexClientFactory = getCodexAppServerClient,
     private readonly requestCoordinator?: CodexRequestCoordinator,
     private readonly onSettingsApplied?: (settings: CodexAppliedSettings) => void,
+    /** The service tier a conversation was created on, read on every spawn so a resume keeps it. */
+    private readonly resolveServiceTier: (sessionId: string) => string | null = () => null,
   ) {}
 
   hasActiveThread(threadId: string): boolean {
@@ -328,6 +332,7 @@ export class CodexProcessAdapter implements ProcessAdapter {
       sessionId,
       model,
       reasoningEffort,
+      serviceTier: this.resolveServiceTier(sessionId) ?? undefined,
       initialPrompt: config.prompt,
       initialAttachments: config.extra?.attachments,
       resumeThreadId,
@@ -339,6 +344,9 @@ export class CodexProcessAdapter implements ProcessAdapter {
         ? (context) => this.requestCoordinator!.handle(context)
         : undefined,
       onProcessClosed: this.requestCoordinator
+        ? (streamingId) => this.requestCoordinator!.cancelForStreamingId(streamingId)
+        : undefined,
+      onTurnEnded: this.requestCoordinator
         ? (streamingId) => this.requestCoordinator!.cancelForStreamingId(streamingId)
         : undefined,
       onSettingsApplied: this.onSettingsApplied,
@@ -356,6 +364,8 @@ export class CodexProcessAdapter implements ProcessAdapter {
       cwd,
       model,
       reasoningEffort,
+      requestedServiceTier: handle.requestedServiceTier ?? null,
+      appliedServiceTier: handle.appliedServiceTier ?? null,
       resumed: Boolean(resumeThreadId),
     });
     return handle;
@@ -368,6 +378,7 @@ interface CodexProcessHandleOptions {
   sessionId: string;
   model: string;
   reasoningEffort: string;
+  serviceTier?: string;
   initialPrompt: string;
   initialAttachments?: unknown;
   resumeThreadId?: string;
@@ -377,6 +388,8 @@ interface CodexProcessHandleOptions {
   onLifecycleEvent: (event: CodexHarnessLifecycleEvent) => void;
   onServerRequest?: (context: CodexServerRequestContext) => void;
   onProcessClosed?: (streamingId: string) => void;
+  /** A turn finished, interrupted turns included: nothing it asked is still waiting. */
+  onTurnEnded?: (streamingId: string) => void;
   onThreadActive: (threadId: string, active: boolean) => void;
   onSettingsApplied?: (settings: CodexAppliedSettings) => void;
 }
@@ -398,6 +411,8 @@ class CodexProcessHandle implements ProcessHandle {
   });
 
   threadId = '';
+  /** The tier Codex reports the thread is on; unset when it dropped the request (a model that does not offer it). */
+  appliedServiceTier?: string;
   processId?: string;
   private activeTurnId: string | null = null;
   private pendingInputs: PendingCodexInput[] = [];
@@ -468,6 +483,10 @@ class CodexProcessHandle implements ProcessHandle {
     }
   };
 
+  get requestedServiceTier(): string | undefined {
+    return this.options.serviceTier;
+  }
+
   constructor(private readonly options: CodexProcessHandleOptions) {
     this.currentModel = options.model;
     this.currentReasoningEffort = options.reasoningEffort;
@@ -489,15 +508,18 @@ class CodexProcessHandle implements ProcessHandle {
           cwd: this.options.cwd,
           model: this.options.model,
           reasoningEffort: this.options.reasoningEffort,
+          serviceTier: this.options.serviceTier,
         })
       : await this.options.client.startThread({
           cwd: this.options.cwd,
           model: this.options.model,
           reasoningEffort: this.options.reasoningEffort,
+          serviceTier: this.options.serviceTier,
         });
 
     this.threadId = thread.thread.id;
     this.currentModel = thread.model;
+    this.appliedServiceTier = thread.serviceTier ?? undefined;
     this.currentReasoningEffort = thread.reasoningEffort ?? this.options.reasoningEffort;
     this.processId = `codex-${this.threadId}`;
     this.options.onThreadActive(this.threadId, true);
@@ -782,6 +804,7 @@ class CodexProcessHandle implements ProcessHandle {
         }
         this.enqueueTurnEnd(turn, turn.status ?? undefined);
         this.activeTurnId = null;
+        if (this.processId) this.options.onTurnEnded?.(this.processId);
         void this.flushNextInput();
         break;
       }

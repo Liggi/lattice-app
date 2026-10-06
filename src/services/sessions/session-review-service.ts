@@ -14,7 +14,7 @@ import * as os from 'os';
 import * as path from 'path';
 import type Database from 'better-sqlite3';
 import { createLogger } from '../infrastructure/logger.js';
-import { anthropicClientFactory } from '../infrastructure/anthropic-client-factory.js';
+import { backgroundTextClient, backgroundProvenance, type BackgroundTextClient } from '../infrastructure/background-text-client.js';
 import { DatabaseProvider } from '../infrastructure/database-provider.js';
 import { SessionAnalysisService } from './session-analysis-service.js';
 import { SessionInfoService } from '../sessions/session-info-service.js';
@@ -201,8 +201,8 @@ export class SessionReviewService {
     return SessionReviewService.instance;
   }
 
-  private getClient(): Anthropic {
-    const client = anthropicClientFactory.getClient();
+  private getClient(): BackgroundTextClient {
+    const client = backgroundTextClient.getClient('sessionReview');
     if (!client) {
       throw new Error(
         'Anthropic client unavailable. Configure an Anthropic API key or active hosted proxy credentials.'
@@ -852,7 +852,7 @@ Empty arrays are fine. Never pad.`;
         costTracker.log({
           sessionId: data.sessionId,
           operation: 'SESSION_REVIEW',
-          model: REVIEW_MODEL,
+          ...backgroundProvenance(response, REVIEW_MODEL),
           inputTokens: response.usage?.input_tokens || 0,
           outputTokens: response.usage?.output_tokens || 0,
           cacheCreationInputTokens: response.usage?.cache_creation_input_tokens || 0,

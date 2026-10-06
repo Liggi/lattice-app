@@ -1,6 +1,9 @@
 @import "tailwindcss";
 @plugin "@tailwindcss/typography";
 
+/* Include component utilities when the consumer's build root is elsewhere. */
+@source "../**/*.{ts,tsx}";
+
 /*
  * Composer status colors — consumers override these CSS custom properties
  * to re-theme the Composer (e.g., Lattice sets --color-composer-active to cyan).

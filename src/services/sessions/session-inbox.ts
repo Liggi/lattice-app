@@ -201,12 +201,16 @@ export function enqueueInboxItem(input: {
     if (!existing) throw new Error(`inbox insert for delivery ${input.deliveryId} neither inserted nor found`);
     return existing.id;
   }
+  const attachments = input.attachmentsJson ? parseJson(input.attachmentsJson) : null;
   const manager = getHarnessSessionManager();
   if (manager) {
     appendCustomHarnessEvent(manager, input.sessionId, INBOX_QUEUED_EVENT, {
       id,
       source: input.source,
       text: input.text,
+      // The bubble is drawn from this event, not from the batch that carries
+      // the item, so it needs the attachments too.
+      ...(Array.isArray(attachments) && attachments.length > 0 ? { blocks: attachments as Array<Record<string, unknown>> } : {}),
       ...(input.worker ? { worker: input.worker } : {}),
       ...(input.sender ? { sender: input.sender } : {}),
       ...(input.passedOn ? { passedOn: true } : {}),
@@ -606,6 +610,7 @@ function renderItem(row: InboxRow, cli: string, batched: boolean): string {
     case 'worker-stopped':
     case 'worker-permission':
     case 'decision':
+    case 'explain':
     case 'dismissal':
       return batched ? `${row.text} · ${clock(row.created_at)}` : row.text;
     case 'user':

@@ -5,6 +5,7 @@ import type { LatticeConfig } from '@/types/config.js';
 import { asyncHandler } from '@/middleware/error-handler.js';
 import { requireTrustedOrigin } from '@/middleware/trusted-origin.js';
 import { AMBIENT_LATEST_PATH } from '@/routes/ambient.routes.js';
+import { chatgptPlanAuth } from '../../services/infrastructure/chatgpt-plan-auth.js';
 
 /** Keys the browser may set but never read back. */
 const SECRET_FIELDS = [
@@ -100,6 +101,11 @@ export function createConfigRoutes(service: ConfigService): Router {
 
   // Writes keys, so only the Lattice page itself may call it.
   router.put('/', requireTrustedOrigin, asyncHandler(async (req: Request<Record<string, never>, unknown, Partial<LatticeConfig>>, res) => {
+    // Every route on the plan runs the one model tested in its card.
+    const background = req.body.backgroundInference;
+    if (background && [background, ...Object.values(background.jobs ?? {})].some((route) => route?.provider === 'chatgpt-plan')) {
+      await chatgptPlanAuth.requireVerifiedModel(background.model ?? service.getConfig().backgroundInference?.model ?? '');
+    }
     await service.updateConfig(normalizeSecretUpdates(req.body ?? {}, service.getConfig()));
     res.json(configResponse(service));
   }));

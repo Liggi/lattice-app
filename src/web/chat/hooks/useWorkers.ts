@@ -143,3 +143,31 @@ export function useWorkers(
 
   return response;
 }
+
+/** How often an open panel says so; matches `WATCH_HEARTBEAT_MS` in services/sessions/worker-activity.ts. */
+const WATCH_HEARTBEAT_MS = 60_000;
+
+/**
+ * Tells the server this coordinator's panel is open, so its workers' activity
+ * lines are written. Only while `active` and the page is visible: a hidden tab
+ * or a sleeping phone stops the heartbeat, and the server stops writing lines
+ * a couple of minutes later.
+ */
+export function useWatchWorkers(coordinatorId: string | null, active: boolean): void {
+  useEffect(() => {
+    if (!coordinatorId || !active) return;
+    const beat = (): void => {
+      if (document.visibilityState !== 'visible') return;
+      api.watchWorkers(coordinatorId).catch(() => {
+        // The next beat retries; a missed one only lets a line go stale.
+      });
+    };
+    beat();
+    const timer = setInterval(beat, WATCH_HEARTBEAT_MS);
+    document.addEventListener('visibilitychange', beat);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener('visibilitychange', beat);
+    };
+  }, [coordinatorId, active]);
+}

@@ -13,8 +13,9 @@
  *                                                    thread instead of tapping;
  *                                                    their message is the answer
  *   `decision:dismissed { id }`                      the user dismissed the
- *                                                    project thread the card
- *                                                    was about, from the panel
+ *                                                    question without answering
+ *                                                    it, or the project thread
+ *                                                    it was about
  *
  * A coordinator's card may name the project thread it is about
  * (`lattice ask --thread`), which is what lets that dismissal close it.
@@ -28,6 +29,7 @@
  */
 
 import { INBOX_READ_EVENT, INBOX_WITHDRAWN_EVENT } from './inbox.js';
+import { EXPLAIN_ASKED_EVENT } from './explain.js';
 
 export const DECISION_ASKED_EVENT = 'decision:asked';
 export const DECISION_ANSWERED_EVENT = 'decision:answered';
@@ -81,7 +83,7 @@ export interface DecisionState {
   settled: boolean;
   /** The thread's most recent question: the only one whose answer can still change. */
   latest: boolean;
-  /** The user dismissed the project thread it was about, so it is no longer asked. */
+  /** The user dismissed it, or the project thread it was about, so it is no longer asked. */
   dismissed: boolean;
 }
 
@@ -191,14 +193,17 @@ export function endsAskingTurn(event: { type: string; data?: unknown }): boolean
  * has been written (2026-09-29: the user was answering cards without their
  * context). A question that holds its turn open (`holdsTurn`) shows at once,
  * as nothing more comes until it is answered. An answer, or a message that
- * settles a question, also places the card, just above itself.
+ * settles a question, also places the card, just above itself. An
+ * explain-back card (`lattice explain`) is placed the same way.
  */
 export function placeDecisionsAtTurnEnd<E extends { type: string; data?: unknown }>(events: readonly E[]): readonly E[] {
-  if (!events.some((event) => event.type === DECISION_ASKED_EVENT)) return events;
+  const heldUntilTurnEnd = (event: E) => event.type === EXPLAIN_ASKED_EVENT
+    || (event.type === DECISION_ASKED_EVENT && !(event.data as DecisionAskedData | undefined)?.holdsTurn);
+  if (!events.some((event) => event.type === DECISION_ASKED_EVENT || event.type === EXPLAIN_ASKED_EVENT)) return events;
   const placed: E[] = [];
   let held: E[] = [];
   for (const event of events) {
-    if (event.type === DECISION_ASKED_EVENT && !(event.data as DecisionAskedData | undefined)?.holdsTurn) {
+    if (heldUntilTurnEnd(event)) {
       held.push(event);
       continue;
     }
@@ -213,4 +218,27 @@ export function placeDecisionsAtTurnEnd<E extends { type: string; data?: unknown
     }
   }
   return placed;
+}
+
+/** The question the thread shows and still waits on, with the id of its message in the thread. */
+export interface ShownOpenDecision {
+  asked: DecisionAskedData;
+  messageId: string;
+}
+
+/**
+ * The open question whose card the thread is showing: in the placed events
+ * (`placeDecisionsAtTurnEnd`), so not while its turn is still running.
+ */
+export function shownOpenDecision(
+  placed: readonly { type: string; data?: unknown; seq: number }[],
+  byId: ReadonlyMap<string, DecisionState>,
+): ShownOpenDecision | null {
+  for (let i = placed.length - 1; i >= 0; i -= 1) {
+    const event = placed[i];
+    if (event.type !== DECISION_ASKED_EVENT) continue;
+    const decision = byId.get((event.data as DecisionAskedData | undefined)?.id ?? '');
+    if (decision && isOpenDecision(decision)) return { asked: decision.asked, messageId: `h-${event.seq}` };
+  }
+  return null;
 }

@@ -7,6 +7,8 @@
 import type { Express } from 'express';
 import { SessionManager } from '@liggi/agent-ui-harness/server';
 import { DaemonProcessAdapter } from './daemon-process-adapter.js';
+import { adoptRunningProcesses } from './adopt-running-processes.js';
+import type { ActiveSession } from '../process-daemon/types.js';
 import { CodexProcessAdapter } from './codex-process-adapter.js';
 import { OpencodeProcessAdapter } from './opencode-process-adapter.js';
 import { MultiplexingProcessAdapter } from './multiplexing-process-adapter.js';
@@ -14,6 +16,7 @@ import { appendCustomHarnessEvent } from './harness-custom-events.js';
 import { createHarnessRoutes } from './routes.js';
 import { createEventSideEffectsCallback } from './event-side-effects.js';
 import { onTurnStarted } from '../services/sessions/session-status-changes.js';
+import { SessionInfoService } from '../services/sessions/session-info-service.js';
 import { SqliteEventStorageAdapter } from './sqlite-event-storage.js';
 import { initEventMessageReader } from './event-message-reader.js';
 import { runStartupRecoverySweep } from './startup-recovery-sweep.js';
@@ -45,11 +48,15 @@ export interface HarnessSetupDeps {
   activeConversationRegistry: ActiveConversationRegistry;
   /** Persistence/UI surface used for live Codex request_user_input requests. */
   pendingQuestionService?: PendingQuestionService;
+  /** Processes a previous server left running in the daemon, to take over (adopt-running-processes.ts). */
+  adoptable?: readonly ActiveSession[];
 }
 
 export interface HarnessRuntime {
   sessionManager: SessionManager;
   eventStorage: SqliteEventStorageAdapter;
+  /** StreamingIds of the processes taken over from the previous server. */
+  adopted: Set<string>;
   /** Returns true if the given streamingId was spawned by the harness. */
   isHarnessManaged: (streamingId: string) => boolean;
   /** Returns true if a Codex thread has an active in-memory process handle. */
@@ -68,7 +75,10 @@ export function getHarnessSessionManager(): SessionManager | null {
 }
 
 export function setupHarness(deps: HarnessSetupDeps): HarnessRuntime {
-  const claudeAdapter = new DaemonProcessAdapter(deps.processManagerClient);
+  const claudeAdapter = new DaemonProcessAdapter(
+    deps.processManagerClient,
+    (conversationId) => ConversationService.getInstance().getConversation(conversationId)?.coordinator === true,
+  );
   const codexRequestCoordinator = deps.pendingQuestionService
     ? new CodexRequestCoordinator(deps.pendingQuestionService)
     : undefined;
@@ -104,7 +114,9 @@ export function setupHarness(deps: HarnessSetupDeps): HarnessRuntime {
         error: err instanceof Error ? err.message : String(err),
       });
     }
-  });
+  }, (sessionId) => (
+    sessionId.startsWith('conv-') ? ConversationService.getInstance().getServiceTier(sessionId) : null
+  ));
   const opencodeAdapter = new OpencodeProcessAdapter();
   const adapter = new MultiplexingProcessAdapter(
     claudeAdapter,
@@ -118,7 +130,10 @@ export function setupHarness(deps: HarnessSetupDeps): HarnessRuntime {
   initEventMessageReader(eventStorage);
 
   const registry = deps.activeConversationRegistry;
-  onTurnStarted((sessionId) => registry.notifyActive(sessionId));
+  onTurnStarted((sessionId) => {
+    SessionInfoService.getInstance().wakeFromSleep(sessionId);
+    registry.notifyActive(sessionId);
+  });
   _sessionManager = new SessionManager(adapter, {
     logger: {
       debug: (msg, data) => logger.debug(msg, data),
@@ -157,6 +172,8 @@ export function setupHarness(deps: HarnessSetupDeps): HarnessRuntime {
       });
     },
   });
+
+  const adopted = adoptRunningProcesses(deps.adoptable ?? [], claudeAdapter, _sessionManager, registry, eventStorage);
 
   // Close any sessions left in non-terminal status by the previous server
   // lifetime (mid-stream or mid-stop when the previous process went down).
@@ -225,6 +242,7 @@ export function setupHarness(deps: HarnessSetupDeps): HarnessRuntime {
   return {
     sessionManager,
     eventStorage,
+    adopted,
     isHarnessManaged: (streamingId: string) => adapter.managedStreamingIds.has(streamingId),
     isActiveCodexThread: (threadId: string) => adapter.hasActiveCodexThread(threadId),
     ...(codexRequestCoordinator ? { codexRequestCoordinator } : {}),

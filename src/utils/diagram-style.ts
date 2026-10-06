@@ -6,7 +6,7 @@
  * which does not resolve var().
  */
 
-/** Width of the message column a diagram is drawn into, in CSS pixels. */
+/** Width of the message column a diagram is drawn into, in CSS pixels; a wide layout is drawn to the desktop one. */
 export const DIAGRAM_COLUMN = { desktop: 600, phone: 358 } as const;
 
 /** Below this scale a drawing is too small to read, so the chat offers it at full size. */
@@ -42,10 +42,53 @@ const arrowhead = (id: string, colour: string) =>
 /** Arrowheads every diagram can use: marker-end="url(#arrow)", or url(#arrow-on) for the accent. */
 export const DIAGRAM_MARKERS = `<defs>${arrowhead('arrow', '#78716c')}${arrowhead('arrow-on', '#22d3ee')}</defs>`;
 
-/** The fence's source trimmed, when it is a complete SVG element; null otherwise. The chat and the check both draw exactly what this accepts. */
-export function completeSvg(source: string): string | null {
-  const svg = source.trim();
-  return /^<svg[\s>]/i.test(svg) && /<\/svg>$/i.test(svg) ? svg : null;
+/**
+ * A fence's drawing: the phone layout, and optionally a wider layout the chat
+ * shows instead when the column is at least as wide as it.
+ */
+export interface DiagramLayouts {
+  narrow: string;
+  wide: string | null;
+}
+
+/**
+ * The fence's layouts, when it holds one complete <svg>, or two with nothing
+ * but whitespace between them, the wider of which is the wide layout; null
+ * otherwise. The chat and the check both draw exactly what this accepts.
+ */
+export function diagramLayouts(source: string): DiagramLayouts | null {
+  const svgs = topLevelSvgs(source.trim());
+  if (!svgs || svgs.length > 2) return null;
+  if (svgs.length === 1) return { narrow: svgs[0], wide: null };
+  const [a, b] = svgs.map((svg) => naturalWidth(svg) ?? 0);
+  if (a === b) return null;
+  return a < b ? { narrow: svgs[0], wide: svgs[1] } : { narrow: svgs[1], wide: svgs[0] };
+}
+
+/** The <svg> elements a source is made of, or null when anything else is outside them or one is unclosed. */
+function topLevelSvgs(source: string): string[] | null {
+  const svgs: string[] = [];
+  let depth = 0;
+  let start = 0;
+  let end = 0;
+  for (const m of source.matchAll(/<(\/?)svg(?=[\s>/])[^>]*>/gi)) {
+    const at = m.index ?? 0;
+    if (m[1]) {
+      if (depth === 0) return null;
+      depth -= 1;
+      if (depth === 0) {
+        end = at + m[0].length;
+        svgs.push(source.slice(start, end));
+      }
+    } else if (!m[0].endsWith('/>')) {
+      if (depth === 0) {
+        if (source.slice(end, at).trim()) return null;
+        start = at;
+      }
+      depth += 1;
+    }
+  }
+  return depth === 0 && svgs.length > 0 && !source.slice(end).trim() ? svgs : null;
 }
 
 /** The drawing's own width, from its width attribute or else its viewBox. */

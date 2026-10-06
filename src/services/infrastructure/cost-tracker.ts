@@ -110,6 +110,8 @@ export interface LLMCallRecord {
   source?: SpendSource;
   /** Defaults to 'anthropic'. Set it for OpenAI and Gemini calls. */
   provider?: SpendProvider;
+  /** 'endpoint': a server the user saved, whose price Lattice does not know; logged at no cost. */
+  billingKind?: 'chatgpt-plan' | 'endpoint';
   /**
    * Prompt-cache tokens, straight from `usage`. Pass these whenever the
    * provider reports them — `inputTokens` alone is the uncached remainder, so
@@ -205,6 +207,12 @@ export class CostTracker {
       // which is true of everything written before today.
       addColumnIfMissing(this.db, 'llm_costs', 'source', "TEXT NOT NULL DEFAULT 'lattice'");
       addColumnIfMissing(this.db, 'llm_costs', 'provider', "TEXT NOT NULL DEFAULT 'anthropic'");
+      this.db.exec(`CREATE TABLE IF NOT EXISTS chatgpt_plan_usage (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL,
+        operation TEXT NOT NULL, model TEXT NOT NULL, input_tokens INTEGER NOT NULL,
+        output_tokens INTEGER NOT NULL, cached_tokens INTEGER NOT NULL,
+        duration_ms INTEGER NOT NULL, created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )`);
       this.db.exec('CREATE INDEX IF NOT EXISTS idx_llm_costs_source ON llm_costs(source);');
 
       // Cache columns, added the same day for the same reason: `input_tokens`
@@ -266,9 +274,17 @@ export class CostTracker {
       return;
     }
 
+    if (record.billingKind === 'chatgpt-plan') {
+      this.db!.prepare(`INSERT INTO chatgpt_plan_usage
+        (session_id, operation, model, input_tokens, output_tokens, cached_tokens, duration_ms)
+        VALUES (?, ?, ?, ?, ?, ?, ?)`).run(record.sessionId, record.operation, record.model,
+        record.inputTokens, record.outputTokens, record.cacheReadInputTokens ?? 0, record.durationMs);
+      return;
+    }
+
     const cacheCreationInputTokens = record.cacheCreationInputTokens ?? 0;
     const cacheReadInputTokens = record.cacheReadInputTokens ?? 0;
-    const estimatedCostUsd = this.calculateCost(
+    const estimatedCostUsd = record.billingKind === 'endpoint' ? 0 : this.calculateCost(
       record.model,
       record.inputTokens,
       record.outputTokens,
@@ -455,6 +471,12 @@ export class CostTracker {
       byModel,
       recentCalls,
     };
+  }
+
+  getPlanUsage(): { calls: number; inputTokens: number; outputTokens: number } {
+    if (!this.isInitialized || !this.db) return { calls: 0, inputTokens: 0, outputTokens: 0 };
+    return this.db.prepare(`SELECT COUNT(*) as calls, COALESCE(SUM(input_tokens), 0) as inputTokens,
+      COALESCE(SUM(output_tokens), 0) as outputTokens FROM chatgpt_plan_usage`).get() as { calls: number; inputTokens: number; outputTokens: number };
   }
 
   /**

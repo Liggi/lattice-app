@@ -1,7 +1,7 @@
 /* oxlint-disable react-doctor/no-cascading-set-state, react-doctor/no-giant-component, react-doctor/prefer-useReducer, react-doctor/no-render-in-render, react-doctor/no-effect-event-handler */
 import { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { Archive, ArrowLeft, PanelRight, PanelLeft, Menu, X, Settings, Import, MessageSquare } from 'lucide-react';
+import { Archive, Moon, ArrowLeft, PanelRight, PanelLeft, Menu, X, Settings, Import, MessageSquare } from 'lucide-react';
 import { LatticeLogo } from '../shared/LatticeLogo';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../../services/api';
@@ -9,6 +9,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/web/
 import { Popover, PopoverContent, PopoverTrigger } from '@/web/chat/components/ui/popover';
 import { useConversations } from '../../contexts/ConversationsContext';
 import { SettingsDialog } from '../SettingsDialog/SettingsDialog';
+import { planSignInWaiting } from '../SettingsDialog/ChatGPTPlanCard';
 import { archivedSidebarQueryKey } from '../../hooks/useArchivedSidebarSessions';
 import { removeConversationFromListCache, type ConversationListCacheData } from '../../utils/conversation-list-cache';
 import { useToast } from '../Toast/Toast';
@@ -52,7 +53,7 @@ export function ConversationHeader({
   const queryClient = useQueryClient();
   const { conversations, invalidateConversations } = useConversations();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(planSignInWaiting);
   // An agent's proposals appear as cards in the chat, not here.
   const [feedbackOpen, setFeedbackOpen] = useState(false);
   const { showToast, dismissToast } = useToast();
@@ -117,6 +118,42 @@ export function ConversationHeader({
 
   const activeConversation = conversations.find(conv => conv.conversationId === sessionId);
   const isImported = Boolean(activeConversation?.importedAt);
+  // Sleep moves a sidebar row into its Sleeping group now rather than after
+  // three quiet hours; nothing stops. Pinned rows never move and a worker has
+  // no row, so neither is offered it.
+  const isSlept = Boolean(activeConversation?.sleptAt);
+  const canSleep = Boolean(activeConversation) && !isArchived && !activeConversation?.pinned && !parentConversationId;
+
+  const setSlept = async (slept: boolean) => {
+    if (!sessionId) return;
+    await api.unifiedUpdateConversation(sessionId, { slept });
+    await invalidateConversations();
+  };
+
+  const handleSleep = async () => {
+    try {
+      await setSlept(!isSlept);
+      if (isSlept) return;
+      const toastId = showToast({
+        title: 'Asleep',
+        type: 'success',
+        duration: UNDO_ARCHIVE_TOAST_MS,
+        action: {
+          label: 'Undo',
+          onClick: () => {
+            dismissToast(toastId);
+            setSlept(false).catch((err: unknown) => {
+              console.error('[Sleep] Failed to undo sleep:', err);
+              showToast({ title: 'Could not undo sleep', type: 'error' });
+            });
+          },
+        },
+      });
+    } catch (err) {
+      console.error('[Sleep] Failed to change sleep:', err);
+      showToast({ title: isSlept ? 'Could not wake it' : 'Could not put it to sleep', type: 'error' });
+    }
+  };
   // A worker's way back to the project it was picked up from. The view
   // resolves it, so an archived worker — not in the conversations list —
   // keeps the same way back as a live one.
@@ -194,6 +231,22 @@ export function ConversationHeader({
               <Import size={13} />
               Imported · read-only
             </span>
+          )}
+          {canSleep && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  onClick={() => void handleSleep()}
+                  aria-label={isSlept ? 'Wake' : 'Sleep'}
+                  aria-pressed={isSlept}
+                  className={`${iconBtn} ${isSlept ? 'text-fg bg-surface' : ''}`}
+                  data-testid="session-sleep"
+                >
+                  <Moon size={16} />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent>{isSlept ? 'Wake' : 'Sleep'}</TooltipContent>
+            </Tooltip>
           )}
           <Tooltip>
             <TooltipTrigger asChild>
@@ -285,6 +338,18 @@ export function ConversationHeader({
                     <Import size={16} />
                     <span>Imported · read-only</span>
                   </div>
+                )}
+                {canSleep && (
+                  <button
+                    onClick={() => {
+                      void handleSleep();
+                      setMobileMenuOpen(false);
+                    }}
+                    className={menuItem}
+                  >
+                    <Moon size={16} />
+                    <span>{isSlept ? 'Wake' : 'Sleep'}</span>
+                  </button>
                 )}
                 <button
                   onClick={() => {

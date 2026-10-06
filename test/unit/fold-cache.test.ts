@@ -58,6 +58,28 @@ describe('cachedFold', () => {
     expect(cachedFold('n', 'conv-a', TYPES, count)).toBe(1);
   });
 
+  it('reads the whole set again when one event is removed and another added', () => {
+    const list = (events: Array<{ seq: number }>) => events.map((event) => event.seq);
+    insert('conv-a', 'worker:started');
+    insert('conv-a', 'worker:started');
+    expect(cachedFold('seqs', 'conv-a', TYPES, list)).toEqual([1, 2]);
+    DatabaseProvider.getInstance().getDb().prepare(`DELETE FROM harness_events WHERE seq = 1`).run();
+    insert('conv-a', 'worker:reported');
+    expect(cachedFold('seqs', 'conv-a', TYPES, list)).toEqual([2, 3]);
+  });
+
+  it('gives each fold events a previous fold could not have changed', () => {
+    const consume = (events: Array<{ type: string }>) => {
+      const types = events.map((event) => event.type);
+      for (const event of events) event.type = 'mutated';
+      return types;
+    };
+    insert('conv-a', 'worker:started');
+    expect(cachedFold('a', 'conv-a', TYPES, consume)).toEqual(['worker:started']);
+    insert('conv-a', 'worker:reported');
+    expect(cachedFold('a', 'conv-a', TYPES, consume)).toEqual(['worker:started', 'worker:reported']);
+  });
+
   it('keeps conversations apart and hands each caller its own copy', () => {
     const list = (events: Array<{ seq: number }>) => events.map((event) => event.seq);
     insert('conv-a', 'worker:started');

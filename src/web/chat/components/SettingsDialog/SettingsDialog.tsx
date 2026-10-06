@@ -4,14 +4,16 @@ import { Settings, X, Check, Loader2, Download, Copy, CheckCircle2, ChevronDown 
 import { api } from '../../services/api';
 import { usePreferencesContext } from '../../contexts/PreferencesContext';
 import { ProviderAuthTab } from './ProviderAuthTab';
+import { BackgroundCallsTab } from './BackgroundCallsTab';
 import { CLAUDE_MODELS } from '@/constants/claude-models';
 import { FeedbackSettingsSection } from '../Feedback/FeedbackSettingsSection';
 import { UpdateSettingsSection } from '../Update/UpdateNotice';
 
-type SettingsTab = 'auth' | 'connection' | 'general';
+type SettingsTab = 'auth' | 'background' | 'connection' | 'general';
 
 const TABS: Array<[SettingsTab, string]> = [
   ['auth', 'Providers'],
+  ['background', 'Background'],
   ['connection', 'Access'],
   ['general', 'General'],
 ];
@@ -168,7 +170,7 @@ export function SettingsDialog({ isOpen, onClose, initialTab = 'auth' }: Setting
               <button
                 key={tab}
                 onClick={() => setActiveTab(tab)}
-                className={`px-3 py-1 text-[13px] whitespace-nowrap rounded-md transition-colors cursor-pointer ${
+                className={`px-2 sm:px-3 py-1 text-[13px] whitespace-nowrap rounded-md transition-colors cursor-pointer ${
                   activeTab === tab
                     ? 'bg-surface-2 text-fg'
                     : 'text-fg-2 hover:text-fg'
@@ -283,6 +285,10 @@ export function SettingsDialog({ isOpen, onClose, initialTab = 'auth' }: Setting
 
           {activeTab === 'auth' && (
             <ProviderAuthTab />
+          )}
+
+          {activeTab === 'background' && (
+            <BackgroundCallsTab onOpenProviders={() => setActiveTab('auth')} />
           )}
 
           {activeTab === 'general' && (

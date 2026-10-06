@@ -1,6 +1,7 @@
 import type { GenerationConfig } from '@/types/config.js';
 import { ConfigService } from './config-service.js';
 import { anthropicClientFactory } from './anthropic-client-factory.js';
+import { backgroundRoute } from './background-text-client.js';
 import { createLogger } from './logger.js';
 import { CONFIG_FILE } from '@/utils/constants.js';
 
@@ -44,11 +45,24 @@ const DESCRIPTIONS: Record<GenerationFeature, string> = {
  * worker or outcome. Insights stays off: it runs on every turn, so its bill
  * grows with use.
  */
-const KEYED_DEFAULTS: Partial<Record<GenerationFeature, () => boolean>> = {
-  workerReportSummary: () => anthropicClientFactory.isConfigured(),
-  workerActivity: () => anthropicClientFactory.isConfigured(),
-  projectName: () => anthropicClientFactory.isConfigured(),
+const KEYED_DEFAULTS: Partial<Record<GenerationFeature, true>> = {
+  workerReportSummary: true,
+  workerActivity: true,
+  projectName: true,
 };
+
+/**
+ * Whether an unset keyed switch comes on: its route must be ready and not the
+ * ChatGPT plan, whose allowance is spent only on switches turned on by hand.
+ * An endpoint the user chose for the job counts as ready.
+ */
+function keyedDefault(feature: GenerationFeature): boolean {
+  if (!KEYED_DEFAULTS[feature]) return false;
+  const route = backgroundRoute(feature === 'gemini' ? undefined : feature);
+  if (route.provider === 'chatgpt-plan') return false;
+  if (route.provider === 'anthropic-api') return anthropicClientFactory.isConfigured();
+  return true;
+}
 
 /**
  * Test seam. Unit tests drive the generators directly with fake model clients
@@ -75,7 +89,7 @@ export function isGenerationEnabled(feature: GenerationFeature): boolean {
     return false;
   }
   if (typeof explicit === 'boolean') return explicit;
-  return KEYED_DEFAULTS[feature]?.() ?? false;
+  return keyedDefault(feature);
 }
 
 /**

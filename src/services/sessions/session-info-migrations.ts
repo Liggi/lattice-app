@@ -542,6 +542,7 @@ class SessionInfoSchemaBootstrapRunner {
       this.migrateSessionCreatedHiddenColumn(columnNames);
       this.migrateSessionProjectNameColumn(columnNames);
       this.migrateSessionArchivedAtColumn(columnNames);
+      this.addSessionsColumnIfMissing(columnNames, 'slept_at', 'ALTER TABLE sessions ADD COLUMN slept_at TEXT DEFAULT NULL');
       // Covering index for archived filter — the sessions table contains large
       // identity_image blobs, so a full scan for WHERE archived = 0 is very slow.
       this.db.exec('CREATE INDEX IF NOT EXISTS idx_sessions_archived ON sessions(archived, session_id)');
