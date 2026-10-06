@@ -15,6 +15,7 @@ import { ASK_USAGE, runAskCommand } from './cli/ask-command.js';
 import { EXPLAIN_USAGE, runExplainCommand } from './cli/explain-command.js';
 import { DIAGRAM_USAGE, runDiagramCommand } from './cli/diagram-command.js';
 import { CHATGPT_PLAN_USAGE, runChatGPTPlanCommand } from './cli/chatgpt-plan-command.js';
+import { KEYS_USAGE, runKeysCommand } from './cli/keys-command.js';
 
 // The session block is generated from the verb spec rather than written out
 // here. Hand-maintained, it went stale: it hid `list --project/--tag` and
@@ -36,6 +37,7 @@ ${ASK_USAGE}
 ${EXPLAIN_USAGE}
 ${DIAGRAM_USAGE}
 ${CHATGPT_PLAN_USAGE}
+${KEYS_USAGE}
   lattice session <verb> --help        Flags and notes for one verb.
   lattice --help | -h                  Show this help.
 `;
@@ -65,6 +67,11 @@ export async function run(): Promise<void> {
 
   if (first === 'chatgpt-plan') {
     await runChatGPTPlanCommand(args.slice(1));
+    return;
+  }
+
+  if (first === 'keys') {
+    await runKeysCommand(args.slice(1));
     return;
   }
 

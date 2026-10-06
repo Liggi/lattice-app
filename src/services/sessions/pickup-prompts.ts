@@ -30,6 +30,11 @@ export function latticeCli(): string {
   return process.env.LATTICE_CLI?.trim() || shellQuote(AGENT_CLI_PATH);
 }
 
+/** For a session the user may ask to set up keys from a file someone sent them. */
+export function keyFileGuidance(cli: string): string {
+  return `Key files: when ${userName()} has a file of API keys to set up, save them with \`${cli} keys import <file>\`, which saves them as Settings does and deletes the file. Never cat, print or paste a key file or its keys.`;
+}
+
 /**
  * How a message to the user is laid out, for the coordinator preamble. A recap whose content was right was still hard to read
  * because it arrived as one block of prose; emojis, bullet points and short
@@ -195,6 +200,8 @@ export function buildCoordinatorPreamble(input: CoordinatorPreambleInput): strin
     ...messageShapeGuidance(),
     '',
     ...diagramGuidance(input.cli),
+    '',
+    keyFileGuidance(input.cli),
     '',
     'Working with workers',
     '- A worker is a capable colleague picking up a thread, not a tool you operate. Brief it the way you would brief a',
@@ -519,6 +526,8 @@ export function buildSessionPreamble(cli: string, conversationId: string): strin
     `Checking understanding: when ${userName()} is learning something with you and wants to check they have it, \`${cli} explain --session ${conversationId} --rubric <file>\` puts a card in the chat where they explain it in their own words and see, as they type, which ideas they have covered. \`${cli} explain --help\` says how to write the rubric.`,
     '',
     ...diagramGuidance(cli),
+    '',
+    keyFileGuidance(cli),
     '',
     '---',
     '',

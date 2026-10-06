@@ -68,6 +68,19 @@ The coordinator is the conversation you talk to. It agrees the goal with you, st
 
 To run a single agent without a coordinator, click **New session** and choose **Claude** or **Codex**.
 
+### Setting up keys from a file
+
+If someone sends you API keys to use, they can send them as a small JSON file. Either key can be left out:
+
+```json
+{
+  "anthropic": "sk-ant-...",
+  "typesafe": "..."
+}
+```
+
+Save it anywhere (your Downloads folder is fine) and ask your project to set up your keys from it. Its agent runs `lattice keys import <file>`, which saves the keys exactly as **Save** in **Settings → Providers** does, prints only which keys it saved, and deletes the file. If the file is malformed or the save fails, it says why and leaves the file where it was. Send the file privately, for example as a 1Password share, not in a chat.
+
 > [!WARNING]
 > Claude workers run in Claude's `auto` mode by default: a classifier reviews each action and blocks risky ones. Coordinators and sessions you start yourself run with permission prompts off (Claude's `bypassPermissions` mode), and Codex runs with full access. They can run any command your user account can, in any folder. Point them only at work you're happy for an agent to do unattended.
 
