@@ -108,7 +108,9 @@ export type {
   FileSystemEntry,
   Command,
   EmojiSuggestion,
+  LargeTextFileUpload,
   AttachmentBlock,
+  ComposerPastedSpan,
 } from './components/Composer/index.js';
 
 // ── Reactions and emoji ──

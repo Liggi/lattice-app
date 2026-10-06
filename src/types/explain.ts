@@ -207,9 +207,9 @@ export const STATUS_TEXT: Record<ExplainStatus, string> = {
   demonstrated: 'Understanding demonstrated',
 };
 
-/** The explanation split into sentences, as Jev is asked to point at one. */
+/** The explanation split into sentences, as Jev is asked to point at one. A line break ends a sentence too. */
 export function splitSentences(text: string): string[] {
-  return text.split(/(?<=[.!?])\s+/).map((sentence) => sentence.trim()).filter(Boolean);
+  return text.split(/(?<=[.!?])\s+|\s*\n\s*/).map((sentence) => sentence.trim()).filter(Boolean);
 }
 
 const THINKING_BLOCKS = new Set(['thinking', 'redacted_thinking', 'reasoning']);

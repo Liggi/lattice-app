@@ -217,6 +217,10 @@ If behavior depends on cached reflection/review outputs, restart the server and 
 
 Lattice renders native Claude tools but does not inject them. Do not confuse tool rendering code with tool provisioning.
 
+### Release notes
+
+The GitHub release body is what users read in the update dialog before they press Update. Write it as a short bullet list, one line per change, in words a non-developer understands: what they can now do or what stopped going wrong. No paragraphs, no code, commands, config keys or file formats; point to the Settings page or README instead.
+
 ## Design Principles
 
 ### Visual language

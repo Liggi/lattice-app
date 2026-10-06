@@ -178,10 +178,16 @@ function checkQuestions(asked: ExplainAskedData, sentences: string[]): Record<st
     };
   }
   for (const m of asked.misconceptions) {
+    // Shown the idea it undoes, Jev stops flagging a right answer that only shares the mistake's words.
+    const correct = asked.ideas.find((idea) => idea.id === m.idea)?.statement ?? '';
     questions[`mis:${m.id}`] = {
       type: 'noul',
-      instructions: { misconception: m.statement, question: 'Does `explanation` state or clearly imply `misconception`?' },
-      criteria: { true: 'The explanation asserts the misconception or something that means the same.', false: 'The explanation does not assert it, or contradicts it.' },
+      instructions: {
+        misconception: m.statement,
+        correct_idea: correct,
+        question: 'Does `explanation` assert `misconception` rather than `correct_idea`? An explanation that states `correct_idea` in its own words, or uses similar vocabulary without the mistaken claim, does not assert it.',
+      },
+      criteria: { true: 'The explanation makes the mistaken claim in `misconception`, in any wording.', false: 'The explanation states `correct_idea`, is consistent with it, or does not address the point.' },
     };
     if (sentences.length > 1) {
       questions[`where:${m.id}`] = {
@@ -281,7 +287,7 @@ export function finishLine(threadId: string, state: ExplainState, passed: boolea
   const { asked, last } = state;
   const marks = last?.marks ?? {};
   const flags = last?.flags ?? [];
-  const met = asked.ideas.filter((idea) => marks[idea.id] === 'met').length;
+  const met = asked.ideas.filter((idea) => shownMark(asked, marks, flags, idea.id) === 'met').length;
   const lines = [
     passed
       ? `${UserName()} finished your explain-back "${asked.prompt}": understanding demonstrated.`

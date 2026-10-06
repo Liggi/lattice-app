@@ -23,13 +23,14 @@ export type {
   ContextCompactionData,
   ContextCompactionPhase,
   InputSentData,
+  PastedSpan,
   TaskStartedData,
   TaskUpdatedData,
   TaskNotificationData,
   ApiUsage,
 } from './events.js'
 
-export { EVENT_TYPES, ATTACHMENTS_EXTRA_KEY, attachmentBlocksFromExtra } from './events.js'
+export { EVENT_TYPES, ATTACHMENTS_EXTRA_KEY, attachmentBlocksFromExtra, PASTES_EXTRA_KEY, parsePastedSpans, pastedSpansFromExtra } from './events.js'
 
 export { deriveStatus, deriveActivity, deriveProcessAlive, deriveUsage, deriveBackgroundTasks, deriveBackgroundTaskStates, deriveUnfinishedTasks, hasRunningBackgroundTasks, deriveScheduledWakeup, derivePlanOutcomes } from './derive.js'
 export type { Status, Activity, TurnUsage, BackgroundTask, BackgroundTaskState, DerivedScheduledWakeup } from './derive.js'

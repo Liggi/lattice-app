@@ -1,7 +1,7 @@
 /* oxlint-disable react-doctor/no-cascading-set-state, react-doctor/no-giant-component, react-doctor/prefer-useReducer, react-doctor/no-render-in-render, react-doctor/no-effect-event-handler, react-doctor/no-array-index-as-key */
 import React, { useMemo, useState, useCallback, useRef } from 'react';
 import { SkillHeading } from './SkillHeading';
-import { Code, Lightbulb, AlertTriangle, Minimize2, Maximize2, Copy, Check, FileText, Image, Loader2, ExternalLink, FlaskConical, LayoutDashboard, MessageCircle, Wrench, Brain } from 'lucide-react';
+import { Code, Lightbulb, AlertTriangle, Copy, Check, FileText, Image, Loader2, ExternalLink, FlaskConical, LayoutDashboard, MessageCircle, Wrench, Brain } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { remarkSlackBullets } from '../../utils/slack-bullets';
@@ -17,6 +17,9 @@ import { copyText } from '../../utils/copy-text';
 import { parseAnnotatedMessage } from '../../utils/annotations-format';
 import { hasVisibleText } from '../../utils/blank-text';
 import { AnnotatedUserMessage } from './AnnotatedUserMessage';
+import { UserText } from './UserText';
+import { AttachedText } from './AttachedText';
+import { isAttachedTextFileBlock, parseAttachedTextFile } from '@/constants/attached-text-file';
 // import type { ContentBlockParam } from '@anthropic-ai/sdk/resources/messages/messages';
 
 interface MessageItemProps {
@@ -41,9 +44,18 @@ interface MessageItemProps {
 const EMPTY_TOOL_RESULTS: Record<string, ToolResult> = {};
 const EMPTY_CHILDREN_MESSAGES: Record<string, ChatMessage[]> = {};
 
-/** A user message's images and documents, as its bubble shows them above the text. */
+/** The blocks of a user message that are attachments: images, documents and attached text files. */
+export function isAttachmentBlock(block: { type: string; text?: string }): boolean {
+  return block.type === 'image' || block.type === 'document' || isAttachedTextFileBlock(block);
+}
+
+/** A user message's attachments, as its bubble shows them above the text. */
 export function attachmentMedia(blocks: readonly DisplayContentBlock[]): React.ReactNode[] {
-  return (blocks as ReadonlyArray<{ type: string; source?: { type: string; media_type: string; data?: string; url?: string } }>).map((block, idx) => {
+  return (blocks as ReadonlyArray<{ type: string; text?: string; source?: { type: string; media_type: string; data?: string; url?: string } }>).map((block, idx) => {
+    const file = block.type === 'text' && block.text ? parseAttachedTextFile(block.text) : null;
+    if (file) {
+      return <AttachedText key={`file-${idx}`} kind="file" label={file.fileName} content={file.content} />;
+    }
     if (block.type === 'image' && block.source) {
       const src = block.source.type === 'base64'
         ? `data:${block.source.media_type};base64,${block.source.data}`
@@ -531,7 +543,6 @@ export function MessageItem({
   // blocks that existed before streaming starts (previous turns) must not.
   const mountedWhileStreaming = useRef(isStreaming);
 
-  const [isUserMessageExpanded, setIsUserMessageExpanded] = useState(false);
   const _inlineToolResults = useMemo<Record<string, ToolResult>>(() => {
     if (!Array.isArray(message.content)) {
       return {};
@@ -557,17 +568,20 @@ export function MessageItem({
   // Handle user messages
   if (message.type === 'user') {
     // Extract text content
-    let content = typeof message.content === 'string'
+    const rawContent = typeof message.content === 'string'
       ? message.content
       : Array.isArray(message.content)
-        ? message.content.filter((block: { type: string }) => block.type === 'text').map((block: { type: string; text?: string }) => block.text || '').join('\n')
+        ? message.content.filter((block: { type: string; text?: string }) => block.type === 'text' && !isAttachedTextFileBlock(block)).map((block: { type: string; text?: string }) => block.text || '').join('\n')
         : '';
 
-    content = content.trim();
+    const content = rawContent.trim();
+    // Pasted stretches count back from the end of the text, so trimming its end moves them.
+    const trimmedFromEnd = rawContent.length - rawContent.trimEnd().length;
+    const pastes = message.pastes?.map((span) => ({ fromEnd: span.fromEnd - trimmedFromEnd, length: span.length }));
 
-    // Extract image/document blocks for rendering
+    // Extract attachment blocks (images, documents, attached text files) for rendering
     const mediaBlocks = Array.isArray(message.content)
-      ? message.content.filter((block: { type: string }) => block.type === 'image' || block.type === 'document')
+      ? message.content.filter(isAttachmentBlock)
       : [];
 
     // Defensive guard: don't render empty user cards when a user turn carries
@@ -578,11 +592,6 @@ export function MessageItem({
 
     // Notes on the agent's reply render as passage + note; they are never collapsed.
     const annotated = parseAnnotatedMessage(content);
-    const lines = content.split('\n');
-    const shouldShowExpandButton = !annotated && lines.length > 8;
-    const displayLines = isUserMessageExpanded ? lines : lines.slice(0, 8);
-    const hiddenLinesCount = lines.length - 8;
-    const displayContent = displayLines.join('\n');
 
     const mediaNodes = attachmentMedia(mediaBlocks);
 
@@ -603,31 +612,15 @@ export function MessageItem({
 
     const userMessageCard = (
       <div className="group/user relative rounded-lg bg-surface w-full">
-        {shouldShowExpandButton && (
-          <button
-            onClick={() => setIsUserMessageExpanded(!isUserMessageExpanded)}
-            className="absolute right-1.5 top-1.5 p-1 ui-icon-btn text-fg-3"
-            aria-label={isUserMessageExpanded ? "Show fewer lines" : "Show all lines"}
-          >
-            {isUserMessageExpanded ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
-          </button>
-        )}
-        <div className={`px-3.5 py-2.5 text-sm leading-[1.55] text-fg${shouldShowExpandButton ? ' pr-9' : ''}`}>
+        <div className="px-3.5 py-2.5 text-sm leading-[1.55] text-fg">
           {mediaBlocks.length > 0 && (
-            <div className="flex flex-wrap gap-2 mb-2">{mediaNodes}</div>
+            <div className={`flex flex-wrap gap-2${content ? ' mb-2' : ''}`}>{mediaNodes}</div>
           )}
           {annotated ? (
             <AnnotatedUserMessage parsed={annotated} />
-          ) : (
-            <div className="whitespace-pre-wrap break-words">
-              {displayContent}
-              {!isUserMessageExpanded && shouldShowExpandButton && (
-                <span className="text-fg-3">
-                  {'\n'}... +{hiddenLinesCount} lines
-                </span>
-              )}
-            </div>
-          )}
+          ) : content ? (
+            <UserText text={content} pastes={pastes} />
+          ) : null}
         </div>
       </div>
     );

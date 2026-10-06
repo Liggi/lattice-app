@@ -2,6 +2,7 @@ import type { Express } from 'express';
 import path from 'path';
 import { createSystemRoutes } from '@/routes/system/system.routes.js';
 import { createSkillsRoutes } from '@/routes/system/skills.routes.js';
+import { createAttachmentUploadRoutes } from '@/routes/conversation/attachment-uploads.routes.js';
 import { createPermissionRoutes } from '@/routes/session/permission.routes.js';
 import { createPendingQuestionRoutes } from '@/routes/session/pending-question.routes.js';
 import { createFileSystemRoutes } from '@/routes/system/filesystem.routes.js';
@@ -88,6 +89,7 @@ export function registerAppRoutes(deps: RegisterAppRoutesDeps): void {
   app.use('/api/background', createBackgroundRoutes());
   app.use('/api/notifications', createNotificationRoutes());
   app.use('/api/feedback', createFeedbackRoutes(deps.configService));
+  app.use('/api/attachment-uploads', createAttachmentUploadRoutes());
   app.use('/api/update', createUpdateRoutes());
   app.use('/api/pending-questions', createPendingQuestionRoutes(
     deps.pendingQuestionService,

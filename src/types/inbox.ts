@@ -33,7 +33,7 @@
  * restart's copy of an earlier message; the fold keeps hiding those copies.
  */
 
-import type { SessionEvent } from '@liggi/agent-ui-harness/protocol';
+import type { PastedSpan, SessionEvent } from '@liggi/agent-ui-harness/protocol';
 import { INPUT_DELIVERED_EVENT, type InputDeliveredData } from './immediate-delivery.js';
 
 /**
@@ -76,6 +76,8 @@ export interface InboxQueuedData {
   text: string;
   /** The attachments sent with it (images, documents), as the `input:sent` that carries it will hold them. */
   blocks?: Array<Record<string, unknown>>;
+  /** The stretches of `text` the user pasted, so the bubble can show them closed. */
+  pastes?: PastedSpan[];
   worker?: string;
   /** For `agent`: the conversation that declared itself the sender; absent when none did. */
   sender?: string;

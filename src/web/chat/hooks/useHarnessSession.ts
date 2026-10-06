@@ -16,7 +16,7 @@ import type {
 import type { Status as HarnessStatus, Activity, TurnUsage, BackgroundTaskState } from '@liggi/agent-ui-harness/protocol';
 import { deriveBackgroundTaskStates, groupEvents, isCollapsedGroup, classifyTool, extractSubagentChildren, detectPendingMessages, createRunScopedCoalescer } from '@liggi/agent-ui-harness/protocol';
 import { derivePendingWork, type PendingWork } from '@/harness/derive-pending-work.js';
-import type { PendingMessage, ConsumedMessage } from '@liggi/agent-ui-harness/protocol';
+import type { PendingMessage, ConsumedMessage, PastedSpan } from '@liggi/agent-ui-harness/protocol';
 import { foldInbox, type InboxFold, type InboxQueuedData } from '@/types/inbox';
 import { foldAgentReactions, foldReactions } from '@/types/message-reactions';
 import type { CollapsedGroup } from '@liggi/agent-ui-harness/protocol';
@@ -60,6 +60,8 @@ export interface PendingInput extends PendingMessage {
   undeliverable: string | null;
   /** Images or documents sent with it, drawn above the text as in the thread. */
   attachments?: DisplayContentBlock[];
+  /** The stretches of its text the user pasted, counted back from the end. */
+  pastes?: PastedSpan[];
   /** Present when another agent sent it; absent on the user's own message. */
   attribution?: MessageAttribution;
 }
@@ -425,7 +427,7 @@ export function placeWaitingMessages(events: SessionEvent[], inbox: InboxFold): 
   for (const p of detected.pending) {
     const text = stripContextRestore(p.text);
     if (isWorkerInput(text) || inbox.hiddenInputSeqs.has(p.inputEvent.seq)) continue;
-    pending.push({ ...p, text, undeliverable: null, attachments: attachmentsOf(p.inputEvent) });
+    pending.push({ ...p, text, undeliverable: null, attachments: attachmentsOf(p.inputEvent), pastes: pastesOf(p.inputEvent) });
   }
   for (const c of detected.consumed) {
     if (isWorkerInput(inputText(c.inputEvent)) || inbox.hiddenInputSeqs.has(c.inputEvent.seq)) continue;
@@ -444,7 +446,7 @@ export function placeWaitingMessages(events: SessionEvent[], inbox: InboxFold): 
       ? { sender: item.sender, passedOn: item.passedOn }
       : undefined;
     if (item.readBySeq === null) {
-      pending.push({ inputEvent: item.event, text: item.text, undeliverable: item.undeliverable, attribution, attachments: attachmentsOf(item.event) });
+      pending.push({ inputEvent: item.event, text: item.text, undeliverable: item.undeliverable, attribution, attachments: attachmentsOf(item.event), pastes: pastesOf(item.event) });
       continue;
     }
     // It enters the thread where the session took it in. A message sent into
@@ -471,6 +473,12 @@ function attributionOf(event: SessionEvent): MessageAttribution | undefined {
 function attachmentsOf(event: SessionEvent): DisplayContentBlock[] | undefined {
   const blocks = (event.data as { blocks?: unknown }).blocks;
   return Array.isArray(blocks) && blocks.length > 0 ? blocks as DisplayContentBlock[] : undefined;
+}
+
+/** The pasted stretches on an `input:sent` or `input:queued` event; absent when it has none. */
+function pastesOf(event: SessionEvent): PastedSpan[] | undefined {
+  const pastes = (event.data as { pastes?: unknown }).pastes;
+  return Array.isArray(pastes) && pastes.length > 0 ? pastes as PastedSpan[] : undefined;
 }
 
 /**
@@ -500,6 +508,7 @@ function consumedMessage(consumed: ConsumedMessage, providerBySeq: ReadonlyMap<n
       timestamp: new Date(consumed.inputEvent.timestamp).toISOString(),
       provider: providerBySeq.get(consumed.inputEvent.seq) ?? 'claude',
       attribution: attributionOf(consumed.inputEvent),
+      pastes: pastesOf(consumed.inputEvent),
     },
   };
 }
@@ -801,6 +810,7 @@ function eventToMessage(
         content,
         timestamp: new Date(event.timestamp).toISOString(),
         provider,
+        pastes: pastesOf(event),
       };
     }
 

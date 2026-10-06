@@ -14,6 +14,7 @@ import type { Provider } from '@/types/unified-messages.js';
 
 import { Router, type Request, type Response, type NextFunction } from 'express';
 import { SessionManager, createSSEHandler } from '@liggi/agent-ui-harness/server';
+import { PASTES_EXTRA_KEY, parsePastedSpans } from '@liggi/agent-ui-harness/protocol';
 import { createLogger } from '../services/infrastructure/logger.js';
 import { CODEX_MODELS, DEFAULT_CODEX_MODEL_ID } from '../constants/codex-models.js';
 import { CLAUDE_MODELS } from '../constants/claude-models.js';
@@ -54,6 +55,7 @@ import { isFromLatticePage } from '../middleware/trusted-origin.js';
 import { isSingleEmoji } from '../types/message-reactions.js';
 import { INBOX_READ_EVENT, INBOX_UNDELIVERABLE_EVENT, type InboxReadData, type InboxUndeliverableData } from '../types/inbox.js';
 import { persistCoordinatorImages } from '../services/sessions/coordinator-attachments.js';
+import { AttachedFileError, saveLargeAttachedFiles } from '../services/sessions/large-attached-files.js';
 import { appendCustomHarnessEvent } from './harness-custom-events.js';
 import { noteUserSent } from '../services/sessions/project-needs-you.js';
 import type { WorkerAnsweredData, WorkerReassignedData } from '../types/worker-events.js';
@@ -287,7 +289,22 @@ export function createHarnessRoutes(sessionManager: SessionManager, resolvers: H
       res.status(400).json({ error: parsedAttachments.error });
       return;
     }
-    const attachments = parsedAttachments.blocks;
+    // A text file too large to send inline goes as its saved path
+    // (large-attached-files.ts).
+    let attachments: typeof parsedAttachments.blocks;
+    try {
+      attachments = await saveLargeAttachedFiles(sessionId, parsedAttachments.blocks);
+    } catch (error) {
+      if (!(error instanceof AttachedFileError)) throw error;
+      res.status(error.status).json({ error: error.message });
+      return;
+    }
+    const parsedPastes = parsePastedSpans(body.pastes, prompt?.length ?? 0);
+    if (!parsedPastes.ok) {
+      res.status(400).json({ error: parsedPastes.error });
+      return;
+    }
+    const pastes = parsedPastes.spans;
 
     // A turn carrying only attachments and no typed text is legitimate — a bare
     // screenshot paste. Only a wholly empty body is a bad request.
@@ -331,6 +348,7 @@ export function createHarnessRoutes(sessionManager: SessionManager, resolvers: H
           sessionId,
           provider,
           ...(attachments.length > 0 ? { attachments } : {}),
+          ...(pastes.length > 0 ? { [PASTES_EXTRA_KEY]: pastes } : {}),
           ...(provider === 'codex' ? {
             model: resumeModel ?? DEFAULT_CODEX_MODEL_ID,
             ...(knownEffort ? { reasoningEffort: knownEffort } : {}),
@@ -384,6 +402,15 @@ export function createHarnessRoutes(sessionManager: SessionManager, resolvers: H
       return;
     }
     let attachments = parsedAttachments.blocks;
+    // Which stretches of the input the user pasted: display only, never sent
+    // to the provider. Offsets count from the end of the text, so the context
+    // blocks put in front of it below leave them pointing at the same words.
+    const parsedPastes = parsePastedSpans(body.pastes, input?.length ?? 0);
+    if (!parsedPastes.ok) {
+      res.status(400).json({ error: parsedPastes.error });
+      return;
+    }
+    const pastes = parsedPastes.spans;
 
     if (!input && attachments.length === 0) {
       res.status(400).json({ error: 'input is required' });
@@ -416,6 +443,17 @@ export function createHarnessRoutes(sessionManager: SessionManager, resolvers: H
     if (!inboxIds && attachments.length > 0
       && ConversationService.getInstance().getConversation(sessionId)?.coordinator) {
       attachments = persistCoordinatorImages(sessionId, attachments);
+    }
+    // A text file too large to send inline goes as its saved path
+    // (large-attached-files.ts).
+    if (!inboxIds) {
+      try {
+        attachments = await saveLargeAttachedFiles(sessionId, attachments);
+      } catch (error) {
+        if (!(error instanceof AttachedFileError)) throw error;
+        res.status(error.status).json({ error: `Not sent: ${error.message}` });
+        return;
+      }
     }
 
     // `lattice session send --from <conv> [--summary "…"]`: when the sender is
@@ -624,6 +662,7 @@ export function createHarnessRoutes(sessionManager: SessionManager, resolvers: H
           ...provenance,
           text: input ?? '',
           attachmentsJson: attachments.length > 0 ? JSON.stringify(attachments) : null,
+          pastes,
           model,
           reasoningEffort,
           afterTurn,
@@ -650,6 +689,7 @@ export function createHarnessRoutes(sessionManager: SessionManager, resolvers: H
           ...provenance,
           text: input ?? '',
           attachmentsJson: attachments.length > 0 ? JSON.stringify(attachments) : null,
+          pastes,
           model,
           reasoningEffort,
         });
@@ -709,6 +749,7 @@ export function createHarnessRoutes(sessionManager: SessionManager, resolvers: H
           ...provenance,
           text: input ?? '',
           attachmentsJson: attachments.length > 0 ? JSON.stringify(attachments) : null,
+          pastes,
           model,
           reasoningEffort,
           afterTurn,
@@ -745,6 +786,7 @@ export function createHarnessRoutes(sessionManager: SessionManager, resolvers: H
           source: 'user',
           text: input,
           attachmentsJson: attachments.length > 0 ? JSON.stringify(attachments) : null,
+          pastes,
           model,
           reasoningEffort,
         });
@@ -766,6 +808,7 @@ export function createHarnessRoutes(sessionManager: SessionManager, resolvers: H
           source: 'user',
           text: input ?? '',
           attachmentsJson: attachments.length > 0 ? JSON.stringify(attachments) : null,
+          pastes,
           model,
           reasoningEffort,
         });
@@ -808,9 +851,10 @@ export function createHarnessRoutes(sessionManager: SessionManager, resolvers: H
       const outgoing = restore + orientation + drift + nudge + staleLine + (input ?? '');
 
 
-      const sendExtra = attachments.length > 0 || model || knownEffort
+      const sendExtra = attachments.length > 0 || pastes.length > 0 || model || knownEffort
         ? {
             ...(attachments.length > 0 ? { attachments } : {}),
+            ...(pastes.length > 0 ? { [PASTES_EXTRA_KEY]: pastes } : {}),
             ...(model ? { model } : {}),
             ...(knownEffort ? { reasoningEffort: knownEffort } : {}),
           }
@@ -858,6 +902,7 @@ export function createHarnessRoutes(sessionManager: SessionManager, resolvers: H
                 sessionId,
                 provider,
                 ...(attachments.length > 0 ? { attachments } : {}),
+                ...(pastes.length > 0 ? { [PASTES_EXTRA_KEY]: pastes } : {}),
                 ...(provider === 'codex' ? {
                   model: resumeModel ?? DEFAULT_CODEX_MODEL_ID,
                   ...(knownEffort ? { reasoningEffort: knownEffort } : {}),

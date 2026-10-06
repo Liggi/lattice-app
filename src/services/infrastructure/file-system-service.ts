@@ -88,7 +88,8 @@ export class FileSystemService {
       const errorCode = (error as NodeJS.ErrnoException).code;
       if (errorCode === 'ENOENT') {
         throw new LatticeError('PATH_NOT_FOUND', `Path not found: ${requestedPath}`, 404);
-      } else if (errorCode === 'EACCES') {
+      } else if (errorCode === 'EACCES' || errorCode === 'EPERM') {
+        // macOS answers EPERM when it has not let this app into a folder such as Documents or Desktop.
         throw new LatticeError('ACCESS_DENIED', `Access denied to path: ${requestedPath}`, 403);
       }
       

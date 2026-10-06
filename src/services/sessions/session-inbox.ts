@@ -45,6 +45,7 @@
  * pending/supplying/supplied/failed/unknown machine unnecessary.
  */
 
+import type { PastedSpan } from '@liggi/agent-ui-harness/protocol';
 import { randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { parseJson } from '../../utils/json.js';
@@ -157,6 +158,8 @@ export function enqueueInboxItem(input: {
   worker?: string | null;
   workerModel?: string | null;
   attachmentsJson?: string | null;
+  /** Display only: rides on the queued event the bubble is drawn from, never to the model. */
+  pastes?: PastedSpan[];
   model?: string | null;
   reasoningEffort?: string | null;
   /** The conversation that declared itself the sender (`--from`). */
@@ -211,6 +214,7 @@ export function enqueueInboxItem(input: {
       // The bubble is drawn from this event, not from the batch that carries
       // the item, so it needs the attachments too.
       ...(Array.isArray(attachments) && attachments.length > 0 ? { blocks: attachments as Array<Record<string, unknown>> } : {}),
+      ...(input.pastes && input.pastes.length > 0 ? { pastes: input.pastes } : {}),
       ...(input.worker ? { worker: input.worker } : {}),
       ...(input.sender ? { sender: input.sender } : {}),
       ...(input.passedOn ? { passedOn: true } : {}),

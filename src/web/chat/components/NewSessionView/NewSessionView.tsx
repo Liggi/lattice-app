@@ -8,6 +8,7 @@
  * (set by the sidebar "New Session" button) or fall back to defaults.
  */
 
+import type { PastedSpan } from '@liggi/agent-ui-harness/protocol';
 import React, { useState, useCallback, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useSearchParams, useNavigate } from 'react-router-dom';
@@ -306,7 +307,7 @@ export function NewSessionView({ sidebarOpen, onToggleSidebar }: NewSessionViewP
     _permissionMode?: string,
     attachments?: ContentBlockParam[],
     effort?: string,
-    _provider?: Provider,
+    pastes?: PastedSpan[],
   ) => {
     // A bare screenshot paste with no typed text is a valid first message —
     // /api/conv/create accepts message-or-initialContent.
@@ -315,7 +316,7 @@ export function NewSessionView({ sidebarOpen, onToggleSidebar }: NewSessionViewP
 
     setIsCreating(true);
 
-    const requestProvider = coordinator ? provider : (_provider || provider);
+    const requestProvider = provider;
     const targetProvider = requestProvider;
     const providerFallbackModel = targetProvider === 'codex'
       ? codexDefaultModel
@@ -353,6 +354,7 @@ export function NewSessionView({ sidebarOpen, onToggleSidebar }: NewSessionViewP
         // Composer attachments for the first turn. The provider adapter validates
         // the concrete block types it supports and fails visibly on a mismatch.
         ...(hasAttachments ? { initialContent: attachments } : {}),
+        ...(pastes && pastes.length > 0 ? { pastes } : {}),
         ...(requestProvider === 'codex' && goalObjective.trim()
           ? { goalObjective: goalObjective.trim() }
           : {}),

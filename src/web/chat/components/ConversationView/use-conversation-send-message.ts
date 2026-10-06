@@ -1,5 +1,6 @@
 import { useCallback } from 'react';
 import type { ContentBlockParam } from '../../types';
+import type { PastedSpan } from '@liggi/agent-ui-harness/protocol';
 import { markUserSend } from '../shared/user-send-marks';
 
 /** Signature of the view's send: resolves true when the server accepted the message. */
@@ -9,6 +10,7 @@ export type SendMessage = (
   permissionMode?: string,
   attachments?: ContentBlockParam[],
   reasoningEffort?: string,
+  pastes?: PastedSpan[],
 ) => Promise<boolean>;
 
 /**
@@ -37,11 +39,15 @@ export function useConversationSendMessage({
     permissionMode?: string,
     attachments?: ContentBlockParam[],
     reasoningEffort?: string,
+    pastes?: PastedSpan[],
   ): Promise<boolean> => {
     // Composer attachments (already ContentBlockParam[] via LatticeComposer's
     // toContentBlockParam) ride both send paths. Omitted entirely when empty so
     // a plain message keeps its existing wire shape.
     const attachmentBlocks = attachments && attachments.length > 0 ? attachments : undefined;
+    // Where the user pasted, so the thread shows each paste closed. Display
+    // only: the server keeps it off what the provider is sent.
+    const pastedSpans = pastes && pastes.length > 0 ? pastes : undefined;
     // A new attempt replaces the last refusal; it must not stay on screen over
     // a message that was then accepted.
     setLocalError(null);
@@ -67,10 +73,11 @@ export function useConversationSendMessage({
         // the /send body and the server threads it to ProcessHandle.write().
         // A model in the bag triggers respawn-with-resume on the new model
         // when the session is idle (mid-session model switch).
-        const sendExtra = model || attachmentBlocks || reasoningEffort
+        const sendExtra = model || attachmentBlocks || pastedSpans || reasoningEffort
           ? {
               ...(model ? { model } : {}),
               ...(attachmentBlocks ? { attachments: attachmentBlocks } : {}),
+              ...(pastedSpans ? { pastes: pastedSpans } : {}),
               ...(reasoningEffort ? { reasoningEffort } : {}),
             }
           : undefined;
@@ -90,6 +97,7 @@ export function useConversationSendMessage({
             model,
             permissionMode,
             ...(attachmentBlocks ? { attachments: attachmentBlocks } : {}),
+            ...(pastedSpans ? { pastes: pastedSpans } : {}),
             ...(reasoningEffort ? { reasoningEffort } : {}),
           }),
         });

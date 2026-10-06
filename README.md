@@ -48,6 +48,10 @@ npm install -g lattice-app
 lattice-app                  # start the server on port 3001
 ```
 
+npm prints some warnings while it installs, such as `npm warn deprecated node-domexception`; they are expected and the install still works.
+
+If the install fails with `EACCES`, npm can't write to its global folder, which happens when Node came from the nodejs.org installer. Run `sudo npm install -g lattice-app` instead, typed into a normal Terminal window: sudo asks for your Mac password there, and shows nothing as you type it. It does not work from inside Claude Code (with `!` or by asking Claude), because there sudo has nowhere to ask for the password.
+
 Open http://localhost:3001. The server keeps running in that terminal; stop it with Ctrl+C. Run it inside `tmux` or `screen`, or under your own service manager, if it should outlive the terminal. `lattice-app --port 3100` picks another port.
 
 Settings and data live in `~/.lattice-app/`. Set `LATTICE_CONFIG_DIR` to keep them somewhere else, for example to run a second instance on another port. If you already run the older `lattice-orchestrator` package, see [Running next to an existing Lattice](docs/running-next-to-lattice-orchestrator.md).

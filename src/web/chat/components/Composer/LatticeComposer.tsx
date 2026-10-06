@@ -15,12 +15,20 @@ import {
   type ComposerRef,
   type ComposerRuntimeConfig,
   type AttachmentBlock,
+  type LargeTextFileUpload,
   ComposerEmojiButton,
   useEmojiShortcodeSearch,
 } from '@liggi/agent-ui-toolkit';
 import type { ContentBlockParam } from '../../types';
+import type { PastedSpan } from '@liggi/agent-ui-harness/protocol';
 import type { Provider } from '@/types/unified-messages';
 import { supportsAttachments } from '@/types/provider-capabilities';
+import {
+  INLINE_TEXT_FILE_MAX_BYTES,
+  UPLOADED_TEXT_FILE_MAX_BYTES,
+  formatAttachedTextFile,
+  formatUploadedTextFile,
+} from '@/constants/attached-text-file';
 import './lattice-composer.css';
 
 // ── Attachment format adapter ──
@@ -38,7 +46,10 @@ function toContentBlockParam(block: AttachmentBlock): ContentBlockParam {
   } else if (block.type === 'text') {
     return {
       type: 'text' as const,
-      text: `[File: ${block.fileName}]\n${block.textContent}`,
+      text: formatAttachedTextFile(
+        block.fileName,
+        block.uploadId ? formatUploadedTextFile(block.uploadId, block.size ?? 0) : block.textContent ?? '',
+      ),
     };
   } else {
     return {
@@ -51,6 +62,31 @@ function toContentBlockParam(block: AttachmentBlock): ContentBlockParam {
     };
   }
 }
+
+// ── Large text files ──
+
+/**
+ * A text file too large to send inline is streamed to the server as it is
+ * attached, so its bytes never sit in the page or a message body; the
+ * message carries the upload id and the server saves the file for the agent
+ * (large-attached-files.ts).
+ */
+async function uploadTextFile(file: File): Promise<string> {
+  const response = await fetch('/api/attachment-uploads', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/octet-stream' },
+    body: file,
+  });
+  const result = await response.json().catch(() => ({})) as { uploadId?: string; error?: string };
+  if (!response.ok || !result.uploadId) throw new Error(result.error ?? `Upload failed (HTTP ${response.status})`);
+  return result.uploadId;
+}
+
+const LARGE_TEXT_FILES: LargeTextFileUpload = {
+  overBytes: INLINE_TEXT_FILE_MAX_BYTES,
+  maxBytes: UPLOADED_TEXT_FILE_MAX_BYTES,
+  upload: uploadTextFile,
+};
 
 // ── Props ──
 
@@ -66,6 +102,7 @@ export interface LatticeComposerProps {
       permissionMode?: string,
       attachments?: ContentBlockParam[],
       effort?: string,
+      pastes?: PastedSpan[],
     ) => void | Promise<void>;
     placeholder?: string;
     isLoading?: boolean;
@@ -131,7 +168,7 @@ export const LatticeComposer = forwardRef<ComposerRef, LatticeComposerProps>(
     // Adapt submit: toolkit → Lattice flat signature
     const onSubmitFn = core?.onSubmit;
     const handleSubmit = useCallback(
-      (message: string, options?: { workingDirectory?: string; model?: string; attachments?: AttachmentBlock[]; effort?: string }) => {
+      (message: string, options?: { workingDirectory?: string; model?: string; attachments?: AttachmentBlock[]; effort?: string; pastes?: PastedSpan[] }) => {
         const attachments = options?.attachments?.map(toContentBlockParam);
         return onSubmitFn?.(
           message,
@@ -140,6 +177,7 @@ export const LatticeComposer = forwardRef<ComposerRef, LatticeComposerProps>(
           permissionMode,
           attachments,
           options?.effort,
+          options?.pastes,
         );
       },
       [onSubmitFn, permissionMode],
@@ -161,6 +199,7 @@ export const LatticeComposer = forwardRef<ComposerRef, LatticeComposerProps>(
             showMenu: false,
           }}
           searchEmoji={handleSearchEmoji}
+          largeTextFiles={LARGE_TEXT_FILES}
           renderLeadingActions={renderEmojiButton}
           {...rest}
         />

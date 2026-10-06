@@ -56,6 +56,7 @@ describe('what the card shows', () => {
 
   it('splits sentences where Jev is asked to point at one', () => {
     expect(splitSentences('It tilts. Days are longer!  So it is warmer?')).toEqual(['It tilts.', 'Days are longer!', 'So it is warmer?']);
+    expect(splitSentences('it tilts\n\nso days are longer\nand warmer')).toEqual(['it tilts', 'so days are longer', 'and warmer']);
   });
 });
 

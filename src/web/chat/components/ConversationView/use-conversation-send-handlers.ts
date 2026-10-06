@@ -1,3 +1,4 @@
+import type { PastedSpan } from '@liggi/agent-ui-harness/protocol';
 import { useCallback, type MutableRefObject } from 'react';
 import { api } from '../../services/api';
 import { formatAnnotatedMessage, type PendingAnnotation } from '../../utils/annotations-format';
@@ -54,6 +55,7 @@ interface ConversationSendSession {
     permissionMode?: string,
     attachments?: ContentBlockParam[],
     reasoningEffort?: string,
+    pastes?: PastedSpan[],
   ) => Promise<boolean>;
   enqueueMessage: (content: string) => Promise<void>;
 }
@@ -91,6 +93,7 @@ export function useConversationSendHandlers(params: {
     permissionMode?: string,
     attachments?: ContentBlockParam[],
     reasoningEffort?: string,
+    pastes?: PastedSpan[],
   ) => Promise<void>;
 } {
   const {
@@ -116,6 +119,7 @@ export function useConversationSendHandlers(params: {
     permissionMode?: string,
     attachments?: ContentBlockParam[],
     reasoningEffort?: string,
+    pastes?: PastedSpan[],
   ) => {
     // Highlight-notes ride at the front of the outgoing message, before
     // whatever the user typed. Captured up front so a note added while the
@@ -147,7 +151,7 @@ export function useConversationSendHandlers(params: {
       }
       // A refused send has already shown its reason; the text goes back in
       // the composer and the notes stay pending for the next attempt.
-      if (!await session.sendMessage(outgoingMessage, model, permissionMode, attachments, reasoningEffort)) {
+      if (!await session.sendMessage(outgoingMessage, model, permissionMode, attachments, reasoningEffort, pastes)) {
         onAnnotationsReleased?.(annotationIds);
         restoreDraftFromBackup();
         return;

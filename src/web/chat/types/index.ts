@@ -2,6 +2,7 @@ import type { FeedbackProposedData } from '@/types/feedback';
 import type { DecisionAskedData } from '@/types/decisions';
 import type { ExplainAskedData } from '@/types/explain';
 import type { Provider } from '@/types/unified-messages';
+import type { PastedSpan } from '@liggi/agent-ui-harness/protocol';
 import type { WorkerStartedData, WorkerReassignedData, WorkerAnsweredData, WorkerReportedData, WorkerReportSummaryData, WorkerMovedData } from '@/types/worker-events';
 // Re-export necessary types from backend
 import type {
@@ -140,6 +141,8 @@ export interface ConversationChatMessage {
   errorTitle?: string;
   /** Present when another agent sent this message; absent on the user's own. */
   attribution?: MessageAttribution;
+  /** On a user message: the stretches of its text the user pasted, counted back from the end. */
+  pastes?: PastedSpan[];
   /** Set when systemSubtype is 'worker': a coordinator's record of a worker it dispatched. */
   workerEvent?: {
     type: 'worker:started' | 'worker:reassigned' | 'worker:answered' | 'worker:reported' | 'worker:moved';

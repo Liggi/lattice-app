@@ -33,6 +33,7 @@ export function SettingsDialog({ isOpen, onClose, initialTab = 'auth' }: Setting
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [launchFolderError, setLaunchFolderError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab);
   const [copiedUrl, setCopiedUrl] = useState<string | null>(null);
 
@@ -93,6 +94,7 @@ export function SettingsDialog({ isOpen, onClose, initialTab = 'auth' }: Setting
   const handleSave = async () => {
     setSaving(true);
     setError(null);
+    setLaunchFolderError(null);
     setSaved(false);
 
     try {
@@ -100,8 +102,8 @@ export function SettingsDialog({ isOpen, onClose, initialTab = 'auth' }: Setting
       if (folder) {
         try {
           await api.listDirectory({ path: folder });
-        } catch {
-          setError(`Launch folder not found: ${folder}`);
+        } catch (err) {
+          setLaunchFolderError(`Can't use this launch folder. ${err instanceof Error ? err.message : `Not found: ${folder}`}`);
           return;
         }
       }
@@ -330,12 +332,15 @@ export function SettingsDialog({ isOpen, onClose, initialTab = 'auth' }: Setting
                   id="settings-launch-folder"
                   data-testid="settings-launch-folder"
                   value={launchFolder}
-                  onChange={(e) => { setLaunchFolder(e.target.value); setError(null); }}
+                  onChange={(e) => { setLaunchFolder(e.target.value); setLaunchFolderError(null); }}
                   placeholder="~"
                   spellCheck={false}
                   autoCapitalize="off"
                   className="w-full px-3 py-2 bg-bg border border-line-2 rounded-md text-sm font-mono text-fg focus:outline-none focus:border-accent"
                 />
+                {launchFolderError && (
+                  <p className="text-xs text-rose-300">{launchFolderError}</p>
+                )}
                 <p className="text-xs text-fg-3">
                   Every new session and project starts here, on this machine. Point it at the folder that holds your repos; the agents find the ones the work involves.
                 </p>

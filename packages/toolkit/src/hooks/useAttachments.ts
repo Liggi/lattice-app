@@ -1,4 +1,5 @@
 import { useState, useCallback } from 'react';
+import type { LargeTextFileUpload } from '../components/Composer/types.js';
 
 // ── Supported file types ──
 
@@ -39,6 +40,10 @@ export interface AttachmentBlock {
   textContent?: string;
   /** Original filename — useful for text-file context. */
   fileName: string;
+  /** A large text file the host already received (see LargeTextFileUpload). */
+  uploadId?: string;
+  /** Size of the original file in bytes. */
+  size?: number;
 }
 
 export interface Attachment {
@@ -49,6 +54,7 @@ export interface Attachment {
   mimeType: string;
   base64: string | null;
   textContent: string | null;
+  uploadId?: string;
   status: 'pending' | 'processing' | 'ready' | 'error';
   error?: string;
   size: number;
@@ -146,7 +152,9 @@ function fileToText(file: File): Promise<string> {
 
 // ── Hook ──
 
-export function useAttachments(): UseAttachmentsReturn {
+const megabytes = (bytes: number) => `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
+
+export function useAttachments(largeTextFiles?: LargeTextFileUpload): UseAttachmentsReturn {
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [error, setError] = useState<string | null>(null);
 
@@ -169,9 +177,9 @@ export function useAttachments(): UseAttachmentsReturn {
           errors.push(`${file.name}: Unsupported file type (${file.type || 'unknown'})`);
           continue;
         }
-        if (type !== 'image' && file.size > MAX_FILE_SIZE) {
-          const sizeMB = (file.size / (1024 * 1024)).toFixed(1);
-          errors.push(`${file.name}: File too large (${sizeMB}MB, max 5MB)`);
+        const maxSize = type === 'text' && largeTextFiles ? largeTextFiles.maxBytes : MAX_FILE_SIZE;
+        if (type !== 'image' && file.size > maxSize) {
+          errors.push(`${file.name}: File too large (${megabytes(file.size)}, max ${megabytes(maxSize)})`);
           continue;
         }
 
@@ -198,8 +206,18 @@ export function useAttachments(): UseAttachmentsReturn {
           prev.map((a) => (a.id === attachment.id ? { ...a, status: 'processing' as const } : a)),
         );
 
-        const processFile =
-          attachment.type === 'text'
+        const uploadLarge = attachment.type === 'text' && largeTextFiles && attachment.size > largeTextFiles.overBytes
+          ? largeTextFiles
+          : null;
+        const processFile: Promise<{ base64: string | null; textContent: string | null; mimeType: string; uploadId?: string }> =
+          uploadLarge
+            ? uploadLarge.upload(attachment.file).then((uploadId) => ({
+                uploadId,
+                textContent: null,
+                base64: null,
+                mimeType: attachment.mimeType,
+              }))
+          : attachment.type === 'text'
             ? fileToText(attachment.file).then((textContent) => ({
                 textContent,
                 base64: null,
@@ -214,11 +232,11 @@ export function useAttachments(): UseAttachmentsReturn {
                 }));
 
         processFile
-          .then(({ base64, textContent, mimeType }) => {
+          .then(({ base64, textContent, mimeType, uploadId }) => {
             setAttachments((prev) =>
               prev.map((a) =>
                 a.id === attachment.id
-                  ? { ...a, base64, textContent, mimeType, status: 'ready' as const }
+                  ? { ...a, base64, textContent, mimeType, uploadId, status: 'ready' as const }
                   : a,
               ),
             );
@@ -232,7 +250,7 @@ export function useAttachments(): UseAttachmentsReturn {
           });
       }
     },
-    [attachments.length],
+    [attachments.length, largeTextFiles],
   );
 
   const removeAttachment = useCallback((id: string) => {
@@ -247,13 +265,15 @@ export function useAttachments(): UseAttachmentsReturn {
 
   const getContentBlocks = useCallback((): AttachmentBlock[] => {
     return attachments
-      .filter((a) => a.status === 'ready' && (a.base64 || a.textContent))
+      .filter((a) => a.status === 'ready' && (a.base64 || a.textContent || a.uploadId))
       .map((att) => ({
         type: att.type,
         mimeType: att.mimeType,
         base64: att.base64 ?? undefined,
         textContent: att.textContent ?? undefined,
         fileName: att.name,
+        size: att.size,
+        ...(att.uploadId ? { uploadId: att.uploadId } : {}),
       }));
   }, [attachments]);
 

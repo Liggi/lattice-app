@@ -1,3 +1,4 @@
+import { PASTES_EXTRA_KEY, parsePastedSpans } from '@liggi/agent-ui-harness/protocol';
 import type { Router } from 'express';
 import fs from 'fs';
 import { asyncHandler } from '@/middleware/error-handler.js';
@@ -40,8 +41,19 @@ import { unfinishedSwitchRefusal } from '@/services/sessions/coordinator-switch-
 
 import type { ProjectOpenThread } from '@/types/project-state.js';
 import { persistCoordinatorImages } from '@/services/sessions/coordinator-attachments.js';
+import { AttachedFileError, saveLargeAttachedFiles } from '@/services/sessions/large-attached-files.js';
 import { parseAttachmentBlocks } from '@/harness/attachment-blocks.js';
 import type { WorkerStartedData } from '@/types/worker-events.js';
+
+/** Save large attached files, turning a missing upload into a request error. */
+async function saveLargeFilesOrRefuse(conversationId: string, blocks: ContentBlockParam[]): Promise<ContentBlockParam[]> {
+  try {
+    return await saveLargeAttachedFiles(conversationId, blocks);
+  } catch (error) {
+    if (error instanceof AttachedFileError) throw new LatticeError('ATTACHMENT_MISSING', error.message, error.status);
+    throw error;
+  }
+}
 
 const logger = createLogger('UnifiedConversationLifecycleRoutes');
 const DEFAULT_CODEX_MODEL = DEFAULT_CODEX_MODEL_ID;
@@ -139,6 +151,8 @@ export function registerUnifiedConversationLifecycleRoutes(
       serviceTier?: string;
       systemPrompt?: string;
       initialContent?: ContentBlockParam[];
+      /** The stretches of `message` the user pasted (`PastedSpan`); display only. */
+      pastes?: unknown;
       goalObjective?: string;
       goalTokenBudget?: number;
       /** No longer offered: Claude runs only through the user's installed CLI. A true here is refused, not silently rerouted. */
@@ -231,6 +245,11 @@ export function registerUnifiedConversationLifecycleRoutes(
     if (!provider || (!message && !hasAttachments) || !workingDirectory) {
       throw new LatticeError('INVALID_REQUEST', 'provider, workingDirectory, and either message or initialContent are required', 400);
     }
+    const parsedPastes = parsePastedSpans(body.pastes, message?.length ?? 0);
+    if (!parsedPastes.ok) {
+      throw new LatticeError('INVALID_REQUEST', parsedPastes.error, 400);
+    }
+    const pastes = parsedPastes.spans;
     if (provider !== 'claude' && provider !== 'codex' && provider !== 'opencode') {
       res.status(400).json({
         error: 'unsupported_provider',
@@ -329,13 +348,18 @@ export function registerUnifiedConversationLifecycleRoutes(
         }
 
 
-        // A coordinator's first-turn images are kept on disk for its workers
-        // (see coordinator-attachments.ts); the adapters validate the blocks
-        // again downstream, so a malformed payload still fails there.
+        // A text file too large to send inline goes as its saved path
+        // (large-attached-files.ts), and a coordinator's first-turn images
+        // are kept on disk for its workers (coordinator-attachments.ts). The
+        // adapters validate the blocks again downstream, so a malformed
+        // payload still fails there.
         let initialContent = body.initialContent;
-        if (body.coordinator && hasAttachments) {
+        if (hasAttachments) {
           const parsed = parseAttachmentBlocks(body.initialContent);
-          if (parsed.ok) initialContent = persistCoordinatorImages(conversationId, parsed.blocks);
+          if (parsed.ok) {
+            initialContent = await saveLargeFilesOrRefuse(conversationId, parsed.blocks);
+            if (body.coordinator) initialContent = persistCoordinatorImages(conversationId, initialContent);
+          }
         }
 
         spawnResult = await harnessSessionManager.start(conversationId, {
@@ -366,6 +390,7 @@ export function registerUnifiedConversationLifecycleRoutes(
             // harness copies onto the input:sent event so the transcript renders
             // them. Same array reference, so no payload duplication.
             ...(hasAttachments ? { attachments: initialContent } : {}),
+            ...(pastes.length > 0 ? { [PASTES_EXTRA_KEY]: pastes } : {}),
           },
         });
       } catch (error) {
@@ -471,13 +496,13 @@ export function registerUnifiedConversationLifecycleRoutes(
       initialContent?: ContentBlockParam[];
     };
 
-    const { message, model, permissionMode: requestedMode, initialContent } = body;
+    const { message, model, permissionMode: requestedMode } = body;
     const traceId = generateTraceId('resume');
     // Only a model the caller names: a conversation already on a superseded one keeps running.
     const supersededResume = supersededModelRefusal(model);
     if (supersededResume) throw new LatticeError('SUPERSEDED_MODEL', supersededResume, 400);
 
-    const hasAttachments = Array.isArray(initialContent) && initialContent.length > 0;
+    const hasAttachments = Array.isArray(body.initialContent) && body.initialContent.length > 0;
     if (!message && !hasAttachments) {
       throw new LatticeError('INVALID_REQUEST', 'message or initialContent is required', 400);
     }
@@ -499,6 +524,13 @@ export function registerUnifiedConversationLifecycleRoutes(
     if (!latestSegment) {
       throw new LatticeError('NO_SEGMENTS', `Conversation ${conversationId} has no segments`, 500);
     }
+
+    // A text file too large to send inline goes as its saved path
+    // (large-attached-files.ts); malformed blocks still fail in the adapters.
+    const parsedContent = hasAttachments ? parseAttachmentBlocks(body.initialContent) : null;
+    const initialContent = parsedContent?.ok
+      ? await saveLargeFilesOrRefuse(conversationId, parsedContent.blocks)
+      : body.initialContent;
 
     const permissionMode = resolveExistingConversationPermissionMode({
       provider: latestSegment.provider,

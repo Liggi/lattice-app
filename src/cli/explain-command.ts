@@ -29,7 +29,16 @@ export const EXPLAIN_USAGE = `  lattice explain --session <conv-id> --rubric - <
                        "nudge": "<a question that makes them look again>" } ] }
       1 to ${EXPLAIN_MAX_IDEAS} ideas, up to ${EXPLAIN_MAX_MISCONCEPTIONS} misconceptions. Each idea is ONE fact: two facts in one
       idea leave the user stuck with it half-marked and no way to see which
-      half is missing. Each hint points without giving the answer away: not a
+      half is missing. A statement with "and", "or", "so", "because" or a
+      semicolon is usually two ideas: split it, or drop the half that does
+      not matter.
+        Two facts: "The canary stops at the target or when the time limit
+                    passes, and everyone gets normal Ash from their next
+                    message."
+        One each:  "The canary stops once enough people have said yes."
+                   "After the stop, everyone gets normal Ash from their next
+                    message."
+      Keep the reason for a fact out of it unless the reason is the point. Each hint points without giving the answer away: not a
       statement of the idea (that is refused), and not a yes/no question
       whose answer is the idea. Write the ideas from the source the user is
       learning from, not from memory. Post it, write your message, then end

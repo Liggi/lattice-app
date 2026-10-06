@@ -99,6 +99,60 @@ export function attachmentBlocksFromExtra(
   return blocks
 }
 
+/** A stretch of an input's text that the user pasted, so a UI can show it
+ *  closed instead of inline. Counted back from the end of the text: whatever a
+ *  server puts in front of the user's words (a preamble, restored context)
+ *  leaves it pointing at the same characters. Display only; the provider gets
+ *  the text unchanged. */
+export interface PastedSpan {
+  /** How many characters before the end of the text the paste begins. */
+  fromEnd: number
+  length: number
+}
+
+/** Key under which callers put `PastedSpan[]` in the `extra` bag, alongside
+ *  `ATTACHMENTS_EXTRA_KEY`. SessionManager copies it onto `input:sent`. */
+export const PASTES_EXTRA_KEY = 'pastes'
+
+/**
+ * Validate pasted spans against the text they describe. Missing is no spans;
+ * anything present must be in order, inside the text and not overlapping, or
+ * it is an error rather than a span quietly pointing at the wrong words.
+ */
+export function parsePastedSpans(
+  value: unknown,
+  textLength: number,
+): { ok: true; spans: PastedSpan[] } | { ok: false; error: string } {
+  if (value === undefined || value === null) return { ok: true, spans: [] }
+  if (!Array.isArray(value)) return { ok: false, error: 'pastes must be an array' }
+  const spans: PastedSpan[] = []
+  let previousFromEnd = Infinity
+  for (let i = 0; i < value.length; i++) {
+    const raw = value[i] as Record<string, unknown> | null
+    const fromEnd = raw?.fromEnd
+    const length = raw?.length
+    if (!Number.isInteger(fromEnd) || !Number.isInteger(length) || (length as number) <= 0) {
+      return { ok: false, error: `pastes[${i}] must have whole-number fromEnd and a positive length` }
+    }
+    const span = { fromEnd: fromEnd as number, length: length as number }
+    if (span.fromEnd > textLength || span.length > span.fromEnd) {
+      return { ok: false, error: `pastes[${i}] runs outside the ${textLength}-character text` }
+    }
+    if (span.fromEnd > previousFromEnd) {
+      return { ok: false, error: `pastes[${i}] is out of order or overlaps the one before it` }
+    }
+    previousFromEnd = span.fromEnd - span.length
+    spans.push(span)
+  }
+  return { ok: true, spans }
+}
+
+/** Pasted spans out of an `extra` bag; callers validate them first (`parsePastedSpans`). */
+export function pastedSpansFromExtra(extra: Record<string, unknown> | undefined): PastedSpan[] {
+  const raw = extra?.[PASTES_EXTRA_KEY]
+  return Array.isArray(raw) ? (raw as PastedSpan[]) : []
+}
+
 // ---- Event payloads ----
 
 export interface RunStartData {
@@ -224,6 +278,8 @@ export interface InputSentData {
    *  existing payload shape. UIs render these alongside `text`; the provider
    *  itself receives them via the adapter, not from this event. */
   blocks?: AttachmentBlock[]
+  /** The stretches of `text` the user pasted (`PASTES_EXTRA_KEY`); absent when none. */
+  pastes?: PastedSpan[]
 }
 
 // ---- Background task payloads ----

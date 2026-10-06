@@ -1,3 +1,4 @@
+import type { PastedSpan } from '@liggi/agent-ui-harness/protocol';
 import type { Provider } from '@/types/unified-messages';
 import type {
   ConversationDetailsResponse,
@@ -220,6 +221,8 @@ export class ConversationApi extends ApiCore {
     workspace?: string;
     systemPrompt?: string;
     initialContent?: ContentBlockParam[];
+    /** The stretches of `message` the user pasted, counted back from its end; display only. */
+    pastes?: PastedSpan[];
     goalObjective?: string;
     goalTokenBudget?: number;
     reasoningEffort?: string;

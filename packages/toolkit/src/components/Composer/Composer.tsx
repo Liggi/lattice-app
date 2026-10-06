@@ -13,6 +13,7 @@ import { storage } from '../../utils/storage.js';
 import { useLocalStorage } from '../../hooks/useLocalStorage.js';
 import { useAttachments } from '../../hooks/useAttachments.js';
 import { AutocompleteDropdown } from './AutocompleteDropdown.js';
+import { isLongPaste, pastedSpansForSubmit, pastedTextAsInserted, shiftPastedRanges, type PastedRange } from './pasted-spans.js';
 import type { ComposerProps, ComposerRef, FileSystemEntry, Command, EmojiSuggestion } from './types.js';
 
 interface AutocompleteState {
@@ -194,7 +195,7 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
     isProcessing: isProcessingAttachments,
     hasAttachments,
     error: attachmentError,
-  } = useAttachments();
+  } = useAttachments(props.largeTextFiles);
 
   // ── Draft persistence ──
 
@@ -215,6 +216,31 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
   useEffect(() => {
     if (controlledValue === undefined) setUncontrolledValue(storedDraft);
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draftStorageKey]);
+
+  // ── Long pastes ──
+  // Each long paste's range in `value`, carried through every later edit and
+  // sent with the message so the thread can show it closed. A paste is
+  // recorded once the text it was inserted into is the current value.
+
+  const pastedRangesRef = useRef<PastedRange[]>([]);
+  const pendingPasteRef = useRef<{ start: number; text: string } | null>(null);
+  const previousValueRef = useRef(value);
+  useEffect(() => {
+    const previous = previousValueRef.current;
+    previousValueRef.current = value;
+    if (previous === value) return;
+    let ranges = shiftPastedRanges(previous, value, pastedRangesRef.current);
+    const pending = pendingPasteRef.current;
+    pendingPasteRef.current = null;
+    if (pending && value.slice(pending.start, pending.start + pending.text.length) === pending.text) {
+      const pasted = { start: pending.start, end: pending.start + pending.text.length };
+      ranges = [...ranges.filter((range) => range.end <= pasted.start || range.start >= pasted.end), pasted];
+    }
+    pastedRangesRef.current = ranges;
+  }, [value]);
+  useEffect(() => {
+    pastedRangesRef.current = [];
   }, [draftStorageKey]);
 
   // ── Local state ──
@@ -706,6 +732,7 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
     if (isProcessingAttachments) return;
 
     const attachmentBlocks = hasAttachments ? getContentBlocks() : undefined;
+    const pastes = pastedSpansForSubmit(currentValue, pastedRangesRef.current);
 
     // Save draft backup before clearing
     const backupKey = `${draftStorageKey}-backup`;
@@ -718,6 +745,7 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
     void onSubmit(trimmedValue, {
       workingDirectory: workingDirectory || undefined,
       attachments: attachmentBlocks,
+      ...(pastes.length > 0 ? { pastes } : {}),
       ...(isModelSelectorEnabled ? { model: selectedModel ?? undefined } : {}),
       ...(effortProvided ? { effort: selectedEffort ?? undefined } : {}),
     });
@@ -813,12 +841,16 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
 
   // ── File attachment handlers ──
 
-  const handlePaste = (e: React.ClipboardEvent) => {
-    if (!enableAttachments) return;
-    const files = Array.from(e.clipboardData.files);
+  const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const files = enableAttachments ? Array.from(e.clipboardData.files) : [];
     if (files.length > 0) {
       e.preventDefault();
       addFiles(files);
+      return;
+    }
+    const text = pastedTextAsInserted(e.clipboardData.getData('text/plain'));
+    if (isLongPaste(text)) {
+      pendingPasteRef.current = { start: e.currentTarget.selectionStart ?? 0, text };
     }
   };
 

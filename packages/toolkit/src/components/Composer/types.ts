@@ -1,4 +1,5 @@
 import type { AttachmentBlock } from '../../hooks/useAttachments.js';
+import type { ComposerPastedSpan } from './pasted-spans.js';
 
 export interface FileSystemEntry {
   name: string;
@@ -27,6 +28,8 @@ export interface ComposerCoreConfig {
     options?: {
       workingDirectory?: string;
       attachments?: AttachmentBlock[];
+      /** The long pastes in `message`, so the thread can show each one closed; the text is unchanged. */
+      pastes?: ComposerPastedSpan[];
       model?: string;
       effort?: string;
     },
@@ -163,6 +166,20 @@ export interface ComposerProps {
    * suggestion's shortcode exactly is replaced as you type the closing colon.
    */
   searchEmoji?: (query: string) => EmojiSuggestion[];
+  /**
+   * Stream large text files to the host instead of reading them into the
+   * message. A text file over `overBytes` (and up to `maxBytes`, which then
+   * replaces the 5MB cap for text) is passed to `upload` as it is attached;
+   * the attachment is ready once `upload` resolves to an id, and its
+   * AttachmentBlock carries that `uploadId` and no `textContent`.
+   */
+  largeTextFiles?: LargeTextFileUpload;
+}
+
+export interface LargeTextFileUpload {
+  overBytes: number;
+  maxBytes: number;
+  upload: (file: File) => Promise<string>;
 }
 
 export interface ComposerRef {

@@ -3,7 +3,7 @@ import { JsonLinesParser } from './json-lines-parser.js'
 import { normalizeClaude, isIgnoredClaudeEvent } from './normalize-claude.js'
 import { deriveStatus, deriveActivity, deriveUnfinishedTasks } from '../protocol/derive.js'
 import type { Status, Activity } from '../protocol/derive.js'
-import { ATTACHMENTS_EXTRA_KEY, attachmentBlocksFromExtra } from '../protocol/events.js'
+import { ATTACHMENTS_EXTRA_KEY, attachmentBlocksFromExtra, PASTES_EXTRA_KEY, pastedSpansFromExtra } from '../protocol/events.js'
 import type { SessionEvent, EventType, RunReadyData, ContentData, ToolUseBlock, TaskStartedData, InputSentData } from '../protocol/events.js'
 import type {
   ProcessAdapter,
@@ -40,6 +40,7 @@ function stripTransientTurnData(config: StartConfig): StartConfig {
   if (!config.extra) return config
   const extra = { ...config.extra }
   delete extra[ATTACHMENTS_EXTRA_KEY]
+  delete extra[PASTES_EXTRA_KEY]
   delete extra.internalCommand
   delete extra.inputSource
   if (Object.keys(extra).length === Object.keys(config.extra).length) return config
@@ -246,11 +247,13 @@ export class SessionManager {
     // user attached, not just what they typed. A turn can be attachments-only,
     // so the guard covers both.
     const startBlocks = attachmentBlocksFromExtra(config.extra)
+    const startPastes = pastedSpansFromExtra(config.extra)
     if (config.prompt || startBlocks.length > 0) {
       const data: InputSentData = {
         text: config.prompt,
         ...(inputSource(config.extra) ? { source: inputSource(config.extra) } : {}),
         ...(startBlocks.length > 0 ? { blocks: startBlocks } : {}),
+        ...(startPastes.length > 0 ? { pastes: startPastes } : {}),
       }
       this.appendEvent(session, 'input:sent', data, runId, sessionId)
     }
@@ -368,9 +371,11 @@ export class SessionManager {
     // Process alive — write to stdin
     session.process!.write(input + '\n', extra)
     const sendBlocks = attachmentBlocksFromExtra(extra)
+    const sendPastes = pastedSpansFromExtra(extra)
     const data: InputSentData = {
       text: input,
       ...(sendBlocks.length > 0 ? { blocks: sendBlocks } : {}),
+      ...(sendPastes.length > 0 ? { pastes: sendPastes } : {}),
     }
     this.appendEvent(session, 'input:sent', data, session.runId!, sessionId)
     this.logger.info('Input sent', { sessionId, inputLength: input.length, attachments: sendBlocks.length })
