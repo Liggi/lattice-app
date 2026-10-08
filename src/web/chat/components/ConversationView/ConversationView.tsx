@@ -4,7 +4,7 @@ import { DecisionsProvider, dismissQuestion } from '../Decision/DecisionAskCard'
 import { ExplainsProvider } from '../Explain/ExplainCard';
 import { OpenQuestionStrip } from '../Decision/OpenQuestionStrip';
 import { CLAUDE_QUESTION_ID_PREFIX, isOpenDecision } from '@/types/decisions';
-import type { QuestionRequest } from '../../types';
+import type { ChatMessage, PendingQuestion, QuestionRequest } from '../../types';
 import { QueuedMessages } from './QueuedMessages';
 import { SenderNamesProvider } from '../shared/sender-names';
 import { useParams, useLocation, useNavigate } from 'react-router-dom';
@@ -672,10 +672,27 @@ export function ConversationView({ sidebarOpen, onToggleSidebar }: ConversationV
     reconnectToStream: harnessReconnect,
   });
 
-  // Claude's question is answered on its own tool card in the thread; the
-  // rest (Codex's) have no card there and are shown below the messages.
-  const inlineQuestion = pendingQuestions.find((q) => q.id.startsWith(CLAUDE_QUESTION_ID_PREFIX));
-  const bannerQuestion = pendingQuestions.find((q) => !q.id.startsWith(CLAUDE_QUESTION_ID_PREFIX)) ?? null;
+  // Claude's AskUserQuestion is answered on its own tool card in the thread.
+  // The rest have no card there and are shown below the messages: Codex's,
+  // and the prompts Claude Code asks itself (its mod hot-reload confirm),
+  // which come under a made-up tool_use id that no message carries.
+  const threadToolUseIds = useMemo(() => {
+    const ids = new Set<string>();
+    const collect = (messages: ChatMessage[]) => {
+      for (const m of messages) {
+        if (typeof m.content === 'string') continue;
+        for (const block of m.content) {
+          if (block.type === 'tool_use' && typeof block.id === 'string') ids.add(block.id);
+        }
+      }
+    };
+    collect(harnessMessages);
+    for (const children of Object.values(harnessChildrenMessages)) collect(children);
+    return ids;
+  }, [harnessMessages, harnessChildrenMessages]);
+  const isOnToolCard = (q: PendingQuestion) => q.id.startsWith(CLAUDE_QUESTION_ID_PREFIX) && threadToolUseIds.has(q.toolUseId);
+  const inlineQuestion = pendingQuestions.find(isOnToolCard);
+  const bannerQuestion = pendingQuestions.find((q) => !isOnToolCard(q)) ?? null;
   const currentQuestionRequest = useMemo<QuestionRequest | null>(() => inlineQuestion ? {
     id: inlineQuestion.id,
     streamingId: inlineQuestion.streamingId,

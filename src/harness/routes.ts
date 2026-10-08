@@ -574,7 +574,8 @@ export function createHarnessRoutes(sessionManager: SessionManager, resolvers: H
     // already holds it and says so with its admission id; an `inboxIds` batch
     // from anything that does not is refused rather than let through.
     // A composer send is the user writing to this session. On a project it
-    // answers every ask waiting on them from before now (project-needs-you.ts).
+    // pauses the sidebar's Needs you for every ask waiting on them from before
+    // now, until the coordinator's turn on it ends (project-needs-you.ts).
     // A drain's inbox batch is not a new send: its rows were counted when sent.
     // It also answers an open question card in the thread (decisions.ts).
     if (!fromAgent && !inboxIds) {

@@ -1,7 +1,7 @@
 /**
  * Whether a project needs the user now. Candidates are collected from the
- * project record deterministically: open threads the user owns or that wait
- * on a decision. Jev then scores each for "does the user need to act on this
+ * project record deterministically: the threads the panel lists under Needs
+ * you (`isNeedsYou`). Jev then scores each for "does the user need to act on this
  * now" and "has the user parked it on purpose"; a thread counts when
  * act × (1 − parked) is over the bar. The bar was set on 2026-09-26
  * from a table of real scores.
@@ -16,18 +16,23 @@
  * can make. It stops counting once answered, replaced or settled by a
  * message (`types/decisions.ts`).
  *
- * A message from the user to the project answers every ask that was waiting
- * before it, whether or not the coordinator has updated its record yet
- * (2026-09-26: Needs you stayed lit on projects the user had answered and
- * that were working again). The composer's send records it as a `user:sent`
- * event in the coordinator's log, so it survives a restart.
+ * A message from the user to the project pauses the indicator for every ask
+ * that was waiting before it until the coordinator has finished a turn after
+ * it (2026-09-26: Needs you stayed lit on projects the user had answered and
+ * that were working again). Whatever the coordinator still leaves with the
+ * user then lights it again: pausing for good would leave it dark at almost
+ * every message, since the user writes to a project far more often than its
+ * asks change. The composer's send records it as a `user:sent` event in the
+ * coordinator's log, so it survives a restart (`ProjectState.answeredBefore`).
+ * Only the indicator pauses: the panel keeps listing the asks (2026-10-07,
+ * Jason picked "Panel stays, sidebar pauses").
  */
 
-import { withoutThreadRefs, type ProjectOpenThread } from '../../types/project-state.js';
+import { USER_SENT_EVENT, withoutThreadRefs, type ProjectOpenThread } from '../../types/project-state.js';
+import { isNeedsYou } from '../../types/state-of-play.js';
 import type { SessionManager } from '@liggi/agent-ui-harness/server';
 import { getEventStorage } from '../../harness/event-message-reader.js';
 import { appendCustomHarnessEvent } from '../../harness/harness-custom-events.js';
-import { iterateEventsNewestFirst } from '../../session-history/repository.js';
 import { DatabaseProvider } from '../infrastructure/database-provider.js';
 import { createLogger } from '../infrastructure/logger.js';
 import { judgeNouls, type NoulQuestion } from '../infrastructure/typesafe-client.js';
@@ -84,11 +89,6 @@ export function __resetNeedsYouForTests(): void {
   loggedUnavailable = false;
 }
 
-export function isNeedsYouCandidate(thread: ProjectOpenThread): boolean {
-  // A parked thread is kept, not asking for anything.
-  if (thread.parked) return false;
-  return thread.owner?.kind === 'user' || thread.waitingOn?.kind === 'decision';
-}
 
 function actQuestion(name: string): NoulQuestion {
   return {
@@ -192,18 +192,13 @@ function isCoordinator(conversationId: string): boolean {
   return row?.coordinator === 1;
 }
 
-export const USER_SENT_EVENT = 'user:sent';
+export { USER_SENT_EVENT };
 
 /** Record that the user has just sent this project a message; a no-op for a conversation that is not a project. */
 export function noteUserSent(manager: SessionManager, conversationId: string): void {
   if (!isCoordinator(conversationId)) return;
   appendCustomHarnessEvent(manager, conversationId, USER_SENT_EVENT, {});
   noteStatusChanged(conversationId);
-}
-
-function lastUserSentAt(coordinatorId: string): number {
-  for (const event of iterateEventsNewestFirst(coordinatorId, [USER_SENT_EVENT])) return event.timestamp;
-  return 0;
 }
 
 interface ProjectSnapshot {
@@ -213,8 +208,8 @@ interface ProjectSnapshot {
   workerTasks: Record<string, string>;
   /** Workers whose latest report said what they stopped to wait on, and when they reported. */
   reportedWaits: Array<{ worker: string; waitingOn: string; since: number }>;
-  /** When the user last sent the project a message, epoch ms; 0 if never recorded. */
-  userSentAt: number;
+  /** The user's message the coordinator has yet to end a turn on, epoch ms; null when none is. */
+  answeredBefore: number | null;
   /** The project's own question card, while it waits on the user. */
   card: OpenDecision | null;
 }
@@ -228,12 +223,13 @@ function snapshot(coordinatorId: string): ProjectSnapshot {
   const workers = foldedWorkerStates(coordinatorId);
   const entry = {
     seq,
-    threads: state.open.filter(isNeedsYouCandidate),
+    threads: state.open.filter(thread => isNeedsYou(thread)
+      && (state.answeredBefore === null || thread.waitingSince > state.answeredBefore)),
     workingOn: focus ? withoutThreadRefs(focus) || null : null,
     workerTasks: Object.fromEntries(workers.map(worker => [worker.worker, worker.task])),
     reportedWaits: workers.flatMap(worker => worker.phase === 'reported' && worker.waitingOn
       ? [{ worker: worker.worker, waitingOn: worker.waitingOn, since: worker.since }] : []),
-    userSentAt: lastUserSentAt(coordinatorId),
+    answeredBefore: state.answeredBefore,
     card: openDecision(coordinatorId),
   };
   snapshots.set(coordinatorId, entry);
@@ -269,9 +265,8 @@ export function projectWorkerWaits(conversationId: string): Record<string, strin
 export function projectNeedsYou(conversationId: string): NeedsYouItem[] | null {
   if (!isCoordinator(conversationId)) return null;
   const items: NeedsYouItem[] = [];
-  const { threads, userSentAt, card } = snapshot(conversationId);
+  const { threads, answeredBefore, card } = snapshot(conversationId);
   for (const thread of threads) {
-    if (thread.waitingSince <= userSentAt) continue;
     const key = `${conversationId}:${thread.seq}`;
     const scored = scores.get(key);
     if (!scored || scored.updatedAt !== thread.updatedAt) {
@@ -288,7 +283,7 @@ export function projectNeedsYou(conversationId: string): NeedsYouItem[] | null {
       });
     }
   }
-  if (card && card.shownAt > userSentAt) {
+  if (card && (answeredBefore === null || card.shownAt > answeredBefore)) {
     const key = `${conversationId}:card:${card.asked.id}`;
     const scored = scores.get(key);
     if (!scored) {

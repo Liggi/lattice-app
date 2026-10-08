@@ -40,6 +40,8 @@ const PRICING: Record<string, { input: number; output: number }> = {
   'claude-fable-5': { input: 10.0, output: 50.0 },
   'claude-opus-4-8': { input: 5.0, output: 25.0 },
   'claude-sonnet-4-6': { input: 3.0, output: 15.0 },
+  // Prompts up to 100k tokens; longer ones cost $0.50/$2.50, and no background job sends one. stale-model-ok.
+  'claude-haiku-5-5': { input: 0.1, output: 0.5 },
   'claude-haiku-4-5-20251001': { input: 1.0, output: 5.0 },
   'claude-haiku-4-5': { input: 1.0, output: 5.0 },
   // Superseded — retained so old ledger rows price correctly. stale-model-ok.

@@ -459,7 +459,7 @@ describe('project routes', () => {
     expect(empty.status).toBe(200);
     expect(empty.body).toEqual({
       outcome: null, decisions: [], retired: [], priority: null, rank: [], open: [], closed: [],
-      attention: [], historical: [], accountingFrom: null, now: null, nudges: 0, revision: 0,
+      attention: [], historical: [], accountingFrom: null, now: null, answeredBefore: null, nudges: 0, revision: 0,
       // Always sent, empty when no worker carrying an open thread has anything queued.
       unread: {},
     });

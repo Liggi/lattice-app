@@ -119,12 +119,22 @@ describe('the note route', () => {
     const id = (await note({ kind: 'open', text: 'the beta' })).body.seq as number;
     const long = 'x'.repeat(161);
     expect((await note({ kind: 'update', text: long, ref: id })).status).toBe(200);
-    const refused = await note({ kind: 'update', text: long, ref: id, waitingOn: { kind: 'decision', text: 'the go' } });
+    // A decision someone else owes is not the user's move.
+    expect((await note({ kind: 'update', text: long, ref: id, waitingOn: { kind: 'decision', text: "Gui's OK" } })).status).toBe(200);
+    const refused = await note({ kind: 'update', text: long, ref: id, owner: { kind: 'user' } });
     expect(refused.status).toBe(400);
     expect(refused.body.error).toContain('--evidence');
     await note({ kind: 'update', text: '', ref: id, owner: { kind: 'user' } });
     expect((await note({ kind: 'update', text: long, ref: id })).status).toBe(400);
     expect((await note({ kind: 'update', text: 'x'.repeat(160), ref: id })).status).toBe(200);
+  });
+
+  it('keeps a thread name to a few words, and takes one on its own as an update', async () => {
+    const id = (await note({ kind: 'open', text: 'Repetition check runs offline', name: 'Repetition check' })).body.seq as number;
+    expect((await note({ kind: 'update', text: '', ref: id, name: 'Repeat check' })).status).toBe(200);
+    const refused = await note({ kind: 'update', text: '', ref: id, name: 'x'.repeat(41) });
+    expect(refused.status).toBe(400);
+    expect(refused.body.error).toContain('40');
   });
 
   it('expands --addresses <worker> only over that thread, so closing one does not account for another', async () => {
@@ -350,7 +360,7 @@ describe('a compacted worker', () => {
 });
 
 describe('a compacted New-screen session', () => {
-  it('gets its diagram guidance back, with no stray rule', () => {
+  it('gets its picture guidance back, with no stray rule', () => {
     const plain = ConversationService.getInstance().createConversation({
       workingDirectory: '/tmp', provider: 'codex', providerSessionId: 'p-plain',
     }).conversationId;
@@ -358,7 +368,7 @@ describe('a compacted New-screen session', () => {
     push(plain, 'turn:end', { compact: true, trigger: 'auto' });
     const restored = buildCoordinatorRestore(plain);
     expect(restored).toContain('This session runs in Lattice, ');
-    expect(restored).toContain('Never draw ASCII-art diagrams.');
+    expect(restored).toContain('Never draw ASCII art.');
     expect(restored.split('\n').filter((line) => line.trim() === '---')).toEqual([]);
   });
 });

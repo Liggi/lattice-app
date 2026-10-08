@@ -5,8 +5,11 @@
  * is `deriveStateOfPlay` (`src/types/state-of-play.ts`); this draws it.
  *
  * - Needs you: amber cube and the brightest text in the panel, because this
- *   is the only section that is the user's move. The row is the ask alone;
- *   the detail (`needsYouLines`) is on hover or a tap. Amber appears nowhere
+ *   is the only section that is the user's move. The row is the ask, with
+ *   what it is about and how long it has waited on a quiet line under it
+ *   (2026-10-07: two rows both read "Commit and first run, when ready", and
+ *   nothing said which work either was or that one had sat for days); the
+ *   detail (`needsYouLines`) is on hover or a tap. Amber appears nowhere
  *   else in the panel. The chat's open question card is a Needs you row too,
  *   in place of the thread it is about: a tap takes the user to it, and its
  *   × dismisses the question, not the thread.
@@ -31,7 +34,7 @@ import { SessionStateIcon } from '@/web/chat/components/shared/session-state-ico
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/web/chat/components/ui/tooltip';
 import { deriveStateOfPlay, type PlayItem } from '@/types/state-of-play';
 import type { ProjectState } from '@/types/project-state';
-import { withoutThreadRefs } from '@/types/project-state';
+import { formatAgo, withoutThreadRefs } from '@/types/project-state';
 import type { WorkerCardState } from '@/types/worker-events';
 
 /** How long a dismissed row offers Undo in place before it is only under Parked. */
@@ -253,7 +256,7 @@ export function StateOfPlaySection({
 
 const EMPTY_PROJECT: ProjectState = {
   outcome: null, decisions: [], retired: [], priority: null, rank: [], open: [], closed: [],
-  attention: [], historical: [], accountingFrom: null, now: null, nudges: 0, revision: 0,
+  attention: [], historical: [], accountingFrom: null, now: null, answeredBefore: null, nudges: 0, revision: 0,
 };
 
 /**
@@ -382,7 +385,7 @@ function ItemRow({ item, section, onDismiss }: {
 
   let body: React.ReactNode;
   if (section === 'needs-you') {
-    body = <NeedsYouRow label={label} {...needsYouLines(item)} clearDismiss={clearDismiss} dismissControl={dismissControl} />;
+    body = <NeedsYouRow label={label} since={item.thread.waitingSince} {...needsYouLines(item)} clearDismiss={clearDismiss} dismissControl={dismissControl} />;
   } else {
     const held = item.heldOn;
     body = (
@@ -407,8 +410,10 @@ function ItemRow({ item, section, onDismiss }: {
  * on a touch screen, a tap on the row, which opens it in place: the worker
  * rows' treatment for what they wait on.
  */
-function NeedsYouRow({ label, ask, detail, clearDismiss, dismissControl }: {
+function NeedsYouRow({ label, since, ask, detail, clearDismiss, dismissControl }: {
   label: string;
+  /** When it started waiting on the user, epoch ms. */
+  since: number;
   ask: string | null;
   detail: string | null;
   clearDismiss: string;
@@ -444,7 +449,12 @@ function NeedsYouRow({ label, ask, detail, clearDismiss, dismissControl }: {
               <TooltipContent side="left" sideOffset={offset} className="max-w-[320px]" data-testid="play-needs-you-detail">{detail}</TooltipContent>
             </Tooltip>
           ) : heading}
-          {ask && <span className="mt-0.5 text-[12.5px] leading-[1.4] text-fg-3 break-words">{ask}</span>}
+          <span className={`mt-0.5 flex items-baseline gap-3 text-[12.5px] leading-[1.4] text-fg-3 ${clearDismiss}`}>
+            <span className="min-w-0 flex-1 break-words">{ask}</span>
+            <span data-testid="play-needs-you-age" className="shrink-0 font-mono text-[11px] tabular-nums text-fg-3/70" title="How long it has waited on you">
+              {formatAgo(Date.now() - since)}
+            </span>
+          </span>
           {detail && open && (
             <span data-testid="play-needs-you-detail" className="mt-1 border-t border-line/35 pt-1 text-[12.5px] leading-[1.45] text-fg-3 break-words">
               {detail}
@@ -496,15 +506,16 @@ function QuestionRow({ question }: { question: QuestionLink }) {
 
 /**
  * What a Needs you item says, so it is never an amber row the user cannot
- * act on. With a label, the label is the ask and the summary is the detail.
- * Without one the row shows the thread's outcome, so a line under it says
- * what is asked (what the decision waits on, else the next step) and the
- * summary is the detail.
+ * act on. With a label, the label is the ask, the line under it says what
+ * the work is (the thread's short name, else what it is for) and the
+ * summary is the detail. Without one the row shows the thread's outcome, so
+ * the line under it says what is asked (what the decision waits on, else the
+ * next step) and the summary is the detail.
  */
 function needsYouLines(item: PlayItem): { ask: string | null; detail: string | null } {
   const thread = item.thread;
   const wait = thread.waitingOn?.kind === 'decision' ? `Waiting on ${thread.waitingOn.text}` : null;
-  const ask = thread.label ? null : wait ?? thread.nextAction ?? null;
+  const ask = thread.label ? thread.name ?? thread.text : wait ?? thread.nextAction ?? null;
   const detail = thread.summary ?? (thread.label ? wait ?? thread.nextAction : null) ?? null;
   return { ask: ask ? withoutThreadRefs(ask) : null, detail: detail ? withoutThreadRefs(detail) : null };
 }

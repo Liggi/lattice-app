@@ -14,6 +14,7 @@ import { FEEDBACK_USAGE, runFeedbackCommand } from './cli/feedback-command.js';
 import { ASK_USAGE, runAskCommand } from './cli/ask-command.js';
 import { EXPLAIN_USAGE, runExplainCommand } from './cli/explain-command.js';
 import { DIAGRAM_USAGE, runDiagramCommand } from './cli/diagram-command.js';
+import { FRAME_USAGE, runFrameCommand } from './cli/frame-command.js';
 import { CHATGPT_PLAN_USAGE, runChatGPTPlanCommand } from './cli/chatgpt-plan-command.js';
 import { KEYS_USAGE, runKeysCommand } from './cli/keys-command.js';
 
@@ -35,6 +36,7 @@ ${renderSessionUsageBlock()}
 ${FEEDBACK_USAGE}
 ${ASK_USAGE}
 ${EXPLAIN_USAGE}
+${FRAME_USAGE}
 ${DIAGRAM_USAGE}
 ${CHATGPT_PLAN_USAGE}
 ${KEYS_USAGE}
@@ -77,6 +79,11 @@ export async function run(): Promise<void> {
 
   if (first === 'feedback') {
     await runFeedbackCommand(args.slice(1));
+    return;
+  }
+
+  if (first === 'frame') {
+    await runFrameCommand(args.slice(1));
     return;
   }
 

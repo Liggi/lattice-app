@@ -176,6 +176,8 @@ export interface UnifiedConversationQueryRoutesContext {
 
 /** The longest summary a thread that needs the user may carry: one line in the panel's detail. */
 const NEEDS_YOU_SUMMARY_MAX = 160;
+/** The longest short name a thread may carry: a few words beside its label in the panel. */
+const THREAD_NAME_MAX = 40;
 
 export function registerUnifiedConversationQueryRoutes(
   router: Router,
@@ -813,7 +815,7 @@ export function registerUnifiedConversationQueryRoutes(
     // A thread that needs the user shows its summary behind its label in the
     // user's panel, so it is one line; the detail goes in evidence or the message.
     if (kind === 'update' && thread && text.length > NEEDS_YOU_SUMMARY_MAX
-      && isUsersMove({ ...thread, owner: owner ?? thread.owner, waitingOn: waitingOn !== undefined ? waitingOn : thread.waitingOn })) {
+      && isUsersMove({ owner: owner ?? thread.owner })) {
       res.status(400).json({
         error: `thread [${thread.seq}] needs the user, so its summary is one line: ${text.length} characters, the most is ${NEEDS_YOU_SUMMARY_MAX}. `
           + 'Say where it has got to in a sentence; put the detail in --evidence or in your message to the user.',
@@ -870,10 +872,19 @@ export function registerUnifiedConversationQueryRoutes(
       addresses = [...resolved].sort((a, b) => a - b);
     }
 
+    const threadName = (kind === 'open' || kind === 'update') && typeof body.name === 'string' && body.name.trim() ? body.name.trim() : undefined;
+    if (threadName && threadName.length > THREAD_NAME_MAX) {
+      res.status(400).json({
+        error: `a thread's name is a few words the panel shows beside its label: ${threadName.length} characters, the most is ${THREAD_NAME_MAX}. `
+          + 'Name what the work is ("Repetition check"); the thread text says what it is for.',
+      });
+      return;
+    }
+
     if (kind === 'update' && !text && owner === undefined && waitingOn === undefined
-      && body.nextAction === undefined && body.label === undefined && !workers?.length && !addresses?.length
+      && body.nextAction === undefined && body.label === undefined && threadName === undefined && !workers?.length && !addresses?.length
       && !(Array.isArray(body.evidence) && body.evidence.length > 0)) {
-      res.status(400).json({ error: 'an update must change something: a summary, evidence, owner, next action, what it waits on, a worker, or the events it accounts for' });
+      res.status(400).json({ error: 'an update must change something: a summary, evidence, owner, next action, label, name, what it waits on, a worker, or the events it accounts for' });
       return;
     }
 
@@ -887,6 +898,7 @@ export function registerUnifiedConversationQueryRoutes(
       text,
       by: body.by === 'user' ? 'user' : 'coordinator',
       ...(kind === 'outcome' && typeof body.name === 'string' && body.name.trim() ? { name: body.name.trim() } : {}),
+      ...(threadName ? { name: threadName } : {}),
       ...(kind === 'update' || kind === 'close' ? { ref: body.ref } : {}),
       ...(owner ? { owner } : {}),
       ...(typeof body.nextAction === 'string' && body.nextAction.trim() ? { nextAction: body.nextAction.trim() } : {}),

@@ -175,6 +175,62 @@ describe('deriveStatus', () => {
     expect(deriveStatus(events)).toBe('streaming')
   })
 
+  // Event order recorded from a Claude session on a llama.cpp endpoint with a
+  // 40,960-token window (lattice-app 0.6.2, CLI 2.1.287, 6 Oct 2026): Claude
+  // compacted after the Read result, logged the boundary as a turn:end, then
+  // made the request it was about to make. The session read idle for that whole
+  // request.
+  describe('an automatic compaction inside a turn', () => {
+    const toolThenAutoCompaction = () => [
+      makeEvent('run:start'),
+      makeEvent('input:sent', { text: 'Read notes.txt' }),
+      makeEvent('run:ready'),
+      makeContentEvent([{ type: 'tool_use', id: 't1', name: 'Read', input: {} }]),
+      makeEvent('result', { blocks: [] }),
+      makeEvent('context:compaction', { phase: 'started' }),
+      makeEvent('context:compaction', { phase: 'completed', result: 'success' }),
+      makeEvent('turn:end', { compact: true, trigger: 'auto', preTokens: 22102, postTokens: 968 }),
+    ]
+
+    it('reads streaming while the turn carries on after it', () => {
+      expect(deriveStatus(toolThenAutoCompaction())).toBe('streaming')
+    })
+
+    // Recorded the same day with a 58,000-token window: the compaction ran
+    // before the second message's first request, and the answer came 50s later.
+    it('reads streaming when Claude compacts before answering a new message', () => {
+      const events = [
+        makeEvent('turn:end'),
+        makeEvent('input:sent', { text: 'And now?' }),
+        makeEvent('run:ready'),
+        makeEvent('context:compaction', { phase: 'started' }),
+        makeEvent('context:compaction', { phase: 'started' }),
+        makeEvent('context:compaction', { phase: 'completed', result: 'success' }),
+        makeEvent('turn:end', { compact: true, trigger: 'auto' }),
+      ]
+      expect(deriveStatus(events)).toBe('streaming')
+    })
+
+    it('reads idle once the turn ends', () => {
+      const events = [
+        ...toolThenAutoCompaction(),
+        makeContentEvent([{ type: 'text', text: 'PELICAN' }]),
+        makeEvent('turn:end'),
+      ]
+      expect(deriveStatus(events)).toBe('idle')
+    })
+
+    it('reads idle after a manual /compact', () => {
+      const events = [
+        makeEvent('turn:end'),
+        makeEvent('input:sent', { text: '/compact', source: 'command' }),
+        makeEvent('context:compaction', { phase: 'completed', result: 'success' }),
+        makeEvent('turn:end', { compact: true, trigger: 'manual' }),
+      ]
+      expect(deriveStatus(events)).toBe('idle')
+    })
+  })
+
   // Event order recorded from a Claude session sent a message mid-compaction
   // (conv-PK-0ehg9u-G3 seq 68-82, 27 Sep 2026): the message is held until the
   // compaction ends, then answered as a turn with no input:sent of its own.

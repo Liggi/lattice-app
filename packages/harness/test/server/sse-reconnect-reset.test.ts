@@ -3,7 +3,7 @@ import { SessionManager } from '../../src/server/session-manager.js'
 import { FakeAdapter } from '../helpers/fake-process.js'
 import { MemoryStorage } from '../helpers/memory-storage.js'
 import { createTestServer } from '../helpers/test-server.js'
-import { TAIL_WINDOW } from '../../src/server/event-log.js'
+import { TAIL_WINDOW, REPLAY_WINDOW } from '../../src/server/event-log.js'
 import type { SessionEvent, EventType } from '../../src/protocol/events.js'
 
 let manager: SessionManager
@@ -140,6 +140,16 @@ describe('SSE reconnect with an incoherent client cursor forces a server-declare
     expect(events.every(e => e.seq > afterSeq)).toBe(true)
     expect(events[events.length - 1].seq).toBe(totalSeq)
   })
+
+  it('reopening more than REPLAY_WINDOW events behind → tail replay + reset:true', async () => {
+    const totalSeq = seedTurns(storage, 's1', 20, 30)
+    const afterSeq = totalSeq - REPLAY_WINDOW - 50
+    const { events, meta } = await readSSE(`${baseUrl}/session/s1/events?after=${afterSeq}`)
+
+    expect(meta!.reset).toBe(true)
+    expect(events.length).toBeLessThanOrEqual(REPLAY_WINDOW)
+    expect(events[events.length - 1].seq).toBe(totalSeq)
+  })
 })
 
 describe('replay_meta.scoped is truthful when the tail window clips a mid-turn start (F5)', () => {
@@ -174,5 +184,15 @@ describe('replay_meta.scoped is truthful when the tail window clips a mid-turn s
     const last = events[events.length - 1]
     expect(last.type).toBe('run:end')
     expect(last.seq).toBe(totalSeq + 1)
+  })
+
+  it('a long turn in progress replays only its newest REPLAY_WINDOW events', async () => {
+    const totalSeq = seedSingleTurn(storage, 's1', REPLAY_WINDOW * 5)
+    const { events, meta } = await readSSE(`${baseUrl}/session/s1/events?after=0`)
+
+    expect(meta!.scoped).toBe(true)
+    // The newest REPLAY_WINDOW events, then recovery's synthetic run:end.
+    expect(events[0].seq).toBe(totalSeq - REPLAY_WINDOW + 1)
+    expect(events[events.length - 1].seq).toBe(totalSeq + 1)
   })
 })

@@ -23,6 +23,7 @@ import type { ActionTraceEntry, HydrationPhase } from '@liggi/agent-ui-harness/c
 import { CollapsedToolGroup, type BackgroundTaskState } from '@liggi/agent-ui-toolkit';
 import { useRenderOrderDetector } from '../../hooks/useRenderOrderDetector';
 import { isBlankText } from '../../utils/blank-text';
+import { CLAUDE_QUESTION_ID_PREFIX } from '@/types/decisions';
 
 interface BranchLineage {
   parentSessionId: string;
@@ -588,8 +589,8 @@ export const MessageList: React.FC<MessageListProps> = ({
             Always rendered (when there are messages) so it can animate out smoothly instead of
             being yanked from the DOM. Uses grid row transition for smooth height collapse. */}
 
-        {/* Codex stays active while waiting for an answer; other providers render after streaming stops. */}
-        {(!isStreaming || _streamingProvider === 'codex') && pendingQuestion && onAnswerPendingQuestion && (
+        {/* Codex, and Claude Code asking its own question, stay active while waiting for an answer; other questions render after streaming stops. */}
+        {(!isStreaming || _streamingProvider === 'codex' || pendingQuestion?.id.startsWith(CLAUDE_QUESTION_ID_PREFIX)) && pendingQuestion && onAnswerPendingQuestion && (
           <div className="w-full flex justify-center relative z-10">
             <div className="w-full max-w-3xl px-4 py-2">
               <ErrorBoundary name="PendingQuestion">

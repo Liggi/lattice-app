@@ -46,6 +46,8 @@
 
 
 export const PROJECT_NOTED_EVENT = 'project:noted';
+/** The user sent the project a message from the composer (`noteUserSent`). */
+export const USER_SENT_EVENT = 'user:sent';
 /** The server put a state nudge in front of an input; counted so the discipline can be measured. */
 export const PROJECT_NUDGED_EVENT = 'project:nudged';
 /**
@@ -54,7 +56,7 @@ export const PROJECT_NUDGED_EVENT = 'project:nudged';
  * server reads only these rather than parsing the whole log for each fold.
  */
 export const PROJECT_FOLD_EVENT_TYPES = [
-  PROJECT_NOTED_EVENT, PROJECT_NUDGED_EVENT, 'turn:end',
+  PROJECT_NOTED_EVENT, PROJECT_NUDGED_EVENT, 'turn:end', USER_SENT_EVENT,
   'worker:started', 'worker:reassigned', 'worker:asked', 'worker:answered', 'worker:reported', 'worker:moved',
 ] as const;
 
@@ -105,7 +107,12 @@ export interface ProjectNotedData {
   text: string;
   /** Whose call a decision was; the coordinator's unless it says otherwise. */
   by: 'coordinator' | 'user';
-  /** For `outcome`: the project's short name, as the coordinator wrote it with the outcome. */
+  /**
+   * For `outcome`: the project's short name, as the coordinator wrote it with
+   * the outcome. For `open` and `update`: the thread's short name, which the
+   * user's panel puts beside its label so two threads at the same step can be
+   * told apart ("Repetition check").
+   */
   name?: string;
   /** For `update` and `close`: the seq of the `open` note, which is the thread's id. */
   ref?: number;
@@ -201,6 +208,8 @@ export interface ProjectOpenThread {
   evidence: string[];
   /** The next step in a few words for the user's panel; null until the coordinator writes one. */
   label: string | null;
+  /** What the thread is about in a few words, shown with its label; null until the coordinator writes one. */
+  name: string | null;
   /** null when the thread has never been reconciled — prose from before ownership was recorded. */
   owner: ThreadOwner | null;
   nextAction: string | null;
@@ -288,6 +297,15 @@ export interface ProjectState {
   accountingFrom: number | null;
   /** What the current turn is doing; null once the turn has ended. */
   now: string | null;
+  /**
+   * When the user last sent the project a message, while the coordinator has
+   * not yet ended a turn after it; null otherwise. The sidebar's Needs you
+   * indicator pauses for asks that waited on the user since before then
+   * (`project-needs-you.ts`): the coordinator is acting on the message, and
+   * lights again for whatever it still leaves with the user. The panel's
+   * Needs you list ignores it.
+   */
+  answeredBefore: number | null;
   /** How many times the server has had to ask for the state to be noted. */
   nudges: number;
   /**
@@ -309,7 +327,7 @@ export interface ProjectEventLike {
 export function emptyProjectState(): ProjectState {
   return {
     outcome: null, decisions: [], retired: [], priority: null, rank: [], open: [], closed: [],
-    attention: [], historical: [], accountingFrom: null, now: null, nudges: 0, revision: 0,
+    attention: [], historical: [], accountingFrom: null, now: null, answeredBefore: null, nudges: 0, revision: 0,
   };
 }
 
@@ -353,6 +371,7 @@ function applyThreadFields(thread: ProjectOpenThread, data: Partial<ProjectNoted
   }
   if (typeof data.nextAction === 'string' && data.nextAction.trim()) thread.nextAction = data.nextAction.trim();
   if (typeof data.label === 'string' && data.label.trim()) thread.label = data.label.trim();
+  if (typeof data.name === 'string' && data.name.trim()) thread.name = data.name.trim();
   if ('waitingOn' in data) thread.waitingOn = data.waitingOn === null ? null : normalizeWait(data.waitingOn) ?? thread.waitingOn;
   if (JSON.stringify([thread.owner, thread.waitingOn]) !== waitBefore) thread.waitingSince = at;
   if (Array.isArray(data.workers)) {
@@ -433,9 +452,15 @@ export function foldProjectState(events: readonly ProjectEventLike[]): ProjectSt
       state.nudges += 1;
       continue;
     }
-    // `now` describes the turn that set it and nothing after.
+    // `now` describes the turn that set it and nothing after. A compaction's
+    // own `turn:end` falls mid-turn, so the user's message is not yet taken in.
     if (event.type === 'turn:end') {
       state.now = null;
+      if (!(event.data as { compact?: boolean } | null)?.compact) state.answeredBefore = null;
+      continue;
+    }
+    if (event.type === USER_SENT_EVENT) {
+      state.answeredBefore = event.timestamp;
       continue;
     }
 
@@ -553,6 +578,7 @@ export function foldProjectState(events: readonly ProjectEventLike[]): ProjectSt
           summary: null,
           evidence: [],
           label: null,
+          name: null,
           owner: null,
           nextAction: null,
           waitingOn: null,
@@ -818,6 +844,7 @@ function renderThread(thread: ProjectOpenThread, user: string, now?: number): st
   const evidence = thread.evidence ?? [];
   if (evidence.length > 0) lines.push(`  evidence: ${evidence.join('; ')}`);
 
+  if (thread.name) lines.push(`  name: ${thread.name}`);
   if (thread.label) lines.push(`  label: ${thread.label}`);
   const detail: string[] = [];
   detail.push(thread.owner ? `owner ${renderOwner(thread.owner, user)}` : 'no owner noted');

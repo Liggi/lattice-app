@@ -46,6 +46,14 @@ describe('QueuedMessages', () => {
     expect(all).not.toMatch(/waiting|turn|queued/i);
   });
 
+  it('shows a message with notes as passage and note, as the thread does once it is sent', () => {
+    const text = '[Notes on your earlier output]\n1. Re: "a passage"\n   Note: why this?\n[/Notes]\n\nand the rest';
+    render(<QueuedMessages messages={[queued(1, text)]} />);
+    expect(screen.getByTestId('annotated-quote').textContent).toBe('a passage');
+    expect(screen.getByTestId('annotated-message').textContent).toContain('why this?');
+    expect(screen.getByTestId('pending-message').textContent).not.toContain('[Notes');
+  });
+
   it('keeps another agent’s message to its closed entry, attributed', () => {
     render(<QueuedMessages messages={[queued(1, 'hold the restart', { attribution: { sender: 'front', passedOn: false } })]} />);
     expect(screen.getByTestId('message-attribution').textContent).toBe('From front');

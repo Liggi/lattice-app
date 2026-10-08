@@ -9,6 +9,7 @@ import { AgentMessage } from './AgentMessage';
 import { JsonViewer } from '../JsonViewer/JsonViewer';
 import { ToolUseRenderer, type BackgroundTaskState } from '@liggi/agent-ui-toolkit';
 import { LazyCodeHighlight } from '../CodeHighlight';
+import { ViewableImage } from './ImageViewer';
 import { DiagramBlock, DiagramStreamingContext } from './DiagramBlock';
 import type { ChatMessage, ToolResult, QuestionRequest, DisplayContentBlock } from '../../types';
 import { preserveThinkingBreaks } from '../../utils/thinking-text';
@@ -18,6 +19,7 @@ import { parseAnnotatedMessage } from '../../utils/annotations-format';
 import { hasVisibleText } from '../../utils/blank-text';
 import { AnnotatedUserMessage } from './AnnotatedUserMessage';
 import { UserText } from './UserText';
+import type { PastedSpan } from '@liggi/agent-ui-harness/protocol';
 import { AttachedText } from './AttachedText';
 import { isAttachedTextFileBlock, parseAttachedTextFile } from '@/constants/attached-text-file';
 // import type { ContentBlockParam } from '@anthropic-ai/sdk/resources/messages/messages';
@@ -47,6 +49,32 @@ const EMPTY_CHILDREN_MESSAGES: Record<string, ChatMessage[]> = {};
 /** The blocks of a user message that are attachments: images, documents and attached text files. */
 export function isAttachmentBlock(block: { type: string; text?: string }): boolean {
   return block.type === 'image' || block.type === 'document' || isAttachedTextFileBlock(block);
+}
+
+/**
+ * The inside of the user's bubble: attachments, then the text, with a notes
+ * block shown as passage and note. The thread and the queue above the composer
+ * both draw it, so a message looks the same before and after it is taken in.
+ */
+export function UserMessageBody({ text, pastes, media }: { text: string; pastes?: readonly PastedSpan[]; media?: React.ReactNode[] }): JSX.Element {
+  const content = text.trim();
+  // Pasted stretches count back from the end of the text, so trimming its end moves them.
+  const trimmedFromEnd = text.length - text.trimEnd().length;
+  const trimmedPastes = pastes?.map((span) => ({ fromEnd: span.fromEnd - trimmedFromEnd, length: span.length }));
+  // Notes on the agent's reply render as passage + note; they are never collapsed.
+  const annotated = parseAnnotatedMessage(content);
+  return (
+    <>
+      {media && media.length > 0 && (
+        <div className={`flex flex-wrap gap-2${content ? ' mb-2' : ''}`}>{media}</div>
+      )}
+      {annotated ? (
+        <AnnotatedUserMessage parsed={annotated} />
+      ) : content ? (
+        <UserText text={content} pastes={trimmedPastes} />
+      ) : null}
+    </>
+  );
 }
 
 /** A user message's attachments, as its bubble shows them above the text. */
@@ -115,13 +143,15 @@ function ImageWithPlaceholder({
           <Loader2 size={20} className="animate-spin text-fg-3" />
         </div>
       )}
-      <img
-        src={src}
-        alt={alt}
-        className={`${className} ${isLoading ? 'invisible' : 'visible'}`}
-        onLoad={handleLoad}
-        onError={handleError}
-      />
+      <ViewableImage src={src} alt={alt} className="block cursor-zoom-in">
+        <img
+          src={src}
+          alt={alt}
+          className={`${className} ${isLoading ? 'invisible' : 'visible'}`}
+          onLoad={handleLoad}
+          onError={handleError}
+        />
+      </ViewableImage>
     </div>
   );
 }
@@ -496,14 +526,14 @@ export const markdownComponents: Record<string, React.ComponentType<MarkdownComp
   img({ src, alt }: MarkdownComponentProps & { src?: string; alt?: string }) {
     const url = localImageUrl(src);
     return (
-      <a href={url} target="_blank" rel="noopener noreferrer" className="not-prose inline-block my-1 max-w-full">
+      <ViewableImage src={url} alt={alt ?? ''} className="not-prose inline-block my-1 max-w-full cursor-zoom-in">
         <img
           src={url}
           alt={alt ?? ''}
           loading="lazy"
           className="block max-w-full h-auto max-h-[70vh] rounded-md border border-line"
         />
-      </a>
+      </ViewableImage>
     );
   }
 };
@@ -575,9 +605,6 @@ export function MessageItem({
         : '';
 
     const content = rawContent.trim();
-    // Pasted stretches count back from the end of the text, so trimming its end moves them.
-    const trimmedFromEnd = rawContent.length - rawContent.trimEnd().length;
-    const pastes = message.pastes?.map((span) => ({ fromEnd: span.fromEnd - trimmedFromEnd, length: span.length }));
 
     // Extract attachment blocks (images, documents, attached text files) for rendering
     const mediaBlocks = Array.isArray(message.content)
@@ -589,9 +616,6 @@ export function MessageItem({
     if (!content && mediaBlocks.length === 0) {
       return null;
     }
-
-    // Notes on the agent's reply render as passage + note; they are never collapsed.
-    const annotated = parseAnnotatedMessage(content);
 
     const mediaNodes = attachmentMedia(mediaBlocks);
 
@@ -613,14 +637,7 @@ export function MessageItem({
     const userMessageCard = (
       <div className="group/user relative rounded-lg bg-surface w-full">
         <div className="px-3.5 py-2.5 text-sm leading-[1.55] text-fg">
-          {mediaBlocks.length > 0 && (
-            <div className={`flex flex-wrap gap-2${content ? ' mb-2' : ''}`}>{mediaNodes}</div>
-          )}
-          {annotated ? (
-            <AnnotatedUserMessage parsed={annotated} />
-          ) : content ? (
-            <UserText text={content} pastes={pastes} />
-          ) : null}
+          <UserMessageBody text={rawContent} pastes={message.pastes} media={mediaNodes} />
         </div>
       </div>
     );

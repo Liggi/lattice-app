@@ -59,10 +59,12 @@ describe('StateOfPlaySection', () => {
     expect(screen.getByTestId('play-needs-you').textContent).toContain('Waiting on your notes on the pack');
   });
 
-  it('shows a labelled Needs you item as its ask alone, with the summary a tap away', () => {
+  it('shows a labelled Needs you item as its ask, what the work is and how long it has waited, with the summary a tap away', () => {
     draw();
     const section = screen.getByTestId('play-needs-you');
     expect(section.textContent).not.toContain('Built and checked');
+    // No short name yet, so what the thread is for says which work it is.
+    expect(section.querySelector('[data-testid="play-item"]')?.textContent).toMatch(/^Publish 0\.4\.1\?Release\d+d$/);
     fireEvent.click(screen.getByText('Publish 0.4.1?'));
     expect(screen.getByTestId('play-needs-you-detail').textContent).toBe('Built and checked on a clean machine; the changelog still names two fixes');
   });

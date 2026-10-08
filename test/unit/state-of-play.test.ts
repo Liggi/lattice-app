@@ -7,7 +7,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { foldProjectState, PROJECT_NOTED_EVENT, type ProjectEventLike, type ProjectNotedData } from '../../src/types/project-state.js';
+import { foldProjectState, PROJECT_NOTED_EVENT, USER_SENT_EVENT, type ProjectEventLike, type ProjectNotedData } from '../../src/types/project-state.js';
 import { deriveStateOfPlay } from '../../src/types/state-of-play.js';
 import type { WorkerCardState } from '../../src/types/worker-events.js';
 
@@ -33,17 +33,20 @@ describe('deriveStateOfPlay', () => {
     note({ kind: 'open', text: 'A tester tries it', owner: { kind: 'external', who: 'Sam' } }), // 3
     note({ kind: 'open', text: 'Queued idea', owner: { kind: 'coordinator' } }), // 4
     note({ kind: 'open', text: 'Waits on the usage window', owner: { kind: 'coordinator' }, waitingOn: { kind: 'resource', text: 'the usage window' } }), // 5
-    note({ kind: 'open', text: 'Choose a name', owner: { kind: 'coordinator' }, waitingOn: { kind: 'decision', text: 'Jason picking' } }), // 6
+    note({ kind: 'open', text: 'Choose a name', owner: { kind: 'user' }, waitingOn: { kind: 'decision', text: 'Jason picking' } }), // 6
     note({ kind: 'open', text: 'Dismissed work', owner: { kind: 'worker', worker: 'conv-d' }, workers: ['conv-d'] }), // 7
     note({ kind: 'park', text: 'Jason dismissed it', by: 'user', ref: 7 }), // 8
     note({ kind: 'open', text: 'Owned by a reused worker', owner: { kind: 'worker', worker: 'conv-reused' } }), // 9
+    note({ kind: 'open', text: 'Reuse the frozen eval set', owner: { kind: 'coordinator' }, waitingOn: { kind: 'decision', text: "Gui's OK" } }), // 10
   ];
   const project = foldProjectState(events);
   const workers = [worker('conv-a', 2), worker('conv-loose', null), worker('conv-d', 7), worker('conv-gone', 2, { archived: true }), worker('conv-reused', 99)];
   const play = deriveStateOfPlay(project, workers);
 
-  it('puts the user\'s moves under Needs you: owned by them, or waiting on a decision', () => {
+  it('puts only the threads the user owns under Needs you, whatever anyone else\'s waits on', () => {
     expect(play.needsYou.map((item) => item.label)).toEqual(['Publish 0.4.1?', 'Choose a name']);
+    const owedByOthers = play.inProgress.find((item) => item.label === 'Reuse the frozen eval set');
+    expect(owedByOthers?.heldOn).toBe("Gui's OK");
   });
 
   it('lists every live worker by its task, and not the threads they carry', () => {
@@ -52,7 +55,7 @@ describe('deriveStateOfPlay', () => {
   });
 
   it('puts held threads nobody is on under In progress', () => {
-    expect(play.inProgress.map((item) => item.label)).toEqual(['A tester tries it', 'Waits on the usage window']);
+    expect(play.inProgress.map((item) => item.label)).toEqual(['A tester tries it', 'Waits on the usage window', 'Reuse the frozen eval set']);
     expect(play.inProgress[0].heldOn).toBe('Sam');
   });
 
@@ -79,7 +82,19 @@ describe('deriveStateOfPlay', () => {
     const ranked = foldProjectState([...events, note({ kind: 'rank', order: [6, 5] })]);
     const order = deriveStateOfPlay(ranked, workers);
     expect(order.needsYou.map((item) => item.label)).toEqual(['Choose a name', 'Publish 0.4.1?']);
-    expect(order.inProgress.map((item) => item.label)).toEqual(['Waits on the usage window', 'A tester tries it']);
+    expect(order.inProgress.map((item) => item.label)).toEqual(['Waits on the usage window', 'A tester tries it', 'Reuse the frozen eval set']);
+  });
+
+  it('keeps Needs you listed when the user writes, while the fold notes the message until the coordinator ends a turn', () => {
+    const sent = (timestamp: number): ProjectEventLike => ({ seq: timestamp, type: USER_SENT_EVENT, timestamp, data: {} });
+    const end = (timestamp: number, data: object = {}): ProjectEventLike => ({ seq: timestamp, type: 'turn:end', timestamp, data });
+    const replied = foldProjectState([...events, sent(20)]);
+    expect(replied.answeredBefore).toBe(20);
+    expect(deriveStateOfPlay(replied, workers).needsYou.map((item) => item.label)).toEqual(['Publish 0.4.1?', 'Choose a name']);
+
+    // A compaction's own turn end falls mid-turn; a real one clears it.
+    expect(foldProjectState([...events, sent(20), end(21, { compact: true })]).answeredBefore).toBe(20);
+    expect(foldProjectState([...events, sent(20), end(22)]).answeredBefore).toBeNull();
   });
 });
 
@@ -94,6 +109,8 @@ describe('the fold behind it', () => {
       note({ kind: 'close', text: 'done', ref: 2 }), // 5
     ]);
     expect(state.open[0].label).toBe('second label');
+    expect(state.open[0].name).toBeNull();
+    expect(foldProjectState([note({ kind: 'open', text: 'Repetition check runs offline', name: 'Repetition check' })]).open[0].name).toBe('Repetition check');
     expect(state.open.find((thread) => thread.seq === 1)).toBeTruthy();
     expect(state.rank).toEqual([1]);
   });

@@ -50,6 +50,38 @@ function turnEndLeavesNextTurn(events: readonly SessionEvent[], end: number): bo
   return false
 }
 
+/**
+ * Whether the compaction that ended at `end` was Claude's own, run inside a
+ * turn that carries on after it. Claude compacts automatically just before a
+ * request that would cross its threshold, after a tool result or a new
+ * message, and logs the boundary as a turn:end; the request it was making
+ * follows. A manual /compact, or one logged after the turn's real end, stops.
+ */
+function autoCompactionInsideTurn(events: readonly SessionEvent[], end: number): boolean {
+  const data = events[end].data as TurnEndData | undefined
+  if (!data?.compact || data.trigger !== 'auto') return false
+  for (let j = end - 1; j >= 0; j--) {
+    const event = events[j]
+    switch (event.type) {
+      case 'context:compaction':
+      case 'run:ready':
+        continue
+      case 'turn:end':
+        if ((event.data as TurnEndData | undefined)?.compact) continue
+        return false
+      case 'content':
+      case 'result':
+        if ((event.data as { parentToolUseId?: string | null } | undefined)?.parentToolUseId != null) continue
+        return true
+      case 'input:sent':
+        return (event.data as InputSentData | undefined)?.source !== 'command'
+      default:
+        return false
+    }
+  }
+  return false
+}
+
 export function deriveStatus(events: readonly SessionEvent[]): Status {
   for (let i = events.length - 1; i >= 0; i--) {
     // A delivered message the provider has started as a turn of its own.
@@ -59,7 +91,7 @@ export function deriveStatus(events: readonly SessionEvent[]): Status {
       case 'run:error':
         return 'idle'
       case 'turn:end':
-        return turnEndLeavesNextTurn(events, i) ? 'streaming' : 'idle'
+        return autoCompactionInsideTurn(events, i) || turnEndLeavesNextTurn(events, i) ? 'streaming' : 'idle'
       case 'stop:requested':
         return 'stopping'
       case 'content':
@@ -101,7 +133,7 @@ export function deriveStatus(events: readonly SessionEvent[]): Status {
         // spawning and the first content event.
         for (let j = i - 1; j >= 0; j--) {
           if (events[j].type === 'input:sent') return 'streaming'
-          if (events[j].type === 'turn:end') return turnEndLeavesNextTurn(events, j) ? 'streaming' : 'idle'
+          if (events[j].type === 'turn:end') return autoCompactionInsideTurn(events, j) || turnEndLeavesNextTurn(events, j) ? 'streaming' : 'idle'
           if (events[j].type === 'run:end') return 'idle'
           if (events[j].type === 'run:start') return 'idle'
         }

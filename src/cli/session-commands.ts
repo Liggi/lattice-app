@@ -648,7 +648,9 @@ async function cmdNote(cmd: ParsedCommand): Promise<void> {
   const notes: ProjectNotedData[] = [];
   const outcome = str(cmd, 'outcome');
   const name = str(cmd, 'name');
-  if (name && !outcome) fail('--name goes with --outcome: a project is named for the outcome it was agreed for');
+  const namesThread = Boolean(str(cmd, 'open')) || int(cmd, 'thread') !== undefined;
+  if (name && outcome && namesThread) fail('--name names the project with --outcome and a thread with --open/--thread; make them separate calls');
+  if (name && !outcome && !namesThread) fail('--name goes with --outcome (the project\'s name) or with --open/--thread (the thread\'s name)');
   if (outcome) notes.push({ kind: 'outcome', text: outcome, by: 'coordinator', ...(name ? { name } : {}) });
   const decide = str(cmd, 'decide');
   const replaces = str(cmd, 'replaces');
@@ -692,6 +694,7 @@ async function cmdNote(cmd: ParsedCommand): Promise<void> {
     ...(worker ? { workers: [worker] } : {}),
     ...(evidence ? { evidence: [evidence] } : {}),
     ...(label ? { label } : {}),
+    ...(name && !outcome ? { name } : {}),
   };
 
   const open = str(cmd, 'open');

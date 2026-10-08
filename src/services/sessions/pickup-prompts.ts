@@ -1,7 +1,7 @@
 import { userGuidance, userName, UserName } from '../user-profile.js';
 import { AGENT_CLI_PATH, shellQuote } from '../infrastructure/agent-cli.js';
 import type { AgentProvider } from './installed-providers.js';
-import { diagramGuidance } from './diagram-guidance.js';
+import { frameGuidance } from './frame-guidance.js';
 /**
  * First-message assembly for coordinator and worker conversations.
  *
@@ -169,7 +169,8 @@ export function buildCoordinatorPreamble(input: CoordinatorPreambleInput): strin
     `- You can react to ${userName()}'s latest message with an emoji, as a Slack reaction: \`${input.cli} session react`,
     `  ${input.conversationId} <emoji>\` (👀 seen and on it, ✅ done, 👍 agreed). It says one small thing without`,
     '  a message, which suits a turn that would otherwise end silently. Use it sparingly, and never instead of an',
-    `  answer they asked for. When ${userName()} reacts to one of your messages, that reaction is their whole reply: take it`,
+    `  answer they asked for. They see the reaction, so never mention it in your message ("I've reacted 👍"). When ${userName()}`,
+    '  reacts to one of your messages, that reaction is their whole reply: take it',
     '  in and end the turn without writing to them, unless it changes something you have to act on.',
     `- When ${userName()} approves or corrects the work, carry that through to the actual work or worker instructions in`,
     '  the same turn; do not merely agree and wait for them to ask whether it happened. Keep replies natural and',
@@ -199,7 +200,7 @@ export function buildCoordinatorPreamble(input: CoordinatorPreambleInput): strin
     '',
     ...messageShapeGuidance(),
     '',
-    ...diagramGuidance(input.cli),
+    ...frameGuidance(input.cli),
     '',
     keyFileGuidance(input.cli),
     '',
@@ -463,15 +464,30 @@ export function buildCoordinatorPreamble(input: CoordinatorPreambleInput): strin
     '  case, no full stop. "Waiting on Sender-name release recovery is in progress; preserve its fixed release while',
     '  preparing the shared coordinator change" tells the reader nothing; `--next "Improve how coordinators divide work',
     '  and explain progress"` with `--waiting-on` "the app update to finish" reads as one sentence with the label.',
-    `- ${userName()}'s panel lists your open threads as a to-do list, and your live workers by task. Needs you: threads`,
-    `  whose owner is ${userName()} or that wait on a decision, so make the owner say whose move it really is — a thread`,
-    '  waiting on someone else is owned by them (`--owner "Sam"`), not by the user. Workers: each live worker, which',
+    `- ${userName()}'s panel lists your open threads as a to-do list, and your live workers by task. Needs you: the threads`,
+    `  ${userName()} owns, and only those, so make the owner say whose move it really is — a thread waiting on someone`,
+    '  else, their decision included, is owned by them (`--owner "Sam"`), and `--waiting-on decision:` alone puts nothing',
+    `  in front of ${userName()}. A row stays there until you move its thread, so when a message from them answers an ask,`,
+    '  move that thread in the same turn. Workers: each live worker, which',
     '  stands for the thread it carries. In progress: threads nobody is on that wait on a worker, a dependency or a',
     '  resource. Next: open threads nobody has started and nothing blocks, which is where agreed work you have not',
     `  dispatched yet belongs — open a thread for it when it is agreed, so ${userName()} sees`,
     '  it queued rather than lost.',
-    '- Give each thread `--label "<the next step in a few words>"` on `--open` or `--thread`: the panel lists the label, not',
-    '  the thread text ("Publish 0.4.1?", "Check the premise fixes and merge"). Keep it current as the next step moves.',
+    `- Needs you is what ${userName()} has to do now, one row for each thing they do. Before you make a thread theirs:`,
+    `  - When they defer or hold something ("later", "when ready", "hold", "not now"), park the thread with`,
+    '    `--park <id> --with "<what they said, and what brings it back>"` rather than leaving it with them as "when ready".',
+    '    A hold on everything parks every thread it covers.',
+    '  - Work ready to ship, merge, commit or run is one ask, not one per piece: one thread owns the go-ahead ("Commit and',
+    '    run both checks?") and the others wait on it with `--waiting-on dependency:<its id>`.',
+    '  - Never ask for what is already authorised, by a decision in force, their earlier go or the standing rules for this',
+    '    work. Do it and say that you did.',
+    '  - An errand they said they will handle themselves (requesting reviewers, something outside Lattice) is parked',
+    '    with what they said, unless they asked you to keep it in front of them.',
+    '- Give each thread `--label "<the next step in a few words>"` and `--name "<what the work is, in a few words>"` on',
+    '  `--open` or `--thread`: the panel lists the label, with the name under it ("Commit and first run?" under "Repetition',
+    '  check"), so two threads at the same step can be told apart. Without a name it shows the whole thread text there.',
+    '  Keep the label current as the next step moves; the name stays while the work does. No time figures in a label',
+    '  ("saves ~20-30 min a run"): why the ask is worth it goes in the summary.',
     '  On a thread that needs the user, the panel shows its `--summary` when they hover or tap the label, so it is one',
     '  line: Lattice refuses one over 160 characters. The detail goes in `--evidence` or your message to the user.',
     `- \`--rank <id,id,…>\` puts the open threads in ${userName()}'s order of priority, most important first; the panel lists`,
@@ -516,7 +532,7 @@ export interface WorkerPreambleInput {
 /**
  * The preamble for a session started from the New screen, which is neither a
  * coordinator nor a worker and used to get only the user's text: nothing told
- * it how the chat draws diagrams, so it fell back to ASCII art.
+ * it how to draw a picture in the chat, so it fell back to ASCII art.
  */
 export function buildSessionPreamble(cli: string, conversationId: string): string {
   return [
@@ -525,7 +541,7 @@ export function buildSessionPreamble(cli: string, conversationId: string): strin
     '',
     `Checking understanding: when ${userName()} is learning something with you and wants to check they have it, \`${cli} explain --session ${conversationId} --rubric <file>\` puts a card in the chat where they explain it in their own words and see, as they type, which ideas they have covered. \`${cli} explain --help\` says how to write the rubric.`,
     '',
-    ...diagramGuidance(cli),
+    ...frameGuidance(cli),
     '',
     keyFileGuidance(cli),
     '',
@@ -553,7 +569,7 @@ export function buildWorkerPreamble(input: WorkerPreambleInput): string {
     'Report: your final message each turn reaches front automatically; there is nothing to send — a status message on top of it tells front the same thing a second time and costs it a turn to read.',
     'Screenshots: save an image (PNG, JPEG, GIF or WebP) under /tmp or your working directory and embed it by absolute path, `![what it shows](/tmp/shot.png)`; Lattice serves it to the UI on desktop and phone, so no web server or host URL is needed.',
     `Colleagues directly: when you need a fact from another worker to integrate with it — a signature, a path, what it actually changed — ask that worker with \`${input.cli} session send <conv> --from ${input.conversationId} --summary "<one line>" --message "…"\`. It reads the message attributed to you, and the answer comes back the same way, without front having to relay it.`,
-    `Reacting: when ${userName()} writes to you directly, \`${input.cli} session react ${input.conversationId} <emoji>\` puts an emoji under their latest message, as a Slack reaction would — 👀 when you have seen it and are on it, ✅ when what they asked for is done. Use it sparingly, as an acknowledgement, and never instead of a reply they need. When ${userName()} reacts to one of your messages, the reaction is their whole reply: do not answer it with a message unless it changes what you have to do.`,
+    `Reacting: when ${userName()} writes to you directly, \`${input.cli} session react ${input.conversationId} <emoji>\` puts an emoji under their latest message, as a Slack reaction would — 👀 when you have seen it and are on it, ✅ when what they asked for is done. Use it sparingly, as an acknowledgement, and never instead of a reply they need. They see the reaction, so never mention it in your message ("I've reacted 👍"). When ${userName()} reacts to one of your messages, the reaction is their whole reply: do not answer it with a message unless it changes what you have to do.`,
     `Subagents: use your own subagents only for quick parallel lookups whose results you need in this turn — reading, searching, grading several things at once. Anything that is real work (building, investigating, anything that should report back) goes to front as a proposed worker instead, so ${userName()} can see it, front picks its model and the project records it.`,
     'Uncertainty: what you are unsure of belongs in your report — front can use it. It is not by itself a reason to go and settle it. Unless the answer would change the move you are on or stop an expensive mistake, write down the assumption you made and carry on.',
     'Ask: front is a colleague, not a gate. If a decision is not yours to make, or you think the approach is wrong, say so: make your final message the question and stop, with `Question for front:` as its first line so it is routed as a question rather than a report. One question per turn, and say what you would do by default. Do not put questions to ' + userName() + ' on a card yourself (`ask`): front decides what goes to them.',
@@ -563,7 +579,7 @@ export function buildWorkerPreamble(input: WorkerPreambleInput): string {
     'Searching: keep recursive searches inside the repo or folder the work is in, never a home directory or a whole disk, and give each one a time limit (`timeout 60 …`). One unresponsive path can hang a search that prints nothing.',
     'Waiting: when you end a turn because you are waiting on something other than front — a restart, another worker\'s result, a run already in progress — make `Waiting on: <what>` the first line of your report, finishing the sentence in a few words ("Waiting on: the next quiet restart"). Your card then shows the wait instead of Reported, until you resume or report again. The line wakes nothing: before you end the turn, arm what will (a background command or Monitor that ends when the thing happens, or a ScheduleWakeup), unless the wait is on front, ' + userName() + ', another worker who will message you, or a restart. If nothing is armed, the server tells you so, and tells front if you answer that and still arm nothing.',
     '',
-    ...diagramGuidance(input.cli),
+    ...frameGuidance(input.cli),
     ...guidanceLines('worker'),
     '',
     '---',

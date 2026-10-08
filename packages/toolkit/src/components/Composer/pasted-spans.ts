@@ -4,9 +4,12 @@
  * as typed text, and only its position is tracked through later edits.
  */
 
-/** A paste is recorded when it is at least this many lines, or this many characters. */
+/**
+ * A paste is recorded when it is at least this many lines. Length alone does
+ * not count: dictation apps insert by pasting, and a long spoken paragraph is
+ * the user's own text.
+ */
 const LONG_PASTE_MIN_LINES = 8;
-const LONG_PASTE_MIN_CHARS = 1000;
 
 /** Character range of a paste within the composer's current text. */
 export interface PastedRange {
@@ -26,7 +29,7 @@ export function pastedTextAsInserted(clipboardText: string): string {
 }
 
 export function isLongPaste(text: string): boolean {
-  return text.length >= LONG_PASTE_MIN_CHARS || text.split('\n').length >= LONG_PASTE_MIN_LINES;
+  return text.split('\n').length >= LONG_PASTE_MIN_LINES;
 }
 
 /**

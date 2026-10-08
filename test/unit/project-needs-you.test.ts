@@ -12,13 +12,12 @@ let open: ProjectOpenThread[] = [];
 let priority: { text: string } | null = null;
 let maxSeq = 1;
 let workerEvents: { type: string; timestamp: number; data: unknown }[] = [];
-let userSent: { timestamp: number }[] = [];
+let answeredBefore: number | null = null;
 let card: OpenDecision | null = null;
 const judgeNouls = vi.fn();
 const outputSince = vi.fn((_worker: string, _since: number) => false);
 
-vi.mock('../../src/services/sessions/project-state.js', () => ({ readProjectState: () => ({ open, priority, now: null }) }));
-vi.mock('../../src/session-history/repository.js', () => ({ iterateEventsNewestFirst: () => userSent[Symbol.iterator]() }));
+vi.mock('../../src/services/sessions/project-state.js', () => ({ readProjectState: () => ({ open, priority, now: null, answeredBefore }) }));
 vi.mock('../../src/harness/event-message-reader.js', () => ({ getEventStorage: () => ({ maxSeq: () => maxSeq }) }));
 vi.mock('../../src/services/infrastructure/typesafe-client.js', () => ({ judgeNouls: (...args: unknown[]) => judgeNouls(...args) }));
 vi.mock('../../src/services/infrastructure/database-provider.js', () => ({
@@ -38,7 +37,7 @@ const { projectNeedsYou, projectWorkingOn, projectWorkerTasks, projectWorkerWait
 
 function thread(seq: number, overrides: Partial<ProjectOpenThread> = {}): ProjectOpenThread {
   return {
-    seq, at: 0, text: `thread ${seq}`, summary: null, evidence: [], owner: { kind: 'coordinator' } as ProjectOpenThread['owner'],
+    seq, at: 0, text: `thread ${seq}`, summary: null, evidence: [], label: null, name: null, owner: { kind: 'user' } as ProjectOpenThread['owner'],
     nextAction: null, waitingOn: { kind: 'decision', text: `decide ${seq}` } as ProjectOpenThread['waitingOn'],
     workers: [], events: [], updatedAt: 1000, waitingSince: 500, ...overrides,
   };
@@ -90,7 +89,7 @@ describe('projectNeedsYou', () => {
     open = [
       thread(1),
       thread(2),
-      thread(3, { waitingOn: { kind: 'worker', text: 'a worker' } as ProjectOpenThread['waitingOn'] }),
+      thread(3, { owner: { kind: 'coordinator' }, waitingOn: { kind: 'decision', text: "Gui's OK" } as ProjectOpenThread['waitingOn'] }),
     ];
     judgeNouls.mockImplementation(async (state: string) => (state.includes('thread 1')
       ? { nouls: { act: 0.9, parked: 0.1 } }
@@ -120,15 +119,20 @@ describe('projectNeedsYou', () => {
     expect(projectNeedsYou('conv-p')).toEqual([]);
   });
 
-  it('treats an ask as answered once the user has written to the project after it started waiting', async () => {
+  it('pauses an ask answered by a later message until the coordinator has ended a turn on it', async () => {
     open = [thread(1, { waitingSince: 500 }), thread(2, { waitingSince: 900 })];
     judgeNouls.mockResolvedValue({ nouls: { act: 0.9, parked: 0.1 } });
-    userSent = [{ timestamp: 700 }];
+    answeredBefore = 700;
     projectNeedsYou('conv-p');
     await settle();
     expect(projectNeedsYou('conv-p')?.map(item => item.seq)).toEqual([2]);
     expect(judgeNouls).toHaveBeenCalledTimes(1);
-    userSent = [];
+
+    answeredBefore = null;
+    maxSeq = 2;
+    projectNeedsYou('conv-p');
+    await settle();
+    expect(projectNeedsYou('conv-p')?.map(item => item.seq)).toEqual([1, 2]);
   });
 
   it("scores the project's open question card like a thread, until the user writes after it", async () => {
@@ -144,11 +148,11 @@ describe('projectNeedsYou', () => {
     expect(judgeNouls.mock.calls[0][0]).toContain('Ship it tonight?');
     expect(projectNeedsYou('conv-p')).toEqual([{ seq: 40, text: 'Ship it tonight?', thread: 'Ship it tonight?', since: 800, score: 0.95 }]);
 
-    userSent = [{ timestamp: 900 }];
+    answeredBefore = 900;
     maxSeq = 2;
     expect(projectNeedsYou('conv-p')).toEqual([]);
     expect(judgeNouls).toHaveBeenCalledTimes(1);
-    userSent = [];
+    answeredBefore = null;
     card = null;
   });
 });

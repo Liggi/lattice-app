@@ -1,6 +1,6 @@
 {
   "name": "@liggi/agent-ui-harness",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "description": "Manages the lifecycle of an interactive CLI agent process connected to a browser UI",
   "license": "MIT",
   "type": "module",

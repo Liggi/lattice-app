@@ -1,5 +1,16 @@
 import { describe, it, expect } from 'vitest';
-import { shiftPastedRanges, pastedSpansForSubmit } from '../components/Composer/pasted-spans.js';
+import { isLongPaste, shiftPastedRanges, pastedSpansForSubmit } from '../components/Composer/pasted-spans.js';
+
+describe('isLongPaste', () => {
+  it('records a paste of 8 or more lines, however short', () => {
+    expect(isLongPaste(Array.from({ length: 10 }, (_, i) => `line ${i}`).join('\n'))).toBe(true);
+    expect(isLongPaste(Array.from({ length: 7 }, (_, i) => `line ${i}`).join('\n'))).toBe(false);
+  });
+
+  it('leaves a long single paragraph as typed text, as dictation inserts it', () => {
+    expect(isLongPaste('word '.repeat(300))).toBe(false);
+  });
+});
 
 describe('shiftPastedRanges', () => {
   const paste = { start: 4, end: 10 }; // "PASTED" in "say PASTED end"

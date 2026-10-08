@@ -5,7 +5,11 @@
  * Derived from the coordinator's project state and its worker roster, so
  * nothing new has to be kept in step:
  *
- *   Needs you    the thread's owner is the user, or it waits on a decision.
+ *   Needs you    the thread's owner is the user (`isNeedsYou`). A thread
+ *                someone else owns never shows here, whatever it waits on:
+ *                "waiting on a decision" also covered decisions other people
+ *                owed, and half the long-lived rows were not the user's
+ *                (2026-10-07, two weeks of real projects replayed).
  *   Workers      every live worker, named by its task, whatever thread it is
  *                on (2026-09-28, Jason picked a list of its own over folding
  *                workers into the threads: a worker sent on to new work while
@@ -46,9 +50,19 @@ export interface StateOfPlay {
   parked: PlayItem[];
 }
 
-/** Whether the thread is the user's move. */
-export function isUsersMove(thread: ProjectOpenThread): boolean {
-  return thread.owner?.kind === 'user' || thread.waitingOn?.kind === 'decision';
+/** Whether the thread is the user's move: they own it. */
+export function isUsersMove(thread: Pick<ProjectOpenThread, 'owner'>): boolean {
+  return thread.owner?.kind === 'user';
+}
+
+/**
+ * Whether the thread is listed under Needs you: open, not parked and the
+ * user's move. A message from the user never hides it here (2026-10-07,
+ * Jason: every row vanished at any message, even "lol"); only the sidebar's
+ * indicator pauses on one (`project-needs-you.ts`).
+ */
+export function isNeedsYou(thread: ProjectOpenThread): boolean {
+  return !thread.parked && isUsersMove(thread);
 }
 
 /**
@@ -65,8 +79,9 @@ export function threadOfWorker(worker: Pick<WorkerCardState, 'worker' | 'thread'
   return naming.length > 0 ? naming[naming.length - 1].seq : null;
 }
 
+/** What a thread that is not the user's move is held on, if anything. */
 function heldOn(thread: ProjectOpenThread): string | null {
-  if (thread.waitingOn && thread.waitingOn.kind !== 'decision') return thread.waitingOn.text;
+  if (thread.waitingOn) return thread.waitingOn.text;
   if (thread.owner?.kind === 'external') return thread.owner.who;
   return null;
 }
@@ -95,14 +110,15 @@ export function deriveStateOfPlay(project: ProjectState, workers: readonly Worke
 
   const play: StateOfPlay = { needsYou: [], workers: live, inProgress: [], next: [], parked: [] };
   for (const thread of inOrder) {
+    const needsYou = isNeedsYou(thread);
     const item: PlayItem = {
       key: String(thread.seq),
       thread,
       label: thread.label ?? thread.text,
       workers: onThread.get(thread.seq) ?? [],
-      heldOn: heldOn(thread),
+      heldOn: needsYou ? null : heldOn(thread),
     };
-    if (isUsersMove(thread)) play.needsYou.push(item);
+    if (needsYou) play.needsYou.push(item);
     else if (item.workers.length > 0) continue;
     else if (item.heldOn) play.inProgress.push(item);
     else play.next.push(item);

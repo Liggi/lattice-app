@@ -131,7 +131,7 @@ export function DecisionCard({ questions, answered, closed, onAnswer, canChange,
       {questions.map((q, i) => (
         <div key={i} className={i > 0 ? 'mt-4' : ''}>
           <div className="flex items-start gap-2">
-            <p className={`min-w-0 flex-1 text-[15px] leading-[1.5] font-medium ${tk.text.heading}`}>{q.question}</p>
+            <QuestionText text={q.question} />
             {i === 0 && onDismiss && (
               <button type="button" onClick={() => void onDismiss()} title="Dismiss" aria-label="Dismiss the question" className={`p-1 -mr-1 rounded ${tk.text.muted} ${tk.hover} transition-colors cursor-pointer`}>
                 <X size={14} />
@@ -216,6 +216,17 @@ export function DecisionCard({ questions, answered, closed, onAnswer, canChange,
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+/** The question's first paragraph is the ask; any after it (Claude Code's own prompts carry one) explain it. */
+function QuestionText({ text }: { text: string }): React.JSX.Element {
+  const [ask, ...rest] = text.split(/\n\s*\n/);
+  return (
+    <div className="min-w-0 flex-1">
+      <p className={`text-[15px] leading-[1.5] font-medium whitespace-pre-wrap break-words ${tk.text.heading}`}>{ask}</p>
+      {rest.length > 0 && <p className={`mt-1 text-[13px] leading-[1.5] whitespace-pre-wrap break-words ${tk.text.muted}`}>{rest.join('\n\n').replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')}</p>}
     </div>
   );
 }

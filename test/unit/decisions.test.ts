@@ -180,17 +180,19 @@ describe('ClaudeQuestionCoordinator', () => {
     expect(await coordinator.answer(id, { 'Tabs or spaces?': 'Spaces' })).toBe(false);
   });
 
-  it('expires a question whose turn ended or process closed unanswered, and leaves other streams waiting', async () => {
+  it('expires a question the CLI cancelled or whose process closed, and keeps one whose turn merely ended', async () => {
     const { coordinator, addQuestion, markExpired, client } = setup();
-    for (const s of ['stopped', 'closed', 'live']) coordinator.hold({ streamingId: s, requestId: 'r', toolName: 'AskUserQuestion', toolInput: input });
-    const [stopped, closed, live] = addQuestion.mock.calls.map((call) => call[0] as string);
+    for (const s of ['cancelled', 'closed', 'idle']) coordinator.hold({ streamingId: s, requestId: 'r', toolName: 'AskUserQuestion', toolInput: input, toolUseId: 'confirm_1' });
+    const [cancelled, closed, idle] = addQuestion.mock.calls.map((call) => call[0] as string);
 
-    client.emit('turn-idle', { streamingId: 'stopped' });
+    client.emit('claude-message', { streamingId: 'cancelled', message: { type: 'control_cancel_request', request_id: 'other' } });
+    client.emit('claude-message', { streamingId: 'cancelled', message: { type: 'control_cancel_request', request_id: 'r' } });
     client.emit('process-closed', { streamingId: 'closed' });
+    client.emit('turn-idle', { streamingId: 'idle' });
 
-    expect(markExpired.mock.calls.map((call) => call[0])).toEqual([stopped, closed]);
-    expect(await coordinator.answer(stopped, {})).toBe(false);
-    expect(await coordinator.answer(live, { 'Tabs or spaces?': 'Tabs' })).toBe(true);
+    expect(markExpired.mock.calls.map((call) => call[0])).toEqual([cancelled, closed]);
+    expect(await coordinator.answer(cancelled, {})).toBe(false);
+    expect(await coordinator.answer(idle, { 'Tabs or spaces?': 'Tabs' })).toBe(true);
   });
 
   it('leaves input with no questions to the permission flow', () => {

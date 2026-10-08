@@ -291,7 +291,7 @@ export const SESSION_VERBS: VerbSpec[] = [
     positionals: [{ name: 'conv', required: true }],
     flags: [
       { name: 'outcome', kind: 'string', value: 'TEXT', desc: 'What this project is trying to get to (replaces the previous outcome).' },
-      { name: 'name', kind: 'string', value: 'TEXT', desc: 'With --outcome: the project\'s short name in the sidebar, for the thing being owned. A name the user typed always wins.' },
+      { name: 'name', kind: 'string', value: 'TEXT', desc: 'With --outcome: the project\'s short name in the sidebar, for the thing being owned. A name the user typed always wins. With --open/--thread: the thread\'s short name, a few words the panel shows beside its label ("Repetition check").' },
       { name: 'decide', kind: 'string', value: 'TEXT', desc: 'A decision taken (a choice made, not a finding), one line.' },
       { name: 'by-user', kind: 'boolean', desc: 'With --decide: the decision was the user\'s, not yours.' },
       { name: 'replaces', kind: 'string', value: 'SEQS', desc: 'With --decide: the decision seqs this one supersedes; they stop binding and stay in history.' },

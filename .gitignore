@@ -131,9 +131,10 @@ vite.config.mjs.map
 # Local documents
 documents/
 
-# Local data files (but not banners — those ship with the package)
+# Local data files (but not banners or fonts — those ship with the package)
 data/*
 !data/banners/
+!data/fonts/
 
 # Runtime state files
 session.json

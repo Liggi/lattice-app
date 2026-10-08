@@ -138,6 +138,29 @@ describe('SSE replay scoping with compact boundary', () => {
     expect(textData.blocks?.[0]?.text).toContain('Hello')
   })
 
+  it('a /compact turn opens on the reply before it, not the compaction alone', async () => {
+    await manager.start('s1', { prompt: 'hello' })
+    const fake = adapter.latest
+    fake.emitLine(JSON.stringify(INIT_EVENT))
+    fake.emitLine(JSON.stringify(TEXT_ASSISTANT))
+    fake.emitLine(JSON.stringify(RESULT_SUCCESS))
+    await new Promise((r) => setTimeout(r, 50))
+
+    // The user's /compact: its command, then the boundary and its result.
+    await manager.send('s1', '/compact')
+    fake.emitLine(JSON.stringify(COMPACT_BOUNDARY))
+    fake.emitLine(JSON.stringify(INIT_EVENT))
+    fake.emitLine(JSON.stringify(RESULT_SUCCESS))
+    await new Promise((r) => setTimeout(r, 100))
+    expect(manager.getLog('s1')!.all().some(e => e.type === 'input:sent' && (e.data as { text?: string }).text === '/compact')).toBe(true)
+
+    const { events } = await collectEvents(`${baseUrl}/session/s1/events?after=0`, 50, 1000)
+
+    const text = events.find(e => e.type === 'content')?.data as { blocks?: Array<{ text?: string }> } | undefined
+    expect(text?.blocks?.[0]?.text).toContain('Hello')
+    expect(events.some(e => e.type === 'turn:end' && (e.data as { compact?: boolean }).compact === true)).toBe(true)
+  })
+
   it('reconnect after compact replays from correct seq', async () => {
     await manager.start('s1', { prompt: 'hello' })
     const fake = adapter.latest

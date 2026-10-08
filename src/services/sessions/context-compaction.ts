@@ -365,7 +365,7 @@ export function buildCoordinatorRestore(conversationId: string): string {
       latestProvider: conversation.latestProvider,
     });
   }
-  // A New-screen session, whose only standing instruction is how to draw.
+  // A New-screen session, whose only standing instruction is how to draw a picture.
   if (!conversation.pickedUpFrom) {
     return [
       `${CONTEXT_RESTORE_PREFIX} Your context was just compacted. What follows is your standing preamble; the message after`,

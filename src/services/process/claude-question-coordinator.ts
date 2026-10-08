@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import { createLogger } from '../infrastructure/logger.js';
 import type { PendingQuestionService, QuestionDefinition } from '../pending-question-service.js';
 import type { ProcessManagerClient } from '@/process-daemon/process-manager-client.js';
-import type { ClaudeControlRequestEventData } from '@/process-daemon/types.js';
+import type { ClaudeControlRequestEventData, ClaudeMessageEventData } from '@/process-daemon/types.js';
 import type { PermissionTracker } from '../permission-tracker.js';
 import { CLAUDE_QUESTION_ID_PREFIX } from '@/types/decisions.js';
 
@@ -24,10 +24,16 @@ interface WaitingQuestion {
  * back no answer. Here the request is held open as a pending question, shown
  * on the tool's own card, and answered from it.
  *
+ * Claude Code puts its own questions the same way, under a made-up
+ * tool_use id: its mod hot-reload confirm is asked mid-turn and stays open
+ * after the turn ends, and an answer then still takes effect. So a question
+ * is expired only when the CLI says it dropped the request
+ * (`control_cancel_request`, sent on an interrupt) or the process is gone,
+ * not when the turn ends.
+ *
  * The held request lives in this process only, as Codex's do: a server
  * restart leaves the CLI waiting with nothing to answer it, and the pending
- * row is expired on boot. A turn that ends (stopped, or the process gone)
- * has dropped its request, so its question is expired then too.
+ * row is expired on boot.
  */
 export class ClaudeQuestionCoordinator {
   private readonly waiting = new Map<string, WaitingQuestion>();
@@ -37,9 +43,13 @@ export class ClaudeQuestionCoordinator {
     private readonly questionService: PendingQuestionService,
     private readonly tracker: PermissionTracker,
   ) {
-    const release = ({ streamingId }: { streamingId: string }) => this.expireForStreaming(streamingId);
-    client.on('turn-idle', release);
-    client.on('process-closed', release);
+    client.on('process-closed', ({ streamingId }: { streamingId: string }) => this.expireForStreaming(streamingId));
+    client.on('claude-message', ({ streamingId, message }: ClaudeMessageEventData) => {
+      const cancel = message as { type?: string; request_id?: unknown };
+      if (cancel.type === 'control_cancel_request' && typeof cancel.request_id === 'string') {
+        this.expireForRequest(streamingId, cancel.request_id);
+      }
+    });
   }
 
   /** Holds the request as a pending question. False when the input is not one the card can show. */
@@ -78,7 +88,16 @@ export class ClaudeQuestionCoordinator {
       if (waiting.streamingId !== streamingId) continue;
       this.waiting.delete(id);
       this.questionService.markExpired(id);
-      logger.info('Claude AskUserQuestion expired: its turn ended unanswered', { id, streamingId });
+      logger.info('Claude question expired: its process closed unanswered', { id, streamingId });
+    }
+  }
+
+  private expireForRequest(streamingId: string, requestId: string): void {
+    for (const [id, waiting] of this.waiting) {
+      if (waiting.streamingId !== streamingId || waiting.requestId !== requestId) continue;
+      this.waiting.delete(id);
+      this.questionService.markExpired(id);
+      logger.info('Claude question expired: the CLI cancelled it', { id, streamingId });
     }
   }
 

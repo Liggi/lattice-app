@@ -8,6 +8,12 @@ export const DEFAULT_MAX_SIZE = 2000
  *  storage adapter previously applied, so only the direction changes. */
 export const TAIL_WINDOW = 10000
 
+/** Most events an SSE connection replays before going live. A worker's turn
+ *  can run to thousands of events and megabytes, and replaying it all made an
+ *  opened session play forward from the turn's start. Older events come from
+ *  the history endpoint, which the client asks for after a clipped replay. */
+export const REPLAY_WINDOW = 100
+
 export interface EventLogOptions {
   maxSize?: number
   storage?: EventStorageAdapter
@@ -146,10 +152,10 @@ export class EventLog {
    * Classifies a storage-backed reconnect at `afterSeq > 0`. Returns whether
    * the client's cursor is incoherent — its seq is past the stored tail (a seq
    * restart after the session's storage was reset) or the gap to the newest
-   * stored event exceeds the tail window (too large to replay contiguously;
-   * a `since()` head read would silently clip the newest events). In either
-   * case the caller must serve the tail window and declare a reset so the
-   * client rebuilds from the tail rather than merging into a gapped list.
+   * stored event exceeds REPLAY_WINDOW (a client reopening a session it last
+   * saw hundreds of events ago would otherwise play them all forward). In
+   * either case the caller must serve the tail window and declare a reset so
+   * the client rebuilds from the tail rather than merging into a gapped list.
    *
    * Returns false when there's no storage, when afterSeq is 0, or when the gap
    * is small and coherent (normal resume).
@@ -162,7 +168,7 @@ export class EventLog {
     const maxSeq = this.storage.maxSeq(sid)
     if (maxSeq === 0) return false
     if (afterSeq > maxSeq) return true
-    return maxSeq - afterSeq > TAIL_WINDOW
+    return maxSeq - afterSeq > REPLAY_WINDOW
   }
 
   /**

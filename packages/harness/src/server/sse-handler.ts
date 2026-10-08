@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { SessionManager } from './session-manager.js'
 import type { SessionEvent } from '../protocol/events.js'
+import { REPLAY_WINDOW } from './event-log.js'
 
 const SSE_HEADERS = {
   'Content-Type': 'text/event-stream',
@@ -81,7 +82,8 @@ export function createSSEHandler(
     // seq. With storage-backed EventLog, log.since() reads from disk for
     // evicted events, so the client always gets the full gap.
     //
-    // For initial connections (afterSeq = 0): scope to the most recent turn
+    // For initial connections (afterSeq = 0): scope to the most recent turn,
+    // at most REPLAY_WINDOW events,
     // to keep the initial SSE payload small. Older turns are available via
     // the HTTP history endpoint (/events?before=SEQ&limit=N) on scroll-up.
     const missed = log.since(effectiveAfterSeq)
@@ -97,10 +99,13 @@ export function createSSEHandler(
           // Skip turn:ends from empty turns (e.g., compact boundary sequences).
           // After compact, two consecutive turn:ends create a "turn" with no
           // renderable content — scoping to it would clip all pre-compact messages.
+          // A /compact turn holds only its command, so it is skipped the same way:
+          // opening the session there would show the compaction marker alone.
+          const compactTurn = (missed[i].data as { compact?: boolean } | null)?.compact === true
           let hasContent = false
           for (let j = i - 1; j >= 0; j--) {
             const jt = missed[j].type
-            if (jt === 'content' || jt === 'input:sent') { hasContent = true; break }
+            if (jt === 'content' || (jt === 'input:sent' && !compactTurn)) { hasContent = true; break }
             if (jt === 'turn:end' || jt === 'run:end') break
           }
           if (hasContent) {
@@ -121,6 +126,14 @@ export function createSSEHandler(
       }
       // If no turn:end (still streaming, or killed mid-turn),
       // replay everything — it's all one turn.
+
+      // A worker's turn can be thousands of events; replay only its newest
+      // REPLAY_WINDOW and leave the rest to the history endpoint. The window
+      // reaches back from the last message, so a run of non-message events
+      // after it can't leave the opened session with nothing to show.
+      let lastMessage = missed.length - 1
+      while (lastMessage > 0 && missed[lastMessage].type !== 'content' && missed[lastMessage].type !== 'input:sent') lastMessage--
+      replayStart = Math.max(replayStart, lastMessage + 1 - REPLAY_WINDOW)
     }
 
     const replayedCount = missed.length - replayStart

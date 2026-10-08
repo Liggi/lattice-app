@@ -1,8 +1,7 @@
 import React from 'react';
 import type { PendingInput } from '../../hooks/useHarnessSession';
 import { AgentMessage } from '../MessageList/AgentMessage';
-import { attachmentMedia, isAttachmentBlock } from '../MessageList/MessageItem';
-import { UserText } from '../MessageList/UserText';
+import { UserMessageBody, attachmentMedia, isAttachmentBlock } from '../MessageList/MessageItem';
 
 export interface QueuedMessagesProps {
   /** In the order sent; the next message to be taken is first. */
@@ -33,8 +32,7 @@ export function QueuedMessages({ messages }: QueuedMessagesProps): JSX.Element |
             ) : (
               <div className="flex justify-end w-full my-1">
                 <div className="max-w-[85%] min-w-[100px] rounded-lg bg-surface px-3.5 py-2.5 text-sm leading-[1.55] text-fg">
-                  {media && <div className="flex flex-wrap gap-2 mb-2">{media}</div>}
-                  {pm.text && <UserText text={pm.text} pastes={pm.pastes} />}
+                  <UserMessageBody text={pm.text ?? ''} pastes={pm.pastes} media={media} />
                 </div>
               </div>
             )}
