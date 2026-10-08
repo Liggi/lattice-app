@@ -185,7 +185,7 @@ importers:
         version: 6.0.0
       dotenv:
         specifier: ^18.0.4
-        version: 18.0.4
+        version: 18.0.5
       eslint:
         specifier: ^9.39.2
         version: 9.39.5(jiti@2.7.0)
@@ -3033,8 +3033,8 @@ packages:
   dom-accessibility-api@0.6.3:
     resolution: {integrity: sha512-7ZgogeTnjuHbo+ct10G9Ffp0mif17idi0IyWNVA/wcwcm7NPOD/WEHVP3n7n3MhXqxoIYm8d6MuZohYWIZ4T3w==}
 
-  dotenv@18.0.4:
-    resolution: {integrity: sha512-jGt9uI5BIxpVO15kvy+iEFqNAwxYClKWnkptLjSNPnFLC003Imd0ofr3aEVsbpHdSBdSsbcApNIlz4nbyGMwdA==}
+  dotenv@18.0.5:
+    resolution: {integrity: sha512-aBrGvt6KhjxbEnatqMWOMidftwsrCiCvqh1yNIGB9QyF0J+VcWkKDMsvYOEm7ZS82oiV+BT1sTOtIlAmUlTpwQ==}
     engines: {node: '>=12'}
     hasBin: true
 
@@ -7640,7 +7640,7 @@ snapshots:
 
   dom-accessibility-api@0.6.3: {}
 
-  dotenv@18.0.4: {}
+  dotenv@18.0.5: {}
 
   dunder-proto@1.0.1:
     dependencies:
