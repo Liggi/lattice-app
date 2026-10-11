@@ -1,6 +1,6 @@
 {
   "name": "lattice-app",
-  "version": "0.6.4",
+  "version": "0.7.0",
   "type": "module",
   "description": "Lattice - a self-hosted workspace for running Claude Code and Codex agents on projects",
   "main": "dist/lattice-server.js",
@@ -139,6 +139,7 @@
   },
   "devDependencies": {
     "@liggi/agent-ui-toolkit": "workspace:*",
+    "@liggi/lattice-plugin-kit": "workspace:*",
     "@playwright/test": "^1.62.1",
     "@tailwindcss/typography": "^0.5.19",
     "@tailwindcss/vite": "^4.3.3",

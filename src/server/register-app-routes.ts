@@ -18,6 +18,7 @@ import { createInsightsRoutes } from '@/routes/insights/insights.routes.js';
 import { createTeamsRoutes } from '@/routes/teams.routes.js';
 import { createNotificationRoutes } from '@/routes/system/notifications.routes.js';
 import { createFeedbackRoutes } from '@/routes/system/feedback.routes.js';
+import { createPluginsRoutes } from '@/routes/system/plugins.routes.js';
 import { createUpdateRoutes } from '@/routes/system/update.routes.js';
 import timelineRouter from '@/routes/debug/timeline.routes.js';
 import { createContextTransfersRoutes } from '@/routes/session/context-transfers.routes.js';
@@ -89,6 +90,7 @@ export function registerAppRoutes(deps: RegisterAppRoutesDeps): void {
   app.use('/api/background', createBackgroundRoutes());
   app.use('/api/notifications', createNotificationRoutes());
   app.use('/api/feedback', createFeedbackRoutes(deps.configService));
+  app.use('/api/plugins', createPluginsRoutes());
   app.use('/api/attachment-uploads', createAttachmentUploadRoutes());
   app.use('/api/update', createUpdateRoutes());
   app.use('/api/pending-questions', createPendingQuestionRoutes(

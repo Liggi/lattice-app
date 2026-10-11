@@ -12,12 +12,14 @@
  *
  * The saved file is the provenance record: its name carries the conversation
  * it arrived in, when, and its position among that message's images, and the
- * same text block is on the message's `input:sent` event in the thread.
+ * same text block is on the message's `input:sent` event, which the thread
+ * leaves out of the user's bubble (constants/saved-image-note.ts).
  */
 
 import fs from 'node:fs';
 import path from 'node:path';
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources/messages/messages';
+import { formatSavedImageNote } from '../../constants/saved-image-note.js';
 import { configDirNow } from '../../utils/constants.js';
 
 const EXTENSION_BY_MEDIA_TYPE: Record<string, string> = {
@@ -57,8 +59,5 @@ export function persistCoordinatorImages(
     return file;
   });
 
-  const note = saved.length === 1
-    ? `Attached image saved at ${saved[0]} — give a worker this path if it needs the image.`
-    : `Attached images saved at:\n${saved.map((file) => `- ${file}`).join('\n')}\nGive a worker these paths if it needs the images.`;
-  return [...blocks, { type: 'text', text: note }];
+  return [...blocks, { type: 'text', text: formatSavedImageNote(saved) }];
 }

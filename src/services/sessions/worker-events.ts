@@ -111,6 +111,22 @@ export function latestWorkerReportText(coordinator: string, worker: string, db: 
   return row?.text ?? null;
 }
 
+/** Each worker's reports and questions in the coordinator's log, oldest first, as seq and time. */
+export function workerReportTimes(coordinator: string, db: Database.Database = DatabaseProvider.getInstance().getDb()): Map<string, Array<{ seq: number; at: number }>> {
+  const rows = db.prepare(
+    `SELECT json_extract(data, '$.worker') AS worker, seq, timestamp FROM harness_events
+       WHERE session_id = ? AND type IN ('worker:reported', 'worker:asked') ORDER BY seq`,
+  ).all(coordinator) as Array<{ worker: string | null; seq: number; timestamp: number }>;
+  const byWorker = new Map<string, Array<{ seq: number; at: number }>>();
+  for (const row of rows) {
+    if (!row.worker) continue;
+    const list = byWorker.get(row.worker) ?? [];
+    list.push({ seq: row.seq, at: row.timestamp });
+    byWorker.set(row.worker, list);
+  }
+  return byWorker;
+}
+
 /**
  * Sets `workedSinceReport` on each reported worker from its own log.
  *

@@ -22,21 +22,30 @@ import type { InsightsEngine } from '@/services/insights/insights-engine.js';
 import { mapUnifiedMessageToConversationMessage } from '@/services/sessions/unified-message-mapper.js';
 import { thumbnailImageBlocks } from '@/services/sessions/message-truncation.js';
 import { createLogger } from '@/services/infrastructure/logger.js';
-import { readWorkerHistory, readWorkerStates } from '@/services/sessions/worker-events.js';
+import { readWorkerHistory, readWorkerStates, workerReportTimes } from '@/services/sessions/worker-events.js';
 import { latestWorkerItemReached, unreadInboxSummaries } from '@/services/sessions/session-inbox.js';
 import { conversationContextTokens } from '@/services/sessions/context-compaction.js';
 import type { ProjectStateResponse, WorkerCardState, WorkersResponse } from '@/types/worker-events.js';
 import { readWorkerActivity, watchPanel } from '@/services/sessions/worker-activity.js';
+import { noteWorkerWaits, readWaitPhrases } from '@/services/sessions/worker-wait-phrase.js';
 import { readWorkerRuntime } from '@/services/sessions/worker-runtime.js';
 import { archiveFinishedWorkers } from '@/services/sessions/worker-auto-archive.js';
 import { appendProjectNote, readProjectState } from '@/services/sessions/project-state.js';
+import { askTooLong } from '@/types/ask-text.js';
+import { isDealtWith, PROGRESS_GONE, ProgressError, type ReporterFacts } from '@/services/sessions/job-progress.js';
+import { jobWatch } from '@/services/sessions/job-watch.js';
+import { ShippingWatcher } from '@/services/sessions/project-shipping.js';
+import { CONFIG_DIR } from '@/utils/constants.js';
+import path from 'node:path';
 import { isUsersMove } from '@/types/state-of-play.js';
 import { backfillProjectName } from '@/services/sessions/project-name.js';
 import { normalizeProjectName } from '@/services/insights/anthropic-service.js';
 import { moveThread, moveWorker, ProjectMoveError } from '@/services/sessions/project-move.js';
-import { dismissThread, DismissalError, restoreThread } from '@/services/sessions/thread-dismissal.js';
+import { dismissThread, DismissalError, parkThread, restoreThread } from '@/services/sessions/thread-dismissal.js';
+import { holdReply, HeldReplyError, repliesOf, undoReply } from '@/services/sessions/held-replies.js';
+import type { ReplyTarget } from '@/types/held-replies.js';
 import { isFromLatticePage } from '@/middleware/trusted-origin.js';
-import { senderIdentities } from '@/services/sessions/sender-identity.js';
+import { senderIdentities, sessionReferences } from '@/services/sessions/sender-identity.js';
 import {
   PROJECT_NOTE_KINDS,
   RECONCILE_DISPOSITIONS,
@@ -414,6 +423,7 @@ export function registerUnifiedConversationQueryRoutes(
       return;
     }
     watchPanel(conversationId);
+    noteWorkerWaits(conversationId);
     res.json({ ok: true });
   });
 
@@ -453,6 +463,7 @@ export function registerUnifiedConversationQueryRoutes(
     // instruction has not landed. One grouped query answers for the whole
     // roster, which a per-worker check cannot do at forty workers.
     const unread = unreadInboxSummaries(states.map((state) => state.worker), conversationId);
+    const waitPhrases = readWaitPhrases(conversationId, new Map(states.flatMap((state) => (state.waitingOn ? [[state.worker, state.waitingOn] as const] : []))));
     const workers: WorkerCardState[] = states.map((state) => ({
       ...state,
       contextTokens: conversationContextTokens(state.worker),
@@ -476,6 +487,7 @@ export function registerUnifiedConversationQueryRoutes(
       activity: runtimes.get(state.worker) === 'working'
         ? readWorkerActivity(state.worker, state.phase)
         : null,
+      waitPhrase: waitPhrases.get(state.worker) ?? null,
     }));
     const project = conversationService.getConversation(conversationId)?.coordinator ? readProjectState(conversationId) : null;
     // Names for the sessions that have written to this one, so a message from
@@ -486,7 +498,15 @@ export function registerUnifiedConversationQueryRoutes(
       workers,
       history: readWorkerHistory(conversationId),
       project,
+      ...(project ? { repliedAt: Object.fromEntries(repliesOf(conversationId)) } : {}),
       senders: senderIdentities(conversationId),
+      // Names for the other sessions the wait lines mention by id, so a wait
+      // on one never shows its raw id.
+      references: sessionReferences(
+        workers.flatMap((worker) => [worker.waitingOn, worker.waitPhrase].filter((text): text is string => Boolean(text))),
+        new Set([conversationId, ...workers.map((worker) => worker.worker)]),
+        conversationId,
+      ),
       unread: Object.fromEntries(unread),
       asOfSeq,
     } satisfies WorkersResponse);
@@ -521,6 +541,105 @@ export function registerUnifiedConversationQueryRoutes(
     // against repeats inside; this route is refetched on every worker event.
     void backfillProjectName(conversationId, state.outcome);
     res.json({ ...state, unread: Object.fromEntries(unreadInboxSummaries(carrying, conversationId)) } satisfies ProjectStateResponse);
+  }));
+
+  // ==========================================================================
+  // Long jobs and what has shipped, for the project panel (thread 35160).
+  // POST /:conversationId/jobs — start a job Lattice counts from its work
+  // (`lattice job start` is the client; thread 38265). POST
+  // /:conversationId/jobs/stop — the session gives up on one. GET
+  // /:conversationId/jobs — jobs the coordinator and its workers started. GET
+  // /:conversationId/shipping — the project's pull requests and releases by
+  // stage, read from git, gh and npm in the background and answered from the
+  // last read (see ShippingWatcher).
+  // ==========================================================================
+  const watch = jobWatch();
+  const jobs = watch.store;
+  const knownConversation = (conversationId: string, res: Response): boolean => {
+    if (conversationId.startsWith('conv-') && conversationService.getConversation(conversationId)) return true;
+    res.status(404).json({ error: 'Conversation not found' });
+    return false;
+  };
+  // Hand-reported counts are gone; an older CLI that still posts one is told what to use.
+  router.post('/:conversationId/progress', (_req: RequestWithRequestId, res) => {
+    res.status(410).json({ error: PROGRESS_GONE });
+  });
+  router.post('/:conversationId/jobs', asyncHandler(async (req: RequestWithRequestId, res) => {
+    const { conversationId } = req.params;
+    if (!knownConversation(conversationId, res)) return;
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const text = (key: string) => (typeof body[key] === 'string' ? body[key] as string : undefined);
+    const number = (key: string) => (typeof body[key] === 'number' ? body[key] as number : undefined);
+    try {
+      const started = await watch.start({
+        session: conversationId,
+        label: text('label') ?? '',
+        files: text('files'),
+        lines: text('lines'),
+        match: text('match'),
+        command: text('command'),
+        cwd: text('cwd'),
+        every: number('every'),
+        total: number('total'),
+        totalLines: text('totalLines'),
+        pid: number('pid'),
+        each: number('each'),
+      });
+      res.json(started);
+    } catch (err) {
+      if (err instanceof ProgressError) {
+        res.status(400).json({ error: err.message });
+        return;
+      }
+      throw err;
+    }
+  }));
+  router.post('/:conversationId/jobs/stop', (req: RequestWithRequestId, res) => {
+    const { conversationId } = req.params;
+    if (!knownConversation(conversationId, res)) return;
+    const body = (req.body ?? {}) as { label?: unknown; why?: unknown };
+    try {
+      const job = jobs.stop(conversationId, typeof body.label === 'string' ? body.label : '', typeof body.why === 'string' ? body.why : '');
+      res.json({ job });
+    } catch (err) {
+      if (err instanceof ProgressError) {
+        res.status(400).json({ error: err.message });
+        return;
+      }
+      throw err;
+    }
+  });
+  router.get('/:conversationId/jobs', (req: RequestWithRequestId, res) => {
+    const { conversationId } = req.params;
+    if (!conversationId.startsWith('conv-') || !conversationService.getConversation(conversationId)) {
+      res.status(404).json({ error: 'Conversation not found' });
+      return;
+    }
+    // A finished job leaves once the report its worker wrote after it has
+    // been dealt with (thread 36545), read from the same record `session
+    // state` lists as waiting on a disposition.
+    const workers = readWorkerStates(conversationId).map((state) => state.worker);
+    const listed = jobs.forSessions([conversationId, ...workers]);
+    if (listed.every((job) => !job.finishedAt && !job.stopped)) {
+      res.json({ jobs: listed });
+      return;
+    }
+    const project = readProjectState(conversationId);
+    const owed = new Set([...project.attention, ...project.historical].map((item) => item.seq));
+    const reports = workerReportTimes(conversationId);
+    const reporters = new Map<string, ReporterFacts>(workers.map((worker) => [worker, { worker: true, reports: reports.get(worker) ?? [] }]));
+    res.json({ jobs: listed.filter((job) => !isDealtWith(job, reporters.get(job.session), owed)) });
+  });
+  const shipping = new ShippingWatcher(path.join(CONFIG_DIR, 'project-shipping.json'), readProjectState);
+  shipping.start();
+  router.get('/:conversationId/shipping', asyncHandler(async (req: RequestWithRequestId, res) => {
+    const { conversationId } = req.params;
+    const conversation = conversationService.getConversation(conversationId);
+    if (!conversationId.startsWith('conv-') || !conversation?.coordinator) {
+      res.status(404).json({ error: 'Not a coordinator conversation' });
+      return;
+    }
+    res.json(await shipping.get(conversationId));
   }));
 
   // Splitting a project: move a worker, or an open thread with its workers,
@@ -566,7 +685,7 @@ export function registerUnifiedConversationQueryRoutes(
   // The user dismissing a thread from the panel, or bringing one back. From
   // the page only: these are recorded as the user's call, so an agent must
   // not be able to make them.
-  for (const action of ['dismiss', 'restore'] as const) {
+  for (const action of ['dismiss', 'park', 'restore'] as const) {
     router.post(`/:conversationId/project/threads/:thread/${action}`, asyncHandler(async (req: RequestWithRequestId, res) => {
       if (!isFromLatticePage(req.headers)) {
         res.status(403).json({ error: 'Threads are dismissed and brought back from the Lattice page, by the user.' });
@@ -579,7 +698,9 @@ export function registerUnifiedConversationQueryRoutes(
         return;
       }
       try {
-        const result = action === 'dismiss' ? await dismissThread(conversationId, thread) : (await restoreThread(conversationId, thread), {});
+        const result = action === 'dismiss' ? await dismissThread(conversationId, thread)
+          : action === 'park' ? (await parkThread(conversationId, thread), {})
+          : (await restoreThread(conversationId, thread), {});
         res.json({ ok: true, ...result, state: readProjectState(conversationId) });
       } catch (err) {
         if (!(err instanceof DismissalError)) throw err;
@@ -587,6 +708,47 @@ export function registerUnifiedConversationQueryRoutes(
       }
     }));
   }
+
+  // A reply from a Your calls row, held a few seconds before it goes
+  // (`held-replies.ts`), and its Undo. From the page only: it is the user's.
+  router.post('/:conversationId/project/replies', asyncHandler(async (req: RequestWithRequestId, res) => {
+    if (!isFromLatticePage(req.headers)) {
+      res.status(403).json({ error: 'Replies are sent from the Lattice page, by the user.' });
+      return;
+    }
+    const { conversationId } = req.params;
+    if (!conversationService.getConversation(conversationId)?.coordinator) {
+      res.status(404).json({ error: 'Not a coordinator thread' });
+      return;
+    }
+    const { target, text } = (req.body ?? {}) as { target?: ReplyTarget; text?: unknown };
+    const valid = target && ((target.kind === 'answer' || target.kind === 'dismiss') ? typeof target.decision === 'string'
+      : target.kind === 'thread' && Number.isInteger(target.thread));
+    if (!valid) {
+      res.status(400).json({ error: 'target is { kind: answer | dismiss, decision } or { kind: thread, thread }' });
+      return;
+    }
+    try {
+      res.json(holdReply(conversationId, target, typeof text === 'string' ? text : ''));
+    } catch (err) {
+      if (!(err instanceof HeldReplyError)) throw err;
+      res.status(err.status).json({ error: err.message });
+    }
+  }));
+
+  router.post('/:conversationId/project/replies/:id/undo', asyncHandler(async (req: RequestWithRequestId, res) => {
+    if (!isFromLatticePage(req.headers)) {
+      res.status(403).json({ error: 'Replies are taken back from the Lattice page, by the user.' });
+      return;
+    }
+    try {
+      undoReply(req.params.conversationId, req.params.id);
+      res.json({ ok: true });
+    } catch (err) {
+      if (!(err instanceof HeldReplyError)) throw err;
+      res.status(err.status).json({ error: err.message });
+    }
+  }));
 
   router.post('/:conversationId/project/note', asyncHandler(async (req: RequestWithRequestId, res) => {
     const { conversationId } = req.params;
@@ -813,12 +975,12 @@ export function registerUnifiedConversationQueryRoutes(
     }
 
     // A thread that needs the user shows its summary behind its label in the
-    // user's panel, so it is one line; the detail goes in evidence or the message.
+    // user's panel, so it is one line; what they are asked goes in the ask.
     if (kind === 'update' && thread && text.length > NEEDS_YOU_SUMMARY_MAX
       && isUsersMove({ owner: owner ?? thread.owner })) {
       res.status(400).json({
         error: `thread [${thread.seq}] needs the user, so its summary is one line: ${text.length} characters, the most is ${NEEDS_YOU_SUMMARY_MAX}. `
-          + 'Say where it has got to in a sentence; put the detail in --evidence or in your message to the user.',
+          + 'Say where it has got to in a sentence; what you are asking them, in full, goes in --ask.',
       });
       return;
     }
@@ -881,10 +1043,37 @@ export function registerUnifiedConversationQueryRoutes(
       return;
     }
 
-    if (kind === 'update' && !text && owner === undefined && waitingOn === undefined
+    // What the user is asked lives in the record, so the panel can show the
+    // questions themselves: a hand-over to the user on a decision needs one.
+    // Owner or wait changing clears the old ask (`applyThreadFields`).
+    const ask = (kind === 'open' || kind === 'update') && typeof body.ask === 'string' && body.ask.trim() ? body.ask.trim() : undefined;
+    if (kind === 'open' || kind === 'update') {
+      const ownerAfter = owner ?? thread?.owner ?? null;
+      const waitAfter = waitingOn !== undefined ? waitingOn : thread?.waitingOn ?? null;
+      const handsOver = !thread || JSON.stringify([ownerAfter, waitAfter]) !== JSON.stringify([thread.owner, thread.waitingOn]);
+      if (handsOver && isUsersMove({ owner: ownerAfter }) && waitAfter?.kind === 'decision' && !ask) {
+        res.status(400).json({
+          error: `this note makes ${thread ? `thread [${thread.seq}]` : 'the thread'} the user's, waiting on a decision, so it needs --ask: `
+            + 'what you are asking them, in plain words, with the context they need and each question in full. '
+            + 'No ids, paths or commit hashes. It is what their Your calls row shows when they open it.',
+        });
+        return;
+      }
+      const tooLong = ask ? askTooLong(ask) : null;
+      if (tooLong) {
+        res.status(400).json({ error: `${tooLong} Their Your calls row shows the ask in full, so it has to be read at a glance.` });
+        return;
+      }
+      if (ask && !isUsersMove({ owner: ownerAfter })) {
+        res.status(400).json({ error: '--ask is what the user is asked, so it goes on a thread the user owns; pass --owner user with it' });
+        return;
+      }
+    }
+
+    if (kind === 'update' && !text && owner === undefined && waitingOn === undefined && ask === undefined
       && body.nextAction === undefined && body.label === undefined && threadName === undefined && !workers?.length && !addresses?.length
       && !(Array.isArray(body.evidence) && body.evidence.length > 0)) {
-      res.status(400).json({ error: 'an update must change something: a summary, evidence, owner, next action, label, name, what it waits on, a worker, or the events it accounts for' });
+      res.status(400).json({ error: 'an update must change something: a summary, evidence, owner, next action, label, name, ask, what it waits on, a worker, or the events it accounts for' });
       return;
     }
 
@@ -903,6 +1092,7 @@ export function registerUnifiedConversationQueryRoutes(
       ...(owner ? { owner } : {}),
       ...(typeof body.nextAction === 'string' && body.nextAction.trim() ? { nextAction: body.nextAction.trim() } : {}),
       ...((kind === 'open' || kind === 'update') && typeof body.label === 'string' && body.label.trim() ? { label: body.label.trim() } : {}),
+      ...(ask ? { ask } : {}),
       ...(waitingOn !== undefined ? { waitingOn } : {}),
       ...(workers?.length ? { workers } : {}),
       ...(addresses?.length ? { addresses } : {}),

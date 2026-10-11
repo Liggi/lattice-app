@@ -5,9 +5,11 @@ import { api } from '../../services/api';
 import { usePreferencesContext } from '../../contexts/PreferencesContext';
 import { ProviderAuthTab } from './ProviderAuthTab';
 import { BackgroundCallsTab } from './BackgroundCallsTab';
-import { CLAUDE_MODELS } from '@/constants/claude-models';
+import { formatClaudeModelLabel } from '@/constants/claude-models';
+import { useClaudeModels } from '../../hooks/useClaudeModels';
 import { FeedbackSettingsSection } from '../Feedback/FeedbackSettingsSection';
 import { UpdateSettingsSection } from '../Update/UpdateNotice';
+import { PluginsSettingsSection } from '../../plugins/PluginsSettingsSection';
 
 type SettingsTab = 'auth' | 'background' | 'connection' | 'general';
 
@@ -29,6 +31,7 @@ interface SettingsDialogProps {
 export function SettingsDialog({ isOpen, onClose, initialTab = 'auth' }: SettingsDialogProps): JSX.Element | null {
   const { serverConfig, setServerConfig } = usePreferencesContext();
   const [defaultClaudeModel, setDefaultClaudeModel] = useState('');
+  const claudeModels = useClaudeModels();
   const [launchFolder, setLaunchFolder] = useState('');
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -313,15 +316,28 @@ export function SettingsDialog({ isOpen, onClose, initialTab = 'auth' }: Setting
                     className="w-full appearance-none pl-3 pr-9 py-2 bg-bg border border-line-2 rounded-md text-sm text-fg cursor-pointer focus:outline-none focus:border-accent"
                   >
                     <option value="">Claude Code default</option>
-                    {CLAUDE_MODELS.filter((model) => !model.supersededBy).map((model) => (
+                    {claudeModels.models.filter((model) => !model.other).map((model) => (
                       <option key={model.id} value={model.id}>{model.label}</option>
                     ))}
+                    {claudeModels.models.some((model) => model.other) && (
+                      <optgroup label="Other models">
+                        {claudeModels.models.filter((model) => model.other).map((model) => (
+                          <option key={model.id} value={model.id}>{model.label}</option>
+                        ))}
+                      </optgroup>
+                    )}
+                    {defaultClaudeModel && !claudeModels.models.some((model) => model.id === defaultClaudeModel) && (
+                      <option value={defaultClaudeModel}>{formatClaudeModelLabel(defaultClaudeModel)}</option>
+                    )}
                   </select>
                   <ChevronDown size={14} aria-hidden className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-fg-3" />
                 </div>
                 <p className="text-xs text-fg-3">
                   Used for new Claude sessions when no model is picked in the composer. Claude Code default runs whatever the Claude CLI on this machine defaults to for your account.
                 </p>
+                {claudeModels.note && (
+                  <p className="text-xs text-fg-3" data-testid="settings-model-note">{claudeModels.note}</p>
+                )}
               </div>
 
               <div className="space-y-2">
@@ -349,6 +365,8 @@ export function SettingsDialog({ isOpen, onClose, initialTab = 'auth' }: Setting
               <UpdateSettingsSection />
 
               <FeedbackSettingsSection />
+
+              <PluginsSettingsSection />
 
               <div className="border-t border-line pt-4">
                 <p className="text-xs font-medium text-fg-2 mb-3">Diagnostics</p>

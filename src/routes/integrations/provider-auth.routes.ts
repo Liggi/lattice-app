@@ -103,6 +103,10 @@ export function createProviderAuthRoutes(deps: ProviderAuthRouteDeps = {}): Rout
     res.json(await authService.getClaudeAuthStatus());
   }));
 
+  router.get('/claude/models', asyncHandler(async (_req, res) => {
+    res.json(await getProviderAuthService().getClaudeModelCatalog());
+  }));
+
   // Claude's own sign-in, in a terminal the daemon owns. The browser types
   // into it and reads its screen; Lattice never sees a URL or a code as such.
   // Every route that starts, reads or types into it refuses other origins:

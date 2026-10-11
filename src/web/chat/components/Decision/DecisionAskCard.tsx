@@ -62,6 +62,14 @@ async function postAnswer(sessionId: string, decisionId: string, answer: string)
   throw new Error(body?.error ?? `HTTP ${response.status}`);
 }
 
+/** Takes back an answer or dismissal from the panel before it goes (`held-replies.ts`). */
+async function undoHeld(sessionId: string, replyId: string): Promise<void> {
+  const response = await fetch(`/api/conv/${encodeURIComponent(sessionId)}/project/replies/${encodeURIComponent(replyId)}/undo`, { method: 'POST' });
+  if (response.ok) return;
+  const body = await response.json().catch(() => null) as { error?: string } | null;
+  console.error('Undoing the answer failed:', body?.error ?? `HTTP ${response.status}`);
+}
+
 /** The user declines to answer: the card closes as dismissed and the agent is told. */
 export async function dismissQuestion(sessionId: string, decisionId: string): Promise<void> {
   const response = await fetch(`/api/harness/${encodeURIComponent(sessionId)}/decisions/${encodeURIComponent(decisionId)}/dismiss`, { method: 'POST' });
@@ -83,6 +91,7 @@ export function DecisionAskCard({ decision }: { decision: DecisionAskedData }): 
   const state = context?.decisions.byId.get(decision.id);
   const questions = [{
     question: decision.question,
+    detail: decision.detail,
     options: decision.options.map((option) => ({ label: option.label, description: option.consequence, recommended: option.recommended })),
   }];
   const sessionId = context?.sessionId;
@@ -102,9 +111,10 @@ export function DecisionAskCard({ decision }: { decision: DecisionAskedData }): 
         questions={questions}
         answered={state?.answer != null || state?.settled ? {} : undefined}
         closed={state?.replaced ? 'Replaced by a later question' : state?.dismissed ? 'Dismissed' : undefined}
-        canChange={state?.latest && state.answer != null}
+        canChange={state?.latest && state.answer != null && !state.actionRan}
         onAnswer={onAnswer}
         onDismiss={onDismiss}
+        held={state?.held && sessionId ? { answer: state.held.answer, onUndo: () => undoHeld(sessionId, state.held!.id) } : undefined}
       />
     </div>
   );

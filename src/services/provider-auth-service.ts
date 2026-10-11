@@ -7,6 +7,9 @@ import { createLogger } from './infrastructure/logger.js';
 import { parseJson } from '../utils/json.js';
 import { shutdownAllCodexAppServerClients } from './process/codex-app-server-client.js';
 import { findUserClaudeExecutable } from './process/claude-cli.js';
+import { agentEnv } from './infrastructure/agent-env.js';
+import { claudeSpawnEnv } from '../process-daemon/claude-spawn-auth.js';
+import { catalogFromCliModels, type ClaudeCliModel, type ClaudeModelCatalog } from '../constants/claude-model-catalog.js';
 
 const logger = createLogger('ProviderAuthService');
 
@@ -18,6 +21,9 @@ const CODEX_DEVICE_CODE_PATTERN = /\b([A-Z0-9]{4,}-[A-Z0-9]{4,})\b/;
 const ANSI_PATTERN = /\u001b\[[0-9;]*[A-Za-z]/g;
 
 const STATUS_COMMAND_TIMEOUT_MS = 5_000;
+const MODEL_PROBE_TIMEOUT_MS = 20_000;
+// A sign-in can change outside Lattice (`claude auth login` in a terminal).
+const MODEL_CATALOG_TTL_MS = 10 * 60 * 1000;
 const LOGIN_START_TIMEOUT_MS = 15_000;
 
 export interface CodexLoginHandle {
@@ -107,6 +113,7 @@ export interface ProviderAuthServiceOptions {
   commandRunner?: CommandRunner;
   claudeCliResolver?: () => Promise<ClaudeCli>;
   codexLoginFactory?: () => CodexLoginHandle;
+  claudeModelProbe?: (cli: ClaudeCli) => Promise<ClaudeCliModel[]>;
 }
 
 /** Claude CLI chosen for auth work, named in errors so a bad one is obvious. */
@@ -161,6 +168,54 @@ function spawnLoginProcess(command: string, args: string[]): CodexLoginHandle {
   };
 }
 
+/**
+ * Asks the CLI's stream-json `initialize` handshake for its model list, with
+ * the environment a conversation gets, so an API-key billing setting is
+ * probed as it runs. No turn is sent; hooks are off and nothing is saved.
+ */
+function probeClaudeCliModels(cli: ClaudeCli): Promise<ClaudeCliModel[]> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(cli.path, [
+      '-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose',
+      '--no-session-persistence', '--settings', JSON.stringify({ disableAllHooks: true }),
+    ], {
+      cwd: homedir(),
+      env: { ...agentEnv(), ...claudeSpawnEnv(undefined) },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    const finish = (error: Error | null, models?: ClaudeCliModel[]): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      child.kill('SIGTERM');
+      if (error) reject(error);
+      else resolve(models!);
+    };
+    const timer = setTimeout(() => finish(new Error(`${describeClaudeCli(cli)} did not list its models within ${MODEL_PROBE_TIMEOUT_MS / 1000}s`)), MODEL_PROBE_TIMEOUT_MS);
+    child.stdout.on('data', (chunk: Buffer) => {
+      stdout += chunk.toString('utf8');
+      for (const line of stdout.split('\n')) {
+        if (!line.includes('"control_response"')) continue;
+        try {
+          const message = parseJson(line) as { response?: { subtype?: string; error?: string; response?: { models?: unknown } } };
+          const models = message.response?.response?.models;
+          if (Array.isArray(models)) finish(null, models as ClaudeCliModel[]);
+          else finish(new Error(`${describeClaudeCli(cli)} answered initialize with no model list${message.response?.error ? `: ${message.response.error}` : ''}`));
+        } catch {
+          // A line still arriving; the next chunk completes it.
+        }
+      }
+    });
+    child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString('utf8'); });
+    child.once('error', (error) => finish(error));
+    child.once('close', (code) => finish(new Error(`${describeClaudeCli(cli)} exited (code ${code}) before listing its models: ${stderr.trim()}`)));
+    child.stdin.end(JSON.stringify({ type: 'control_request', request_id: 'lattice-models', request: { subtype: 'initialize' } }) + '\n');
+  });
+}
+
 function createCodexLoginHandle(): CodexLoginHandle {
   return spawnLoginProcess('codex', ['login', '--device-auth']);
 }
@@ -182,11 +237,38 @@ export class ProviderAuthService {
   private readonly claudeCliResolver: () => Promise<ClaudeCli>;
   private readonly codexLoginFactory: () => CodexLoginHandle;
   private resolvedClaudeCli: ClaudeCli | null = null;
+  private claudeModelCatalog: { at: number; catalog: Promise<ClaudeModelCatalog> } | null = null;
+  private readonly claudeModelProbe: (cli: ClaudeCli) => Promise<ClaudeCliModel[]>;
 
   constructor(options: ProviderAuthServiceOptions = {}) {
     this.commandRunner = options.commandRunner ?? runCommand;
     this.claudeCliResolver = options.claudeCliResolver ?? (() => this.selectClaudeCli());
     this.codexLoginFactory = options.codexLoginFactory ?? createCodexLoginHandle;
+    this.claudeModelProbe = options.claudeModelProbe ?? probeClaudeCliModels;
+  }
+
+  /**
+   * The Claude models this machine's sign-in can use, as the CLI itself
+   * lists them, so the model menus follow the account and the CLI version
+   * rather than a list kept in Lattice. Kept for a few minutes; a failed
+   * probe is not kept, so signing in takes effect on the next ask.
+   */
+  getClaudeModelCatalog(): Promise<ClaudeModelCatalog> {
+    const cached = this.claudeModelCatalog;
+    if (cached && Date.now() - cached.at < MODEL_CATALOG_TTL_MS) return cached.catalog;
+    const catalog = (async (): Promise<ClaudeModelCatalog> => {
+      try {
+        const cliModels = await this.claudeModelProbe(await this.resolveClaudeCli());
+        return { source: 'cli', ...catalogFromCliModels(cliModels) };
+      } catch (error) {
+        this.claudeModelCatalog = null;
+        const message = error instanceof Error ? error.message : String(error);
+        logger.warn('Could not ask the Claude CLI which models this sign-in can use', { error: message });
+        return { source: 'unavailable', error: message };
+      }
+    })();
+    this.claudeModelCatalog = { at: Date.now(), catalog };
+    return catalog;
   }
 
   /**
@@ -449,6 +531,7 @@ export class ProviderAuthService {
   async logoutClaude(): Promise<{ success: boolean; exitCode?: number | null; stderr?: string; error?: string }> {
     try {
       const result = await this.commandRunner((await this.resolveClaudeCli()).path, ['auth', 'logout'], { timeoutMs: 10_000 });
+      this.claudeModelCatalog = null;
       return { success: true, exitCode: result.exitCode, stderr: result.stderr.trim() };
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) };

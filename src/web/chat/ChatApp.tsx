@@ -15,6 +15,8 @@ import { AnnotatedMessageLab } from './components/MessageList/AnnotatedMessageLa
 import { MapIndexPage } from './components/LearningMap/MapIndexPage';
 import { MapCanvasPage } from './components/LearningMap/MapCanvasPage';
 import { FeedbackInboxPage } from './components/Feedback/FeedbackInboxPage';
+import { PluginsProvider } from './plugins/PluginsContext';
+import { PluginPageView } from './plugins/PluginPageView';
 
 import { ConversationsProvider } from './contexts/ConversationsContext';
 import { ActivityStreamProvider } from './contexts/ActivityStreamContext';
@@ -202,6 +204,24 @@ function FeedbackInboxWrapper(): JSX.Element {
   );
 }
 
+function PluginPageWrapper(): JSX.Element {
+  useSessionTabNavigation(undefined);
+
+  const { sidebarOpen, openSidebar, closeSidebar, toggleSidebar } = useSessionsSidebarState();
+
+  return (
+    <div className="h-full flex overflow-hidden">
+      <CrossSessionSidebar
+        currentSessionId={undefined}
+        isOpen={sidebarOpen}
+        onClose={closeSidebar}
+        onOpen={openSidebar}
+      />
+      <PluginPageView sidebarOpen={sidebarOpen} onToggleSidebar={toggleSidebar} />
+    </div>
+  );
+}
+
 function ChatApp(): JSX.Element {
   return (
     <QueryClientProvider client={queryClient}>
@@ -210,6 +230,7 @@ function ChatApp(): JSX.Element {
               <ConversationsProvider>
                   <TooltipProvider>
                   <ToastProvider>
+                  <PluginsProvider>
                     <AttentionFaviconController />
                     <Routes>
                       {/* Home is the most recent session. */}
@@ -231,6 +252,11 @@ function ChatApp(): JSX.Element {
                       <Route path="/feedback" element={
                         <Layout>
                           <FeedbackInboxWrapper />
+                        </Layout>
+                      } />
+                      <Route path="/p/:pluginId/*" element={
+                        <Layout>
+                          <PluginPageWrapper />
                         </Layout>
                       } />
                       <Route path="/c/:conversationId" element={
@@ -281,6 +307,7 @@ function ChatApp(): JSX.Element {
                         </div>
                       } />
                     </Routes>
+                  </PluginsProvider>
                   </ToastProvider>
                   </TooltipProvider>
               </ConversationsProvider>

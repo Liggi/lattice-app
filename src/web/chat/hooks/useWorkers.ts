@@ -24,7 +24,7 @@ import { api } from '../services/api';
 import { useActivityStream, useActivityStreamSubscription } from '../contexts/ActivityStreamContext';
 import type { WorkersResponse } from '@/types/worker-events';
 
-const EMPTY: WorkersResponse = { workers: [], history: [], project: null, senders: {} };
+const EMPTY: WorkersResponse = { workers: [], history: [], project: null, senders: {}, references: {}, repliedAt: {} };
 
 /**
  * The last answer seen for each conversation in this page. The view remounts
@@ -119,7 +119,7 @@ export function useWorkers(
       stale.current = null;
       api.getWorkers(conversationId)
         .then((next) => {
-          const seen = { workers: next.workers, history: next.history ?? [], project: next.project ?? null, senders: next.senders ?? {} };
+          const seen = { workers: next.workers, history: next.history ?? [], project: next.project ?? null, senders: next.senders ?? {}, references: next.references ?? {}, repliedAt: next.repliedAt ?? {} };
           lastSeen.set(conversationId, seen);
           answeredAt.current = typeof next.asOfSeq === 'number' ? { conversationId, seq: next.asOfSeq } : null;
           if (current.current === conversationId) setResponse(seen);

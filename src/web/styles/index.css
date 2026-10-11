@@ -255,3 +255,19 @@ textarea,
 [contenteditable="true"] {
     caret-color: var(--foreground) !important;
 }
+
+/* While a waiting line points at a worker's row, the rest of the panel fades,
+   leaving the reference and the row it names lit. A grey fill would read as
+   the row's own hover (Jason, 11 Oct). */
+[data-testid="narrow-panel"] section > * {
+  transition: opacity 150ms;
+}
+.ref-spotlight section > :not([data-pointed]):not(:has([data-ref-active])) {
+  opacity: 0.3;
+}
+.ref-spotlight [data-testid="worker-card"]:has([data-ref-active]) :is(span, button) {
+  color: color-mix(in srgb, var(--color-fg-3) 45%, transparent);
+}
+.ref-spotlight [data-testid="worker-card"]:has([data-ref-active]) [data-ref-active] {
+  color: var(--color-fg);
+}

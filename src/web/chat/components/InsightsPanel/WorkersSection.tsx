@@ -48,8 +48,10 @@
  *
  * A working worker also carries one short phrase for what it is doing now
  * ("Testing the composer"), written from its own work evidence by the server
- * (`services/sessions/worker-activity.ts`). It sits next to the state word
- * because it qualifies it. When there is none the state word stands alone:
+ * (`services/sessions/worker-activity.ts`). The cube already says it is
+ * working, so the phrase stands in for the word (2026-10-10: "Working ·
+ * Testing the composer" in a heavier weight outweighed the job rows beside
+ * it). When there is none the state word stands alone:
  * the row never says the activity is unavailable, which would be the kind
  * of plumbing note the same review removed. A question or a report replaces
  * it — those are what the worker is doing.
@@ -59,15 +61,30 @@
  * a 28px icon column, the task, and the state line under it. The cube is
  * cyan and animated while a turn runs and a still outline otherwise, so the
  * running workers stand out without a word being read. Only a worker whose
- * question is with the coordinator breathes cyan: a routine wait is still.
- * A faint hairline over the state line keeps it from reading as the end of
- * the task (Jason: "a very, very subtle separator").
+ * question is with the coordinator breathes cyan: a declared wait is the idle
+ * grey cube, still, so a row of waiting workers does not read as running.
+ * The exception is a wait on the worker's own job while that job is moving:
+ * the worker spends no turn but its work goes on, so it takes the question's
+ * fading cyan centre (2026-10-10, thread 37998, Jason picked it over the
+ * working cube).
+ * The state line is set apart from the task by colour alone: the hairline
+ * that used to sit over it went on 2026-10-10, when Jason picked flatter
+ * rows to sit with the tick-strip jobs.
  *
- * A wait shows as "Waiting" alone. What the worker waits on is on hover (a
- * tooltip) or, on a touch screen, a tap on the word, which opens it inline.
- * The full wait lines were the loudest thing in the panel though routine.
+ * A wait says what it is for on the row: "Waiting for a turn on the PC"
+ * (2026-10-10, thread 37369, Jason picked it over grouping the waiting
+ * workers). The phrase is the worker's declared wait shortened by
+ * `worker-wait-phrase.ts`; until it is written the row shows the worker's
+ * own words, "Waiting on …". It replaced a bare "Waiting" with the reason
+ * behind a hover or tap, which on a phone left five rows saying only that.
  * The row under a wait reference does not take its own hover shade while
  * the reference lights the row it names, so only one row is lit.
+ *
+ * A worker reporting a long job carries it inside its row, under the state
+ * line (`NarrowPanel`, 2026-10-10, thread 36692), and its task is brighter
+ * than a jobless worker's. When the job has stopped moving the cube goes
+ * still, even if the worker is busy with something else: the stuck job is
+ * what the row has to say first.
  *
  * A pending question shows its first four lines, with "Show full question"
  * when there is more (2026-09-22: one worker's question made its card over
@@ -78,7 +95,7 @@ import React, { useLayoutEffect, useRef, useState } from 'react';
 import { ChevronUp } from 'lucide-react';
 import { WaitText, type WaitTextContext } from './WaitText';
 import { SessionStateIcon, type StateIconState } from '@/web/chat/components/shared/session-state-icon/SessionStateIcon';
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/web/chat/components/ui/tooltip';
+import type { WorkerJobs } from './NarrowPanel';
 import { stripWorkerQuestionMarker, workerPendingState, workerResumedAfterReport, workerRuntimeWord, workerWaitingOn, type WorkerCardState } from '@/types/worker-events';
 
 /** The state line: one word for where the worker stands, or what a reported worker is waiting on. */
@@ -122,6 +139,7 @@ export function WorkerRow({
   waitContext,
   pointed,
   pointing,
+  jobs,
 }: {
   worker: WorkerCardState;
   coordinatorRunning: boolean;
@@ -130,6 +148,7 @@ export function WorkerRow({
   pointed: boolean;
   /** Some reference is under the pointer, so only the row it names is lit. */
   pointing: boolean;
+  jobs?: WorkerJobs;
 }): JSX.Element {
   const { state, needsYou, waiting } = workerStateLine(worker, coordinatorRunning);
   const waitingOn = waiting ? workerWaitingOn(worker) : null;
@@ -137,9 +156,12 @@ export function WorkerRow({
   // they follow the runtime rather than the assignment phase.
   const working = workerPendingState(worker) === 'working' || ((worker.phase === 'working' || workerResumedAfterReport(worker))
     && worker.runtime !== 'idle' && worker.runtime !== 'exited' && worker.runtime !== 'stopping');
-  const icon: StateIconState = working ? { kind: 'working', level: 1 } : worker.phase === 'asked' || waitingOn ? { kind: 'waiting' } : { kind: 'idle' };
+  const jobMoving = jobs !== undefined && !jobs.stalled;
+  const icon: StateIconState = jobs?.stalled ? { kind: 'idle' }
+    : working ? { kind: 'working', level: 1 }
+    : worker.phase === 'asked' || (waiting && jobMoving) ? { kind: 'waiting' }
+    : { kind: 'idle' };
 
-  const [waitOpen, setWaitOpen] = useState(false);
   const question = worker.phase === 'asked' && worker.question ? stripWorkerQuestionMarker(worker.question) : null;
   const [questionOpen, setQuestionOpen] = useState(false);
   const [questionClipped, setQuestionClipped] = useState(false);
@@ -155,34 +177,22 @@ export function WorkerRow({
     return () => observer.disconnect();
   }, [question, questionOpen]);
 
-  const waitReason = waitingOn ? (waitContext ? <WaitText text={waitingOn} {...waitContext} /> : waitingOn) : null;
+  const waitPhrase = waitingOn && worker.waitPhrase;
+  const waitText = waitPhrase || waitingOn;
+  const waitReason = waitText ? (waitContext ? <WaitText text={waitText} {...waitContext} /> : waitText) : null;
   let status: React.ReactNode;
-  if (waitReason && waitOpen) {
+  if (waitReason) {
     status = (
-      <span data-testid="worker-state" className="text-fg-3" onClick={(event) => { event.stopPropagation(); setWaitOpen(false); }}>
-        Waiting on {waitReason}
+      <span data-testid="worker-state" className="text-fg-3">
+        {waitPhrase ? 'Waiting for' : 'Waiting on'} {waitReason}
       </span>
-    );
-  } else if (waitReason) {
-    status = (
-      <Tooltip delayDuration={200}>
-        <TooltipTrigger asChild>
-          <span
-            data-testid="worker-state"
-            className="cursor-default text-fg-3"
-            onClick={(event) => { event.stopPropagation(); setWaitOpen(true); }}
-          >
-            Waiting
-          </span>
-        </TooltipTrigger>
-        <TooltipContent side="left" className="max-w-[260px]" data-testid="worker-wait-reason">Waiting on {waitReason}</TooltipContent>
-      </Tooltip>
     );
   } else {
     status = (
       <>
-        <span data-testid="worker-state" className={`font-medium ${needsYou ? 'text-accent' : working ? 'text-fg-2' : 'text-fg-3'}`}>{state}</span>
-        {working && worker.activity && <span data-testid="worker-activity" className="text-fg-3"> · {worker.activity}</span>}
+        {working && worker.activity
+          ? <span data-testid="worker-activity" className="text-fg-3">{worker.activity}</span>
+          : <span data-testid="worker-state" className={needsYou ? 'text-accent' : 'text-fg-3'}>{state}</span>}
       </>
     );
   }
@@ -193,9 +203,10 @@ export function WorkerRow({
     <div
       ref={rowRef}
       data-testid="worker-card"
+      data-worker={worker.worker}
       data-worker-phase={worker.phase}
       data-pointed={pointed || undefined}
-      className={`group rounded-sm transition-colors ${pointed ? 'bg-surface-2' : pointing ? 'bg-bg' : 'bg-bg hover:bg-surface-2'}`}
+      className={`group rounded-sm bg-bg transition-colors ${pointing ? '' : 'hover:bg-surface-2'}`}
     >
       <div className="flex items-start">
       <button
@@ -207,8 +218,8 @@ export function WorkerRow({
           <SessionStateIcon state={icon} variant="session" />
         </span>
         <span className="flex min-h-7 min-w-0 flex-1 flex-col justify-center">
-          <span className="text-[13px] leading-[1.45] text-fg-2 break-words">{worker.task}</span>
-          <span className="mt-1 border-t border-line/35 pt-1 text-[12.5px] leading-[1.4] break-words">{status}</span>
+          <span className={`text-[13px] leading-[1.45] break-words text-pretty ${jobs || pointed ? 'text-fg' : 'text-fg-2'}`}>{worker.task}</span>
+          <span className="mt-0.5 text-[12.5px] leading-[1.4] break-words">{status}</span>
           {question && (
             <span
               ref={questionRef}
@@ -218,6 +229,7 @@ export function WorkerRow({
               {question}
             </span>
           )}
+          {jobs?.content}
         </span>
       </button>
       </div>

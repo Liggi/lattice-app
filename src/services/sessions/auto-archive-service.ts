@@ -13,6 +13,8 @@
  * Two things it deliberately leaves alone:
  *
  * - Pinned sessions. Pinning is an explicit "keep this in front of me".
+ * - Sessions brought back from the archive and not used since. Unarchiving is
+ *   the same "keep this", until the session is used and goes quiet again.
  * - Sessions the event log says are still live or still waiting on background
  *   work. A quiet timestamp is nearly always enough, but a session that spent
  *   a week inside one long-running turn would otherwise be archived out from
@@ -40,6 +42,9 @@ export const AUTO_ARCHIVE_AFTER_MS = SLEEP_AFTER_MS + 7 * 24 * 60 * 60 * 1000;
  * for conversations with no events at all. The (session_id, timestamp) index
  * makes the MAX an index seek per row.
  *
+ * A session unarchived after its last activity is not a candidate.
+ * `sessions.unarchived_at` is stamped by a trigger on every unarchive.
+ *
  * Exported so the unit test runs this exact query rather than a copy of it.
  */
 export const AUTO_ARCHIVE_CANDIDATE_SQL = `
@@ -47,12 +52,14 @@ export const AUTO_ARCHIVE_CANDIDATE_SQL = `
          COALESCE(
            (SELECT MAX(e.timestamp) FROM harness_events e WHERE e.session_id = c.conversation_id),
            CAST(strftime('%s', c.updated_at) AS INTEGER) * 1000
-         ) AS last_activity_ms
+         ) AS last_activity_ms,
+         CAST(strftime('%s', s.unarchived_at) AS INTEGER) * 1000 AS unarchived_ms
   FROM conversations c
   JOIN sessions s ON s.session_id = c.conversation_id
   WHERE s.archived = 0
     AND s.pinned = 0
     AND last_activity_ms < @cutoff_ms
+    AND (unarchived_ms IS NULL OR unarchived_ms < last_activity_ms)
   ORDER BY last_activity_ms ASC
 `;
 

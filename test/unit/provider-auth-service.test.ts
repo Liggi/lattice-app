@@ -246,3 +246,29 @@ describe('ProviderAuthService Codex device login', () => {
     await expect(broken.getCodexAuthStatus()).resolves.toMatchObject({ available: false, installed: true });
   });
 });
+
+describe('Claude model catalog', () => {
+  it('keeps a listed catalog, and asks again after a failure or a logout', async () => {
+    const probe = vi.fn()
+      .mockRejectedValueOnce(new Error('Not logged in'))
+      .mockResolvedValue([
+        { value: 'opus', resolvedModel: 'claude-opus-5-5', displayName: 'Opus 5.5' },
+        { value: 'claude-sonnet-4-6', resolvedModel: 'claude-sonnet-4-6', displayName: 'Sonnet 4.6' },
+      ]);
+    const service = new ProviderAuthService({
+      claudeCliResolver: resolvesTestCli,
+      claudeModelProbe: probe,
+      commandRunner: async () => result(),
+    });
+
+    expect(await service.getClaudeModelCatalog()).toEqual({ source: 'unavailable', error: 'Not logged in' });
+    const listed = await service.getClaudeModelCatalog();
+    expect(listed.source === 'cli' && listed.models.map((m) => m.id)).toEqual(['claude-opus-5-5', 'claude-sonnet-4-6']);
+    await service.getClaudeModelCatalog();
+    expect(probe).toHaveBeenCalledTimes(2);
+
+    await service.logoutClaude();
+    await service.getClaudeModelCatalog();
+    expect(probe).toHaveBeenCalledTimes(3);
+  });
+});

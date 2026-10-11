@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client'
 import './styles/index.css'
 import App from './App'
 import { installBrowserConsoleCapture, installBrowserIncidentCapture, sendBrowserIncident } from './chat/services/browser-incidents'
+import { installStaleBuildReload } from './stale-build-reload'
 
 // Auto-reload on stale chunk errors (after builds swap dist/, old chunk hashes 404).
 // Dynamic import failures surface as unhandled rejections, not error events.
@@ -25,6 +26,7 @@ window.addEventListener('unhandledrejection', (e) => {
 });
 installBrowserIncidentCapture();
 installBrowserConsoleCapture();
+installStaleBuildReload();
 
 // Force dark mode - light mode not supported
 document.documentElement.setAttribute('data-theme', 'dark');

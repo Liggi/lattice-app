@@ -40,6 +40,8 @@ export interface QuestionOption {
 
 export interface QuestionDefinition {
   question: string;
+  /** Shown in full under the question exactly as written, line breaks kept: text the answer is about, such as a draft to send. */
+  detail?: string;
   header?: string;
   multiSelect?: boolean;
   options: QuestionOption[];

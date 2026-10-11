@@ -54,12 +54,10 @@ import { TooltipProvider } from '../ui/tooltip';
 import { SettingsDialog } from '../SettingsDialog/SettingsDialog';
 import { planSignInWaiting } from '../SettingsDialog/ChatGPTPlanCard';
 import { useProviderSignIn } from '../../hooks/useProviderSignIn';
+import { useClaudeModels } from '../../hooks/useClaudeModels';
 import { ProviderSignInStatus } from './ProviderSignInStatus';
 import { reportMilestone } from '../../utils/timeline-reporter';
-import {
-  CLAUDE_MODELS,
-  formatClaudeModelLabel,
-} from '@/constants/claude-models';
+import { formatClaudeModelLabel } from '@/constants/claude-models';
 import { endpointModelOption } from '@/constants/claude-endpoint';
 import {
   CODEX_MODELS,
@@ -98,6 +96,7 @@ export function NewSessionView({ sidebarOpen, onToggleSidebar }: NewSessionViewP
     invalidateConversations,
   } = useConversations();
   const { data: signIn } = useProviderSignIn();
+  const claudeModels = useClaudeModels();
   const [settingsOpen, setSettingsOpen] = useState(planSignInWaiting);
   const workspaceId = 'main';
 
@@ -161,27 +160,33 @@ export function NewSessionView({ sidebarOpen, onToggleSidebar }: NewSessionViewP
 
   const claudeAvailableModels = React.useMemo(() => {
     if (endpoint) return [endpointModelOption(endpoint, true)];
-    const selectable: Array<{ id: string; label: string; description?: string; isDefault: boolean }> =
-      CLAUDE_MODELS.filter((m) => m.composerSelectable).map((m) => ({
+    const selectable: Array<{ id: string; label: string; description?: string; isDefault: boolean; other?: boolean }> =
+      claudeModels.models.map((m) => ({
         id: m.id,
         label: m.label,
         description: m.description,
         isDefault: m.id === effectiveDefaultModel,
+        other: m.other,
       }));
     if (!selectable.some((m) => m.id === effectiveDefaultModel)) {
-      selectable.push({
+      const cliDefaultLabel = claudeModels.cliDefaultModel
+        ? claudeModels.models.find((m) => m.id === claudeModels.cliDefaultModel)?.label ?? claudeModels.cliDefaultModel
+        : null;
+      selectable.unshift({
         id: effectiveDefaultModel,
         label: effectiveDefaultModel === CLAUDE_CLI_DEFAULT_MODEL
           ? 'Claude Code default'
           : formatClaudeModelLabel(effectiveDefaultModel),
         ...(effectiveDefaultModel === CLAUDE_CLI_DEFAULT_MODEL
-          ? { description: 'Whatever the Claude CLI on this machine defaults to for your account' }
+          ? { description: cliDefaultLabel
+            ? `Runs ${cliDefaultLabel} for your account`
+            : "Runs your Claude CLI's default" }
           : {}),
         isDefault: true,
       });
     }
     return selectable;
-  }, [effectiveDefaultModel, endpoint]);
+  }, [effectiveDefaultModel, endpoint, claudeModels]);
 
   const codexAvailableModels = React.useMemo(() => {
     const selectable: Array<{ id: string; label: string; description?: string; isDefault: boolean }> =
@@ -587,6 +592,7 @@ export function NewSessionView({ sidebarOpen, onToggleSidebar }: NewSessionViewP
                   : provider === 'claude'
                   ? {
                       availableModels: claudeAvailableModels,
+                      modelMenuNote: endpoint ? undefined : claudeModels.note,
                       selectedModel,
                       onModelChange: setSelectedModel,
                     }

@@ -53,6 +53,7 @@ import { noteWorkerReport } from './worker-report-summary.js';
 import { handOverNow } from './immediate-delivery.js';
 import { UserName } from '../user-profile.js';
 import { checkWaitingWorkers } from './wait-watch.js';
+import { noteWorkerWaits } from './worker-wait-phrase.js';
 import {
   isQuietRepeat,
   isWorkerQuestion,
@@ -242,6 +243,7 @@ async function deliverIfWorker(workerConversationId: string): Promise<void> {
     : appendWorkerEvent(parent, 'worker:reported', {
       worker: workerConversationId, model, text: reply, ...(quietRepeat ? { quietRepeat: true } : {}),
     } satisfies WorkerReportedData);
+  if (!question) noteWorkerWaits(parent);
   if (quietRepeat) {
     logger.info('Worker woke and only repeated its last report; recorded for its card, not sent', {
       worker: workerConversationId, parent, seq: sourceEvent?.seq ?? null,

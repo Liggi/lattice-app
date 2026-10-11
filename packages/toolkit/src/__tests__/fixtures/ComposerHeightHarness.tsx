@@ -2,12 +2,12 @@ import React, { useState } from 'react';
 import { Composer } from '../../components/Composer';
 
 interface ComposerHeightHarnessProps {
-  /** Number of newline-separated lines to seed the textarea with. */
+  /** Number of newline-separated lines to seed the text box with. */
   lines?: number;
 }
 
 /**
- * Test harness for the Composer textarea auto-grow cap.
+ * Test harness for the Composer text box auto-grow cap.
  *
  * Renders a controlled Composer seeded with `lines` lines of text, plus a
  * button that swaps the value back to a single short line so a test can

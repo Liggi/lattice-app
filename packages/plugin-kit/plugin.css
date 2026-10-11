@@ -1,0 +1,19 @@
+/*
+ * A plugin's stylesheet starts with `@import "@liggi/lattice-plugin-kit/plugin.css";`
+ * and an `@source` naming its own files. It gets Tailwind's utilities and
+ * Lattice's colour and font names, so `bg-surface-2` or `text-fg-3` mean what
+ * they mean in Lattice. The utilities apply only inside the plugin's page
+ * (`[data-lattice-plugin]`): unscoped, a plugin's `.flex` comes after
+ * Lattice's `md:hidden` and wins on Lattice's own elements.
+ */
+/* Reference only: the names resolve, but no variables are written to :root, where they would override Lattice's. */
+@import "tailwindcss/theme.css" theme(reference inline);
+@import "./theme.css" theme(reference);
+
+@custom-variant dark (&:is(.dark *));
+
+@layer utilities {
+  [data-lattice-plugin] {
+    @tailwind utilities;
+  }
+}

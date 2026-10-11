@@ -14,13 +14,16 @@ import { getHarnessSessionManager } from '../../harness/setup.js';
 import { appendCustomHarnessEvent } from '../../harness/harness-custom-events.js';
 import { getEvents } from '../../session-history/repository.js';
 import {
+  DECISION_ACTION_RAN_EVENT,
   DECISION_ANSWERED_EVENT,
   DECISION_ASKED_EVENT,
   DECISION_MAX_OPTIONS,
   DECISION_MIN_OPTIONS,
   DECISION_DISMISSED_EVENT,
   DECISION_SETTLED_EVENT,
+  isAwaitingDecision,
   isOpenDecision,
+  type DecisionActionData,
   type DecisionAnsweredData,
   type DecisionAskedData,
   type DecisionOptionData,
@@ -34,6 +37,7 @@ import { noteUserSent } from './project-needs-you.js';
 import { noteStatusChanged } from './session-status-changes.js';
 import { decisionsIn, openDecision } from './open-decision.js';
 import { readProjectState } from './project-state.js';
+import { pluginConfirmHandler } from '../plugins/plugin-registry.js';
 import type { SessionManager } from '@liggi/agent-ui-harness/server';
 
 export class DecisionError extends Error {
@@ -65,13 +69,26 @@ function checkQuestion(question: string, options: DecisionOptionData[]): void {
   if (options.filter((option) => option.recommended).length > 1) throw new DecisionError('Recommend one option at most.', 400);
 }
 
-/** Puts the card in the agent's thread. A question still unanswered there is replaced by it. */
-export function askDecision(threadId: string, question: string, options: DecisionOptionData[], projectThread?: number): { id: string; replaced: string | null } {
+/**
+ * Puts the card in the agent's thread. A question still unanswered there is
+ * replaced by it. A plugin's card also carries `detail`, shown verbatim, and
+ * the `action` its `runs` option sets off.
+ */
+export function askDecision(
+  threadId: string,
+  question: string,
+  options: DecisionOptionData[],
+  projectThread?: number,
+  plugin?: { detail?: string; action: DecisionActionData },
+): { id: string; replaced: string | null } {
   const manager = getHarnessSessionManager();
   if (!manager) throw new Error('No harness session manager');
   if (!ConversationService.getInstance().getConversation(threadId)) throw new DecisionError(`No conversation ${threadId}`, 404);
   if (isWorker(threadId)) throw new DecisionError(WORKER_ASK_REFUSAL, 409);
   checkQuestion(question, options);
+  if (plugin && !options.some((option) => option.label.trim() === plugin.action.runs)) {
+    throw new DecisionError(`No option is labelled "${plugin.action.runs}", the one that runs the action.`, 400);
+  }
   if (projectThread !== undefined && !readProjectState(threadId).open.some((thread) => thread.seq === projectThread && !thread.parked)) {
     throw new DecisionError(`--thread names one of this project's open threads; ${projectThread} is not one.`, 400);
   }
@@ -86,6 +103,9 @@ export function askDecision(threadId: string, question: string, options: Decisio
       ...(option.recommended ? { recommended: true } : {}),
     })),
     ...(projectThread !== undefined ? { thread: projectThread } : {}),
+    ...(plugin && manager.getStatus(threadId) === 'idle' ? { shownAtOnce: true } : {}),
+    ...(plugin?.detail ? { detail: plugin.detail } : {}),
+    ...(plugin ? { action: plugin.action } : {}),
   };
   if (!appendCustomHarnessEvent(manager, threadId, DECISION_ASKED_EVENT, data)) {
     throw new Error(`The question could not be written to ${threadId}`);
@@ -134,6 +154,11 @@ export async function answerDecision(threadId: string, decisionId: string, rawAn
   if (decision.settled) throw new DecisionError('This question was answered in the chat.', 409);
   if (decision.answer !== null && !decision.latest) throw new DecisionError('Only the latest question can have its answer changed.', 409);
   if (decision.answer === answer) return { delivered: 'answer' };
+  const action = decision.asked.action;
+  if (action && actionsRunning.has(decisionId)) throw new DecisionError(`"${action.runs}" is already under way.`, 409);
+  if (action && decision.actionRan) {
+    throw new DecisionError(`"${action.runs}" has already been done and cannot be taken back.`, 409);
+  }
 
   let correction = false;
   let replacement = false;
@@ -147,12 +172,37 @@ export async function answerDecision(threadId: string, decisionId: string, rawAn
   }
 
   const ownWords = !decision.asked.options.some((option) => option.label === answer);
-  const inboxId = enqueueInboxItem({ sessionId: threadId, source: 'decision', text: answerLine(decision.asked.question, answer, ownWords, correction) });
+  const outcome = action && answer === action.runs ? await runAction(manager, threadId, decisionId, action) : null;
+  const line = answerLine(decision.asked.question, answer, ownWords, correction);
+  const inboxId = enqueueInboxItem({ sessionId: threadId, source: 'decision', text: outcome ? `${line}\n${outcome}` : line });
   appendCustomHarnessEvent(manager, threadId, DECISION_ANSWERED_EVENT, { id: decisionId, answer, inboxId } satisfies DecisionAnsweredData);
   // An answer is the user replying, so it clears Needs you as a typed message does.
   noteUserSent(manager, threadId);
   await handOverNow(threadId, inboxId);
   return { delivered: correction ? 'correction' : replacement ? 'replacement' : 'answer' };
+}
+
+/** Cards whose action is running now: a second tap while the first is still sending must not send again. */
+const actionsRunning = new Set<string>();
+
+/**
+ * Runs a plugin card's action, once: a success is recorded before the agent
+ * hears of it, so a second tap or a restart cannot run it again. A failure is
+ * not recorded, and the agent is told, so it can offer a new card.
+ */
+async function runAction(manager: SessionManager, threadId: string, decisionId: string, action: DecisionActionData): Promise<string> {
+  const handler = pluginConfirmHandler(action.plugin, action.name);
+  if (!handler) return `Nothing was done: the ${action.plugin} plugin is not loaded, or has no "${action.name}" action.`;
+  actionsRunning.add(decisionId);
+  try {
+    const result = await handler(action.payload, { conversationId: threadId, cardId: decisionId });
+    appendCustomHarnessEvent(manager, threadId, DECISION_ACTION_RAN_EVENT, { id: decisionId });
+    return result;
+  } catch (error) {
+    return `It failed: ${error instanceof Error ? error.message : String(error)}`;
+  } finally {
+    actionsRunning.delete(decisionId);
+  }
 }
 
 /**
@@ -166,7 +216,8 @@ export async function dismissDecision(threadId: string, decisionId: string): Pro
   if (!manager) throw new Error('No harness session manager');
   const decision = decisionsIn(threadId).get(decisionId);
   if (!decision) throw new DecisionError('That question is not in this thread.', 404);
-  if (!isOpenDecision(decision)) throw new DecisionError('That question is no longer waiting on an answer.', 409);
+  // A dismissal held in the panel (`held-replies.ts`) is the one that goes now.
+  if (!isAwaitingDecision(decision)) throw new DecisionError('That question is no longer waiting on an answer.', 409);
   if (!appendCustomHarnessEvent(manager, threadId, DECISION_DISMISSED_EVENT, { id: decisionId })) {
     throw new Error(`The dismissal could not be written to ${threadId}`);
   }

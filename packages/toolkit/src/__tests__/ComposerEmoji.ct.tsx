@@ -17,7 +17,7 @@ test.describe('composer :shortcode autocomplete', () => {
     await input.press('ArrowDown');
     await input.press('Enter');
 
-    await expect(input).toHaveValue('nice 👎 ');
+    await expect(input).toHaveText('nice 👎 ');
     await expect(component.getByTestId('sent')).toHaveText('[]');
 
     await input.press('Enter');
@@ -30,7 +30,7 @@ test.describe('composer :shortcode autocomplete', () => {
 
     await input.pressSequentially(':ta');
     await input.press('Tab');
-    await expect(input).toHaveValue('🎉 ');
+    await expect(input).toHaveText('🎉 ');
   });
 
   test('a closing colon on an exact name converts it', async ({ mount }) => {
@@ -38,7 +38,7 @@ test.describe('composer :shortcode autocomplete', () => {
     const input = component.getByTestId('composer-input');
 
     await input.pressSequentially('ship it :tada:');
-    await expect(input).toHaveValue('ship it 🎉');
+    await expect(input).toHaveText('ship it 🎉');
   });
 
   test('no matches leaves the list closed and Enter sends', async ({ mount }) => {
@@ -66,7 +66,7 @@ test.describe('composer :shortcode autocomplete', () => {
     await input.pressSequentially('go now');
     await input.press('Home');
     await component.getByTestId('insert-rocket').click();
-    await expect(input).toHaveValue('🚀go now');
+    await expect(input).toHaveText('🚀go now');
     await expect(input).toBeFocused();
   });
 });

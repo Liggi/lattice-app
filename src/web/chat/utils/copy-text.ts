@@ -1,5 +1,10 @@
-/** Copies through a hidden textarea, which works on mobile Safari where the clipboard API may not. */
+/**
+ * Copies through a hidden textarea, which works on mobile Safari and over
+ * plain http, where the clipboard API may not. Returns false when the browser
+ * refused the copy, and puts focus back where it was.
+ */
 export function copyText(text: string): boolean {
+  const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   const textArea = document.createElement('textarea');
   textArea.value = text;
   textArea.style.position = 'fixed';
@@ -9,12 +14,12 @@ export function copyText(text: string): boolean {
   textArea.focus();
   textArea.select();
   try {
-    document.execCommand('copy');
-    return true;
+    return document.execCommand('copy');
   } catch (err) {
     console.error('Failed to copy:', err);
     return false;
   } finally {
     document.body.removeChild(textArea);
+    previous?.focus({ preventScroll: true });
   }
 }

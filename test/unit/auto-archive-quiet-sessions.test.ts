@@ -26,6 +26,8 @@ interface Fixture {
   lastEventDaysAgo: number | null;
   pinned?: boolean;
   archived?: boolean;
+  /** Days before NOW the session was last unarchived, if it was. */
+  unarchivedDaysAgo?: number;
 }
 
 function seed(fixtures: Fixture[]): Database.Database {
@@ -38,7 +40,8 @@ function seed(fixtures: Fixture[]): Database.Database {
     CREATE TABLE sessions (
       session_id TEXT PRIMARY KEY,
       pinned INTEGER NOT NULL DEFAULT 0,
-      archived INTEGER NOT NULL DEFAULT 0
+      archived INTEGER NOT NULL DEFAULT 0,
+      unarchived_at TEXT DEFAULT NULL
     );
     CREATE TABLE harness_events (
       session_id TEXT NOT NULL,
@@ -51,10 +54,11 @@ function seed(fixtures: Fixture[]): Database.Database {
       f.id,
       new Date(NOW - f.updatedDaysAgo * DAY).toISOString().replace('T', ' ').replace('Z', ''),
     );
-    db.prepare('INSERT INTO sessions VALUES (?, ?, ?)').run(
+    db.prepare('INSERT INTO sessions VALUES (?, ?, ?, ?)').run(
       f.id,
       f.pinned ? 1 : 0,
       f.archived ? 1 : 0,
+      f.unarchivedDaysAgo === undefined ? null : new Date(NOW - f.unarchivedDaysAgo * DAY).toISOString(),
     );
     if (f.lastEventDaysAgo !== null) {
       db.prepare('INSERT INTO harness_events VALUES (?, ?)').run(
@@ -111,6 +115,23 @@ describe('auto-archive candidate selection', () => {
     expect(candidates([
       { id: 'conv-pinned', updatedDaysAgo: 90, lastEventDaysAgo: 90, pinned: true },
     ])).toEqual([]);
+  });
+
+  // Bringing a session back from the archive keeps it back: the sweep would
+  // otherwise archive it again within the hour, since it is still quiet.
+  it('leaves an unarchived session alone until it is used again', () => {
+    expect(candidates([
+      { id: 'conv-brought-back', updatedDaysAgo: 30, lastEventDaysAgo: 30, unarchivedDaysAgo: 0 },
+      { id: 'conv-brought-back-long-ago', updatedDaysAgo: 30, lastEventDaysAgo: 30, unarchivedDaysAgo: 20 },
+      { id: 'conv-no-events-brought-back', updatedDaysAgo: 30, lastEventDaysAgo: null, unarchivedDaysAgo: 1 },
+    ])).toEqual([]);
+  });
+
+  it('archives an unarchived session once it has been used and gone quiet again', () => {
+    expect(candidates([
+      { id: 'conv-used-then-quiet', updatedDaysAgo: 40, lastEventDaysAgo: 9, unarchivedDaysAgo: 10 },
+      { id: 'conv-used-recently', updatedDaysAgo: 40, lastEventDaysAgo: 2, unarchivedDaysAgo: 10 },
+    ])).toEqual(['conv-used-then-quiet']);
   });
 
   it('skips sessions already archived', () => {

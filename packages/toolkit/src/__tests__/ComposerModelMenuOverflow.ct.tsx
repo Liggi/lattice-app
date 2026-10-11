@@ -38,3 +38,62 @@ for (const viewport of [{ width: 1280, height: 850 }, { width: 390, height: 844 
     await expect(menu).toHaveCount(0);
   });
 }
+
+test('older models wait behind Other models, which opens and closes in place', async ({ mount }) => {
+  const models = [
+    { id: 'new-a', label: 'New A' },
+    { id: 'new-b', label: 'New B' },
+    { id: 'old-a', label: 'Old A', other: true },
+  ];
+  const component = await mount(
+    <div style={{ position: 'fixed', bottom: 16, left: 16, right: 16 }}>
+      <Composer core={{ onSubmit: () => {} }} runtimeConfig={{ sessionModel: 'new-a', availableModels: models, onModelChange: () => {} }} />
+    </div>,
+  );
+
+  await component.getByTestId('session-model').click();
+  const other = component.getByTestId('model-menu-other');
+  await expect(component.getByTestId('model-option-old-a')).toHaveCount(0);
+  await other.click();
+  await expect(other).toHaveAttribute('aria-expanded', 'true');
+  await expect(component.getByTestId('model-option-old-a')).toBeVisible();
+  await other.click();
+  await expect(component.getByTestId('model-option-old-a')).toHaveCount(0);
+  await other.click();
+  await expect(component.getByTestId('model-option-old-a')).toBeVisible();
+});
+
+test('the menu opens with Other models open when an older model is chosen', async ({ mount }) => {
+  const component = await mount(
+    <div style={{ position: 'fixed', bottom: 16, left: 16, right: 16 }}>
+      <Composer
+        core={{ onSubmit: () => {} }}
+        runtimeConfig={{
+          sessionModel: 'old-a',
+          availableModels: [{ id: 'new-a', label: 'New A' }, { id: 'old-a', label: 'Old A', other: true }],
+          onModelChange: () => {},
+        }}
+      />
+    </div>,
+  );
+  await component.getByTestId('session-model').click();
+  await expect(component.getByTestId('model-option-old-a')).toHaveAttribute('aria-checked', 'true');
+});
+
+test('the menu shows its note, and no default tag on a row already named default', async ({ mount }) => {
+  const component = await mount(
+    <div style={{ position: 'fixed', bottom: 16, left: 16, right: 16 }}>
+      <Composer
+        core={{ onSubmit: () => {} }}
+        runtimeConfig={{
+          availableModels: [{ id: 'cli-default', label: 'Claude Code default', isDefault: true }, { id: 'a', label: 'A' }],
+          onModelChange: () => {},
+          modelMenuNote: 'Showing the built-in list',
+        }}
+      />
+    </div>,
+  );
+  await component.getByTestId('session-model').click();
+  await expect(component.getByTestId('model-menu-note')).toHaveText('Showing the built-in list');
+  await expect(component.getByTestId('model-option-cli-default')).not.toContainText(/default\s*default/);
+});

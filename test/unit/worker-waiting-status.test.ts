@@ -31,6 +31,9 @@ describe('a worker waiting on something shows the wait', () => {
     expect(workerWaitPhrase('Waiting on: the next quiet restart.\n\nFix is built.')).toBe('the next quiet restart');
     expect(workerWaitPhrase('**Waiting on:** conv-X\'s file list')).toBe('conv-X\'s file list');
     expect(workerWaitPhrase('Waiting on:\nthe release runner')).toBe('the release runner');
+    // 2026-10-11: the underscore went, and the id named no session.
+    expect(workerWaitPhrase('**Waiting on:** the playset worker (conv-RFO_uvBVLWKT) to _finish_')).toBe('the playset worker (conv-RFO_uvBVLWKT) to finish');
+    expect(workerWaitPhrase('Waiting on: conv-_7lQ810Aum_ and snake_case_name')).toBe('conv-_7lQ810Aum_ and snake_case_name');
   });
 
   it('is not a wait without the marker as the first line', () => {
@@ -129,5 +132,35 @@ describe('work a worker armed before its turn ended', () => {
   it('reports normally once nothing is pending, and ignores pending work on a process not idle', () => {
     expect(workerStateLine(card([report('Done.')], { pendingWork: null }), false).state).toBe('Reported');
     expect(workerRuntimeWord({ runtime: 'exited', queued: false, pendingWork: 'subagent' })).toBe('Stopped');
+  });
+});
+
+describe('the short wait phrase on the row', async () => {
+  const { buildWaitPrompt, usableWaitPhrase } = await import('../../src/services/sessions/worker-wait-phrase.js');
+
+  it('takes a phrase that finishes "Waiting for", dropping a repeated lead-in and punctuation', () => {
+    expect(usableWaitPhrase('a turn on the PC')).toBe('a turn on the PC');
+    expect(usableWaitPhrase('"Waiting for the next restart."')).toBe('the next restart');
+  });
+
+  it('refuses one that would not fit a phone row, so the row keeps the worker\'s words', () => {
+    expect(usableWaitPhrase('')).toBeNull();
+    expect(usableWaitPhrase('front to hand me the CK3 PC slot once the Stellaris run has finished')).toBeNull();
+  });
+
+  // 2026-10-10: five workers wrote one wait five ways; reusing the panel's
+  // phrase is what makes the rows read the same.
+  it('shows the writer the phrases already on the panel', () => {
+    const { user } = buildWaitPrompt('Port Social Relations Expanded', 'front to hand me the CK3 PC slot', [
+      { wait: 'front\'s message that the CK3 slot is mine', phrase: 'a turn on the PC' },
+    ]);
+    expect(user).toContain('front\'s message that the CK3 slot is mine\n  → a turn on the PC');
+  });
+
+  // 2026-10-10: "the Chinese re-ranking to finish (background job bwwmwfqln, …)".
+  it('tells the writer to drop task ids but keep session ids', () => {
+    const { system } = buildWaitPrompt('Build the mottos pilot', 'the re-ranking (background job bwwmwfqln)', []);
+    expect(system).toContain('Leave out every other internal id');
+    expect(system).toContain('keep that id exactly as written');
   });
 });

@@ -10,6 +10,7 @@ import {
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from '../ui/tooltip.js';
 import { cn } from '../../utils/cn.js';
 import { storage } from '../../utils/storage.js';
+import { ComposerEditor, type ComposerInputHandle } from './composer-editor.js';
 import { useLocalStorage } from '../../hooks/useLocalStorage.js';
 import { useAttachments } from '../../hooks/useAttachments.js';
 import { AutocompleteDropdown } from './AutocompleteDropdown.js';
@@ -47,12 +48,10 @@ function formatModelName(model: string): string {
   return model.replace(/^claude-/, '').replace(/-\d{8}$/, '');
 }
 
-// Textarea auto-grow cap: 3 rows of text.
-// text-sm (14px) x leading-relaxed (1.625) = 22.75px per row; py-2 adds 16px of
-// vertical padding. 3 x 22.75 + 16 = 84.25 -> 85 avoids sub-pixel clipping of row 3.
-// Single source of truth: used by the JS clamp AND applied inline as max-height,
-// so there is no Tailwind max-h class to drift out of sync.
-const TEXTAREA_MAX_HEIGHT_PX = 85;
+// Input auto-grow cap: 8 rows of text, then it scrolls.
+// text-sm (14px) x leading-relaxed (1.625) = 22.75px per row, plus 16px of
+// vertical padding: 8 x 22.75 + 16 = 198.
+const INPUT_MAX_HEIGHT_PX = 198;
 
 /*
  * Touch targets.
@@ -73,7 +72,7 @@ const TOUCH_TARGET_44 =
 /*
  * Smaller variant for the attachment chip's remove button. The chip is only
  * ~26px tall, so a 44px target would spill past the chip strip and turn taps on
- * the textarea below it into "remove attachment" — a destructive misfire. 32x32
+ * the text box below it into "remove attachment" — a destructive misfire. 32x32
  * quadruples the tappable area while staying inside the strip.
  */
 const TOUCH_TARGET_32 =
@@ -127,6 +126,7 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
   const sessionModel = props.runtimeConfig?.sessionModel ?? null;
   const sessionModelFallback = props.runtimeConfig?.sessionModelFallback ?? false;
   const availableModels = props.runtimeConfig?.availableModels ?? [];
+  const modelMenuNote = props.runtimeConfig?.modelMenuNote;
   const selectedModel = props.runtimeConfig?.selectedModel ?? null;
   const onModelChange = props.runtimeConfig?.onModelChange;
   const isModelSelectorEnabled = availableModels.length > 0 && !!onModelChange;
@@ -260,7 +260,7 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
     type: 'file',
   });
 
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const inputRef = useRef<ComposerInputHandle>(null);
   const composerRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const fileSystemFetchInFlightRef = useRef<Promise<FileSystemEntry[]> | null>(null);
@@ -294,6 +294,7 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
   const modelMenuListRef = useRef<HTMLDivElement>(null);
   const modelTriggerRef = useRef<HTMLButtonElement>(null);
   const [modelMenuFocusIndex, setModelMenuFocusIndex] = useState(-1);
+  const [showOtherModels, setShowOtherModels] = useState(false);
 
   // ── Elapsed time ──
 
@@ -359,11 +360,18 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
   // Flat list of every selectable row across both sections, so roving focus and
   // keyboard nav span "Model" + "Reasoning" as one list. Effort rows are only
   // present when the effort props are provided.
+  // Models marked `other` sit behind one "Other models" row, opened in place.
+  const commonModels = availableModels.filter((m) => !m.other);
+  const otherModels = availableModels.filter((m) => m.other);
+  const visibleModels = showOtherModels ? [...commonModels, ...otherModels] : commonModels;
   const menuRows: Array<
     | { kind: 'model'; id: string; isDefault?: boolean }
+    | { kind: 'other-models'; id: string; isDefault?: boolean }
     | { kind: 'effort'; id: string; isDefault?: boolean }
   > = [
-    ...availableModels.map((m) => ({ kind: 'model' as const, id: m.id, isDefault: m.isDefault })),
+    ...commonModels.map((m) => ({ kind: 'model' as const, id: m.id, isDefault: m.isDefault })),
+    ...(otherModels.length > 0 ? [{ kind: 'other-models' as const, id: 'other-models' }] : []),
+    ...(showOtherModels ? otherModels.map((m) => ({ kind: 'model' as const, id: m.id, isDefault: m.isDefault })) : []),
     ...(isEffortSelectorEnabled
       ? availableEfforts.map((eff) => ({ kind: 'effort' as const, id: eff.id, isDefault: eff.isDefault }))
       : []),
@@ -372,8 +380,10 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
   // Activate a row: choosing a model closes the menu (returning focus to the
   // trigger); choosing an effort keeps the menu open (users often set both).
   const activateMenuRow = useCallback(
-    (row: { kind: 'model' | 'effort'; id: string; isDefault?: boolean }) => {
-      if (row.kind === 'model') {
+    (row: { kind: 'model' | 'other-models' | 'effort'; id: string; isDefault?: boolean }) => {
+      if (row.kind === 'other-models') {
+        setShowOtherModels((shown) => !shown);
+      } else if (row.kind === 'model') {
         onModelChange?.(row.isDefault ? null : row.id);
         closeModelMenu(true);
       } else {
@@ -383,12 +393,18 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
     [onModelChange, onEffortChange, closeModelMenu],
   );
 
-  // Open the menu focused on the effective model's row.
+  // Open the menu focused on the effective model's row, with Other models
+  // open when that is where it is.
   useEffect(() => {
     if (!isModelMenuOpen) return;
-    const idx = availableModels.findIndex((m) => m.id === (effectiveModel?.id ?? null));
+    const inOther = effectiveModel?.other === true;
+    setShowOtherModels(inOther);
+    const idx = inOther
+      ? commonModels.length + 1 + otherModels.findIndex((m) => m.id === effectiveModel.id)
+      : commonModels.findIndex((m) => m.id === (effectiveModel?.id ?? null));
     setModelMenuFocusIndex(idx >= 0 ? idx : 0);
-  }, [isModelMenuOpen, availableModels, effectiveModel]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- on opening or a new effective model only, so a re-render cannot close Other models
+  }, [isModelMenuOpen, effectiveModel?.id]);
 
   // Move DOM focus onto the active row as it changes.
   useEffect(() => {
@@ -432,13 +448,13 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
   // ── Ref ──
 
   useImperativeHandle(ref, () => ({
-    focusInput: () => textareaRef.current?.focus(),
+    focusInput: () => inputRef.current?.focus(),
     insertText: (text: string) => {
-      const textarea = textareaRef.current;
-      if (!textarea) return;
-      const start = textarea.selectionStart ?? textarea.value.length;
-      const end = textarea.selectionEnd ?? start;
-      setValue(textarea.value.substring(0, start) + text + textarea.value.substring(end));
+      const input = inputRef.current;
+      if (!input) return;
+      const start = input.selectionStart;
+      const end = input.selectionEnd;
+      setValue(input.value.substring(0, start) + text + input.value.substring(end));
       resetAutocomplete();
       placeCaret(start + text.length);
     },
@@ -492,25 +508,10 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
   }, [onFetchCommands, workingDirectory]);
 
   // Fetch on focus
-  useEffect(() => {
-    if (!enableFileAutocomplete || !onFetchFileSystem) return;
-    const textarea = textareaRef.current;
-    if (textarea) {
-      const handleFocus = () => void fetchFileSystemEntries();
-      textarea.addEventListener('focus', handleFocus);
-      return () => textarea.removeEventListener('focus', handleFocus);
-    }
-  }, [enableFileAutocomplete, onFetchFileSystem, fetchFileSystemEntries]);
-
-  useEffect(() => {
-    if (!onFetchCommands) return;
-    const textarea = textareaRef.current;
-    if (textarea) {
-      const handleFocus = () => void fetchCommands();
-      textarea.addEventListener('focus', handleFocus);
-      return () => textarea.removeEventListener('focus', handleFocus);
-    }
-  }, [onFetchCommands, fetchCommands]);
+  const handleInputFocus = () => {
+    if (enableFileAutocomplete && onFetchFileSystem) void fetchFileSystemEntries();
+    if (onFetchCommands) void fetchCommands();
+  };
 
   // ── Autocomplete ──
 
@@ -563,10 +564,9 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
 
   const placeCaret = (position: number) => {
     setTimeout(() => {
-      if (textareaRef.current) {
-        textareaRef.current.setSelectionRange(position, position);
-        textareaRef.current.focus();
-        adjustTextareaHeight();
+      if (inputRef.current) {
+        inputRef.current.setSelectionRange(position, position);
+        inputRef.current.focus();
       }
     }, 0);
   };
@@ -601,8 +601,8 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
   };
 
   const handleAutocompleteSelection = (selection: string) => {
-    if (!textareaRef.current) return;
-    const cursorPos = textareaRef.current.selectionStart;
+    if (!inputRef.current) return;
+    const cursorPos = inputRef.current.selectionStart;
 
     if (autocomplete.type === 'emoji') {
       // The emoji replaces the whole `:query`; the trailing space ends the
@@ -619,11 +619,10 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
       setValue(newText);
       resetAutocomplete();
       setTimeout(() => {
-        if (textareaRef.current) {
+        if (inputRef.current) {
           const newCursorPos = autocomplete.triggerIndex + selection.length + 1;
-          textareaRef.current.setSelectionRange(newCursorPos, newCursorPos);
-          textareaRef.current.focus();
-          adjustTextareaHeight();
+          inputRef.current.setSelectionRange(newCursorPos, newCursorPos);
+          inputRef.current.focus();
         }
       }, 0);
     } else {
@@ -635,11 +634,10 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
       setValue(newText);
       resetAutocomplete();
       setTimeout(() => {
-        if (textareaRef.current) {
+        if (inputRef.current) {
           const newCursorPos = autocomplete.triggerIndex + 1 + selection.length + 1;
-          textareaRef.current.setSelectionRange(newCursorPos, newCursorPos);
-          textareaRef.current.focus();
-          adjustTextareaHeight();
+          inputRef.current.setSelectionRange(newCursorPos, newCursorPos);
+          inputRef.current.focus();
         }
       }, 0);
     }
@@ -647,12 +645,8 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
 
   // ── Text input ──
 
-  const handleTextChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    const newValue = e.target.value;
+  const handleTextChange = (newValue: string, cursorPos: number) => {
     setValue(newValue);
-    adjustTextareaHeight();
-
-    const cursorPos = e.target.selectionStart;
 
     const completed = completedEmoji(newValue, cursorPos);
     if (completed) {
@@ -726,7 +720,7 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
   // ── Submit ──
 
   const handleSubmit = () => {
-    const currentValue = textareaRef.current?.value ?? value;
+    const currentValue = inputRef.current?.value ?? value;
     const trimmedValue = currentValue.trim();
     if (!trimmedValue && !hasAttachments && !allowEmptySubmit) return;
     if (isProcessingAttachments) return;
@@ -758,7 +752,7 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
 
   // ── Keyboard ──
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
+  const handleKeyDown = (e: KeyboardEvent) => {
     if (autocomplete.isActive) {
       switch (e.key) {
         case 'ArrowDown':
@@ -809,7 +803,7 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
         case 'Escape':
           e.preventDefault();
           resetAutocomplete();
-          setTimeout(() => textareaRef.current?.focus(), 0);
+          setTimeout(() => inputRef.current?.focus(), 0);
           break;
       }
     } else if (e.key === 'Enter') {
@@ -822,36 +816,20 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
     }
   };
 
-  // ── Textarea auto-resize ──
-
-  const adjustTextareaHeight = () => {
-    const textarea = textareaRef.current;
-    if (textarea) {
-      textarea.style.height = 'auto';
-      textarea.style.height = `${Math.min(textarea.scrollHeight, TEXTAREA_MAX_HEIGHT_PX)}px`;
-    }
-  };
-
-  useEffect(() => adjustTextareaHeight(), [value]);
-  useEffect(() => {
-    const handleResize = () => adjustTextareaHeight();
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-  }, []);
-
   // ── File attachment handlers ──
 
-  const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
-    const files = enableAttachments ? Array.from(e.clipboardData.files) : [];
+  const handlePaste = (e: ClipboardEvent, at: number): boolean => {
+    const files = enableAttachments ? Array.from(e.clipboardData?.files ?? []) : [];
     if (files.length > 0) {
       e.preventDefault();
       addFiles(files);
-      return;
+      return true;
     }
-    const text = pastedTextAsInserted(e.clipboardData.getData('text/plain'));
+    const text = pastedTextAsInserted(e.clipboardData?.getData('text/plain') ?? '');
     if (isLongPaste(text)) {
-      pendingPasteRef.current = { start: e.currentTarget.selectionStart ?? 0, text };
+      pendingPasteRef.current = { start: at, text };
     }
+    return false;
   };
 
   const handleDragOver = (e: React.DragEvent) => {
@@ -1013,18 +991,19 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
               </div>
             )}
 
-            <textarea
-              ref={textareaRef}
-              data-testid="composer-input"
-              className="w-full border-none bg-transparent text-composer-text text-sm leading-relaxed resize-none outline-none overflow-y-auto min-h-[40px] px-3.5 pt-3 pb-1 placeholder:text-composer-text-faint"
-              style={{ maxHeight: TEXTAREA_MAX_HEIGHT_PX }}
-              placeholder={placeholder}
+            <ComposerEditor
+              ref={inputRef}
               value={value}
-              onChange={handleTextChange}
-              onKeyDown={handleKeyDown}
-              onPaste={handlePaste}
-              rows={1}
+              placeholder={placeholder}
               disabled={disabled}
+              maxHeight={INPUT_MAX_HEIGHT_PX}
+              onChange={handleTextChange}
+              onKeyDown={(e) => {
+                handleKeyDown(e);
+                return e.defaultPrevented;
+              }}
+              onPaste={handlePaste}
+              onFocus={handleInputFocus}
             />
 
             {/* Foot: attach + state on the left, model / context / send on the right */}
@@ -1104,10 +1083,9 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
                             {effectiveModel?.label ?? (effectiveModelId ? formatModelName(effectiveModelId) : 'Model')}
                             {badgeEffortLabel && <span> · {badgeEffortLabel}</span>}
                           </span>
-                          <ChevronDown
-                            size={12}
-                            className={cn('shrink-0 transition-transform', isModelMenuOpen && 'rotate-180')}
-                          />
+                          {isModelMenuOpen
+                            ? <ChevronUp size={12} className="shrink-0" />
+                            : <ChevronDown size={12} className="shrink-0" />}
                         </button>
                       </div>
                     ) : sessionModel ? (
@@ -1291,7 +1269,7 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
                   <span className={cn('composer-model-menu-item-label text-sm truncate', isChecked ? 'text-composer-text' : 'text-composer-text-secondary')}>
                     {row.label}
                   </span>
-                  {row.isDefault && (
+                  {row.isDefault && !/\bdefault\b/i.test(row.label) && (
                     <span className="text-[11px] text-composer-text-faint whitespace-nowrap">
                       default
                     </span>
@@ -1321,8 +1299,37 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
               className="composer-model-menu absolute right-0 bottom-full z-50 mb-2 min-w-[200px] max-w-[min(300px,calc(100vw-2rem))] max-h-[60dvh] overflow-y-auto overscroll-contain rounded-[10px] border border-composer-border bg-composer-surface p-1"
             >
               {isEffortSelectorEnabled && sectionHeader('Model')}
-              {availableModels.map((model, i) =>
+              {commonModels.map((model, i) =>
                 renderRow(model, 'model', i, model.id === (effectiveModel?.id ?? null)),
+              )}
+              {otherModels.length > 0 && (
+                <button
+                  type="button"
+                  role="menuitem"
+                  aria-expanded={showOtherModels}
+                  data-menu-option
+                  tabIndex={commonModels.length === modelMenuFocusIndex ? 0 : -1}
+                  onClick={() => activateMenuRow({ kind: 'other-models', id: 'other-models' })}
+                  className={cn(
+                    'composer-model-menu-item flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors cursor-pointer outline-none',
+                    'hover:bg-composer-surface-elevated focus:bg-composer-surface-elevated focus-visible:bg-composer-surface-elevated',
+                  )}
+                  data-testid="model-menu-other"
+                >
+                  <span className="w-3.5 shrink-0" />
+                  <span className="composer-model-menu-item-label flex-1 text-sm text-composer-text-secondary">Other models</span>
+                  {showOtherModels
+                    ? <ChevronUp size={14} aria-hidden className="shrink-0 text-composer-text-faint" />
+                    : <ChevronDown size={14} aria-hidden className="shrink-0 text-composer-text-faint" />}
+                </button>
+              )}
+              {showOtherModels && otherModels.map((model, i) =>
+                renderRow(model, 'model', commonModels.length + 1 + i, model.id === (effectiveModel?.id ?? null)),
+              )}
+              {modelMenuNote && !isEffortSelectorEnabled && (
+                <p className="composer-model-menu-note pl-[30px] pr-2 pt-2 pb-1 text-xs leading-snug text-composer-text-faint" data-testid="model-menu-note">
+                  {modelMenuNote}
+                </p>
               )}
               {isEffortSelectorEnabled && (
                 <>
@@ -1331,11 +1338,16 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
                     renderRow(
                       eff,
                       'effort',
-                      availableModels.length + i,
+                      visibleModels.length + (otherModels.length > 0 ? 1 : 0) + i,
                       eff.id === (effectiveEffort?.id ?? null),
                     ),
                   )}
                 </>
+              )}
+              {modelMenuNote && isEffortSelectorEnabled && (
+                <p className="composer-model-menu-note pl-[30px] pr-2 pt-2 pb-1 text-xs leading-snug text-composer-text-faint" data-testid="model-menu-note">
+                  {modelMenuNote}
+                </p>
               )}
             </div>
           );
@@ -1353,7 +1365,7 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
             isOpen={autocomplete.isActive && autocomplete.suggestions.length > 0}
             focusedIndex={autocomplete.focusedIndex}
             type={autocomplete.type}
-            onFocusReturn={() => textareaRef.current?.focus()}
+            onFocusReturn={() => inputRef.current?.focus()}
           />
         )}
       </div>

@@ -16,6 +16,9 @@
  *                                                    question without answering
  *                                                    it, or the project thread
  *                                                    it was about
+ *   `decision:action-ran { id }`                     a plugin's card: the action
+ *                                                    its chosen option runs has
+ *                                                    run, and cannot run again
  *
  * A coordinator's card may name the project thread it is about
  * (`lattice ask --thread`), which is what lets that dismissal close it.
@@ -30,11 +33,14 @@
 
 import { INBOX_READ_EVENT, INBOX_WITHDRAWN_EVENT } from './inbox.js';
 import { EXPLAIN_ASKED_EVENT } from './explain.js';
+import { REPLY_HELD_EVENT, REPLY_SENT_EVENT, REPLY_UNDONE_EVENT, type ReplyHeldData } from './held-replies.js';
 
 export const DECISION_ASKED_EVENT = 'decision:asked';
 export const DECISION_ANSWERED_EVENT = 'decision:answered';
 export const DECISION_SETTLED_EVENT = 'decision:settled';
 export const DECISION_DISMISSED_EVENT = 'decision:dismissed';
+/** A plugin's confirm action ran after its option was chosen; it does not run again. */
+export const DECISION_ACTION_RAN_EVENT = 'decision:action-ran';
 
 export const DECISION_MIN_OPTIONS = 2;
 export const DECISION_MAX_OPTIONS = 4;
@@ -61,6 +67,20 @@ export interface DecisionAskedData {
    * turn's end.
    */
   holdsTurn?: boolean;
+  /** A plugin's card asked while no turn ran: there is no turn end to wait for, so it shows at once. */
+  shownAtOnce?: boolean;
+  /** Shown in full and exactly as written, under the question: a plugin's draft to confirm. */
+  detail?: string;
+  /** A plugin's server action, run when the user chooses `runs` (`services/plugins/plugin-confirm.ts`). */
+  action?: DecisionActionData;
+}
+
+export interface DecisionActionData {
+  plugin: string;
+  name: string;
+  payload: unknown;
+  /** The option label that runs it. */
+  runs: string;
 }
 
 export interface DecisionAnsweredData {
@@ -85,6 +105,14 @@ export interface DecisionState {
   latest: boolean;
   /** The user dismissed it, or the project thread it was about, so it is no longer asked. */
   dismissed: boolean;
+  /** A plugin's card whose action has run: its answer can no longer change. */
+  actionRan: boolean;
+  /**
+   * An answer or dismissal from the panel that has not gone yet
+   * (`held-replies.ts`): the card shows it with Undo, and is not waiting on
+   * the user meanwhile. `answer` is null for a dismissal.
+   */
+  held: { id: string; answer: string | null } | null;
 }
 
 /** A log event as both the server's store and the page's stream give it. */
@@ -100,9 +128,14 @@ export interface ThreadDecisions {
   withdrawnAnswers: ReadonlySet<string>;
 }
 
-/** Still waiting on the user: the thread's latest question, with no answer, not replaced and not settled by a message. */
-export function isOpenDecision(decision: DecisionState): boolean {
+/** Unanswered and still asked: the thread's latest question, with no answer, not replaced, settled or dismissed. */
+export function isAwaitingDecision(decision: DecisionState): boolean {
   return decision.latest && decision.answer === null && !decision.replaced && !decision.settled && !decision.dismissed;
+}
+
+/** Still waiting on the user: awaiting an answer, and none is on its way from the panel. */
+export function isOpenDecision(decision: DecisionState): boolean {
+  return isAwaitingDecision(decision) && !decision.held;
 }
 
 /** Every question in a thread's log with its current answer, by decision id. */
@@ -118,9 +151,9 @@ export function foldDecisions(events: readonly DecisionEventLike[]): Map<string,
       case DECISION_ASKED_EVENT: {
         const data = event.data as DecisionAskedData;
         if (!data?.id) break;
-        if (latest && isOpenDecision(latest)) latest.replaced = true;
+        if (latest && isAwaitingDecision(latest)) latest.replaced = true;
         if (latest) latest.latest = false;
-        latest = { asked: data, answer: null, read: false, replaced: false, settled: false, latest: true, dismissed: false };
+        latest = { asked: data, answer: null, read: false, replaced: false, settled: false, latest: true, dismissed: false, actionRan: false, held: null };
         decisions.set(data.id, latest);
         break;
       }
@@ -130,17 +163,36 @@ export function foldDecisions(events: readonly DecisionEventLike[]): Map<string,
         if (!decision) break;
         decision.answer = data.answer;
         decision.read = false;
+        decision.held = null;
         answerInbox.set(data.inboxId, data.id);
         break;
       }
       case DECISION_SETTLED_EVENT: {
         const decision = decisions.get((event.data as { id?: string })?.id ?? '');
-        if (decision && isOpenDecision(decision)) decision.settled = true;
+        if (decision && isAwaitingDecision(decision)) decision.settled = true;
         break;
       }
       case DECISION_DISMISSED_EVENT: {
         const decision = decisions.get((event.data as { id?: string })?.id ?? '');
-        if (decision && isOpenDecision(decision)) decision.dismissed = true;
+        if (decision && isAwaitingDecision(decision)) decision.dismissed = true;
+        break;
+      }
+      case DECISION_ACTION_RAN_EVENT: {
+        const decision = decisions.get((event.data as { id?: string })?.id ?? '');
+        if (decision) decision.actionRan = true;
+        break;
+      }
+      case REPLY_HELD_EVENT: {
+        const data = event.data as ReplyHeldData | undefined;
+        if (!data?.id || !data.target || data.target.kind === 'thread') break;
+        const decision = decisions.get(data.target.decision);
+        if (decision) decision.held = { id: data.id, answer: data.target.kind === 'answer' ? data.text : null };
+        break;
+      }
+      case REPLY_UNDONE_EVENT:
+      case REPLY_SENT_EVENT: {
+        const id = (event.data as { id?: string } | undefined)?.id;
+        for (const decision of decisions.values()) if (decision.held?.id === id) decision.held = null;
         break;
       }
       case INBOX_READ_EVENT: {
@@ -198,7 +250,8 @@ export function endsAskingTurn(event: { type: string; data?: unknown }): boolean
  */
 export function placeDecisionsAtTurnEnd<E extends { type: string; data?: unknown }>(events: readonly E[]): readonly E[] {
   const heldUntilTurnEnd = (event: E) => event.type === EXPLAIN_ASKED_EVENT
-    || (event.type === DECISION_ASKED_EVENT && !(event.data as DecisionAskedData | undefined)?.holdsTurn);
+    || (event.type === DECISION_ASKED_EVENT && !(event.data as DecisionAskedData | undefined)?.holdsTurn
+      && !(event.data as DecisionAskedData | undefined)?.shownAtOnce);
   if (!events.some((event) => event.type === DECISION_ASKED_EVENT || event.type === EXPLAIN_ASKED_EVENT)) return events;
   const placed: E[] = [];
   let held: E[] = [];
@@ -239,6 +292,32 @@ export function shownOpenDecision(
     if (event.type !== DECISION_ASKED_EVENT) continue;
     const decision = byId.get((event.data as DecisionAskedData | undefined)?.id ?? '');
     if (decision && isOpenDecision(decision)) return { asked: decision.asked, messageId: `h-${event.seq}` };
+  }
+  return null;
+}
+
+/** The thread's latest question once its card shows, whatever state it is in now. */
+export interface ShownDecision {
+  state: DecisionState;
+  messageId: string;
+  /** When it was asked, epoch ms, when the event carries it. */
+  askedAt: number | null;
+}
+
+/**
+ * The latest question whose card the thread shows (`placeDecisionsAtTurnEnd`),
+ * open, held, answered or dismissed: the panel's row for it stays through an
+ * answer and its Undo. Null while the latest question's turn still runs.
+ */
+export function shownLatestDecision(
+  placed: readonly { type: string; data?: unknown; seq: number; timestamp?: number }[],
+  byId: ReadonlyMap<string, DecisionState>,
+): ShownDecision | null {
+  for (let i = placed.length - 1; i >= 0; i -= 1) {
+    const event = placed[i];
+    if (event.type !== DECISION_ASKED_EVENT) continue;
+    const decision = byId.get((event.data as DecisionAskedData | undefined)?.id ?? '');
+    return decision?.latest ? { state: decision, messageId: `h-${event.seq}`, askedAt: event.timestamp ?? null } : null;
   }
   return null;
 }

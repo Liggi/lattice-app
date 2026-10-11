@@ -15,6 +15,7 @@ import { createLogger } from '@/services/infrastructure/logger.js';
 import { getEventStorage } from '@/harness/event-message-reader.js';
 import { readSeedActivityMessages } from '@/services/sessions/recent-activity-messages.js';
 import { getWorkerActivityService } from '@/services/sessions/worker-activity.js';
+import { jobWatch } from '@/services/sessions/job-watch.js';
 import { onStatusChanged } from '@/services/sessions/session-status-changes.js';
 
 const logger = createLogger('UnifiedConversationTransportRoutes');
@@ -167,6 +168,7 @@ export function registerUnifiedConversationTransportRoutes(
       permissionTracker.off('permission_updated', onPermissionUpdated);
       pendingQuestionService.off('changed', onPendingQuestionsChanged);
       getWorkerActivityService().off('changed', onWorkerActivity);
+      jobWatch().store.changes.off('changed', onJobChanged);
       offStatusChanged();
     };
 
@@ -223,6 +225,16 @@ export function registerUnifiedConversationTransportRoutes(
     };
     const workerActivityService = getWorkerActivityService();
     workerActivityService.on('changed', onWorkerActivity);
+
+    // A job's count is read on the server every 30 seconds; this tells an
+    // open project panel to refetch its jobs when one moves, starts or ends.
+    // The frame names the session that started the job; the panel knows
+    // whether that is its coordinator or one of its workers.
+    const jobChanges = jobWatch().store.changes;
+    const onJobChanged = (data: { session: string; label: string }): void => {
+      res.write(`data: ${JSON.stringify({ type: 'jobs-changed', sessionId: data.session, label: data.label, timestamp: Date.now() })}\n\n`);
+    };
+    jobChanges.on('changed', onJobChanged);
 
     const onPendingQuestionsChanged = (data: { sessionId: string | null }): void => {
       res.write(`data: ${JSON.stringify({

@@ -15,6 +15,7 @@ import { ConversationService } from '../../src/services/sessions/conversation-se
 import { SessionInfoService } from '../../src/services/sessions/session-info-service.js';
 import { createHarnessRoutes } from '../../src/harness/routes.js';
 import { persistCoordinatorImages } from '../../src/services/sessions/coordinator-attachments.js';
+import { isSavedImageNoteBlock, parseSavedImageNote } from '../../src/constants/saved-image-note.js';
 
 const PNG = Buffer.from('89504e470d0a1a0a', 'hex');
 const image = { type: 'image', source: { type: 'base64', media_type: 'image/png', data: PNG.toString('base64') } } as const;
@@ -44,6 +45,13 @@ describe('persistCoordinatorImages', () => {
     const file = path.join(dir, 'attachments', 'conv-c', '2026-09-20T08-30-00-000Z-1.png');
     expect(fs.readFileSync(file)).toEqual(PNG);
     expect(blocks).toEqual([image, { type: 'text', text: `Attached image saved at ${file} — give a worker this path if it needs the image.` }]);
+  });
+
+  it('appends a note the thread recognises, so the bubble can leave it out', () => {
+    const blocks = persistCoordinatorImages('conv-c', [image, image], { configDir: dir });
+    const note = blocks[2] as { type: 'text'; text: string };
+    expect(parseSavedImageNote(note.text)).toEqual(fs.readdirSync(path.join(dir, 'attachments', 'conv-c')).sort().map((name) => path.join(dir, 'attachments', 'conv-c', name)));
+    expect(isSavedImageNoteBlock({ type: 'text', text: 'Attached image saved at /tmp/x.png' })).toBe(false);
   });
 
   it('leaves a message with no image alone', () => {

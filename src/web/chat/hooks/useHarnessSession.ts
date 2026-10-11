@@ -28,7 +28,8 @@ import type { CodexThreadGoal } from '@/services/process/codex-app-server-types'
 import { PROJECT_NOTED_EVENT, type ProjectNotedData } from '@/types/project-state';
 import { FEEDBACK_PROPOSED_EVENT, type FeedbackProposedData } from '@/types/feedback';
 import { EXPLAIN_ASKED_EVENT, concealOpenExplainReasoning, foldExplains, type ExplainAskedData, type ExplainState } from '@/types/explain';
-import { DECISION_ANSWERED_EVENT, DECISION_ASKED_EVENT, foldDecisions, placeDecisionsAtTurnEnd, shownOpenDecision, withdrawnDecisionAnswers, type DecisionAnsweredData, type ShownOpenDecision, type DecisionAskedData, type ThreadDecisions } from '@/types/decisions';
+import { DECISION_ANSWERED_EVENT, DECISION_ASKED_EVENT, foldDecisions, placeDecisionsAtTurnEnd, shownLatestDecision, shownOpenDecision, withdrawnDecisionAnswers, type DecisionAnsweredData, type ShownDecision, type ShownOpenDecision, type DecisionAskedData, type ThreadDecisions } from '@/types/decisions';
+import { foldHeldReplies, repliedAt, type HeldReply } from '@/types/held-replies';
 import {
   isWorkerEventType,
   isWorkerInput,
@@ -131,6 +132,12 @@ export interface UseHarnessSessionReturn {
   explains: ReadonlyMap<string, ExplainState>;
   /** The open question whose card the thread shows now, if any: what the panel and the composer keep in reach. */
   openDecision: ShownOpenDecision | null;
+  /** The latest question once shown, open or not: the panel's Your calls row for it. */
+  latestDecision: ShownDecision | null;
+  /** Replies held in the panel before they go (`held-replies.ts`), by id. */
+  heldReplies: ReadonlyMap<string, HeldReply>;
+  /** When the user last replied about each thread (`t:<seq>`) and card (`d:<id>`). */
+  repliedAt: ReadonlyMap<string, number>;
   /** Mid-turn injected messages waiting for consumption (floating above composer). */
   pendingMessages: PendingInput[];
   /** Send user input. `extra` is spread into the POST body by the harness client
@@ -183,6 +190,9 @@ export function useHarnessSession(
   const threadEvents = useMemo(() => placeDecisionsAtTurnEnd(concealOpenExplainReasoning(events)), [events]);
   const messages = useMemo(() => eventsToMessages(threadEvents, eventContext.providerBySeq), [threadEvents, eventContext.providerBySeq]);
   const openDecision = useMemo(() => shownOpenDecision(threadEvents, decisions.byId), [threadEvents, decisions]);
+  const latestDecision = useMemo(() => shownLatestDecision(threadEvents, decisions.byId), [threadEvents, decisions]);
+  const heldReplies = useMemo(() => foldHeldReplies(events), [events]);
+  const replied = useMemo(() => repliedAt(events), [events]);
 
   // Group events → render items + subagent children (for rendering).
   // `isStreaming` feeds CollapsedToolGroup.isActive — gate on hydrationPhase
@@ -346,6 +356,9 @@ export function useHarnessSession(
     decisions,
     explains,
     openDecision,
+    latestDecision,
+    heldReplies,
+    repliedAt: replied,
     send,
     compact,
     stop,

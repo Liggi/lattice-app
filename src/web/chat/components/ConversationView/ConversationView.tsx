@@ -72,7 +72,7 @@ import { useTransientErrorDismiss } from './use-transient-error-dismiss';
 import { shouldRefetchOnCompletion } from './session-active-state';
 import { setBrowserIncidentContext, clearBrowserIncidentContext } from '../../services/browser-incidents';
 import type { Provider } from '@/types/unified-messages';
-import { CLAUDE_MODELS } from '@/constants/claude-models';
+import { useClaudeModels } from '../../hooks/useClaudeModels';
 import { endpointModelOption } from '@/constants/claude-endpoint';
 import {
   CODEX_EFFORTS,
@@ -183,6 +183,9 @@ export function ConversationView({ sidebarOpen, onToggleSidebar }: ConversationV
     decisions: harnessDecisions,
     explains: harnessExplains,
     openDecision: harnessOpenDecision,
+    latestDecision: harnessLatestDecision,
+    heldReplies: harnessHeldReplies,
+    repliedAt: harnessRepliedAt,
   } = useHarnessSession(conversationId ?? null);
   // A message from another session arrives on the harness stream, which carries
   // no worker event and need not change our status — so nothing else here would
@@ -202,7 +205,14 @@ export function ConversationView({ sidebarOpen, onToggleSidebar }: ConversationV
     }
     return [...ids].sort().join(',');
   }, [harnessMessages, harnessPendingMessages]);
-  const { workers, project, senders } = useWorkers(conversationId ?? null, lastWorkerEventSeq, harnessStatus, seenSenders, lastEventSeq);
+  const { workers, project, senders, references: sessionReferences, repliedAt: serverRepliedAt } = useWorkers(conversationId ?? null, lastWorkerEventSeq, harnessStatus, seenSenders, lastEventSeq);
+  // The page's own events say when a reply has just gone; the server's read
+  // reaches back past what the page has loaded.
+  const repliedAt = useMemo(() => {
+    const merged = new Map(Object.entries(serverRepliedAt ?? {}));
+    for (const [key, at] of harnessRepliedAt) merged.set(key, Math.max(merged.get(key) ?? 0, at));
+    return merged;
+  }, [serverRepliedAt, harnessRepliedAt]);
   const {
     permissionRequest,
     answerPermission,
@@ -241,17 +251,19 @@ export function ConversationView({ sidebarOpen, onToggleSidebar }: ConversationV
   // is a creation default: choosing any model here is an explicit switch.
   // A saved endpoint's model is offered alongside: switching to it moves this
   // session onto that server, and switching back returns it to the sign-in.
+  const claudeModels = useClaudeModels();
   const switchableClaudeModels = useMemo(
     () => [
-      ...CLAUDE_MODELS.filter((m) => m.composerSelectable).map((m) => ({
+      ...claudeModels.models.map((m) => ({
         id: m.id,
         label: m.label,
         description: m.description,
         isDefault: false,
+        other: m.other,
       })),
       ...claudeEndpoints.map((endpoint) => endpointModelOption(endpoint)),
     ],
-    [claudeEndpoints],
+    [claudeEndpoints, claudeModels],
   );
 
   const switchableCodexModels = useMemo(
@@ -1395,6 +1407,7 @@ export function ConversationView({ sidebarOpen, onToggleSidebar }: ConversationV
                       availableModels: activeProvider === 'codex'
                         ? switchableCodexModels
                         : switchableClaudeModels,
+                      modelMenuNote: activeProvider === 'codex' ? undefined : claudeModels.note,
                       selectedModel: pendingModel,
                       onModelChange: setPendingModel,
                     } : {}),
@@ -1420,9 +1433,10 @@ export function ConversationView({ sidebarOpen, onToggleSidebar }: ConversationV
             coordinatorRunning={harnessStatus === 'streaming' || harnessStatus === 'initializing'}
             onOpenWorker={(workerId) => navigate(`/c/${workerId}`)}
             coordinatorId={conversationId}
-            openQuestion={harnessOpenDecision ? { question: harnessOpenDecision.asked.question, thread: harnessOpenDecision.asked.thread } : null}
-            onJumpToQuestion={jumpToOpenCard}
-            onDismissQuestion={dismissOpenCard}
+            sessionReferences={sessionReferences}
+            latestDecision={harnessLatestDecision}
+            heldReplies={harnessHeldReplies}
+            repliedAt={repliedAt}
           />
           ) : isWorkerSession ? null : (
           <InsightsPanel

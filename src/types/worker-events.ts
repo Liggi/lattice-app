@@ -325,7 +325,10 @@ export const WORKER_WAIT_MARKER = 'Waiting on';
  */
 export function workerWaitPhrase(text: string): string | null {
   const lines = text.split('\n').map((line) => line.trim()).filter((line) => line.length > 0);
-  const bare = (line: string) => line.replace(/^[#*_\s]+/, '').replace(/[*_]+/g, '').trim();
+  // Emphasis markers come off, but never out of a session id, which can hold
+  // underscores anywhere (conv-RFO_uvBVLWKT read conv-RFOuvBVLWKT, 11 Oct).
+  const bare = (line: string) => line.replace(/^[#*_\s]+/, '')
+    .replace(/(conv-[A-Za-z0-9_-]+)|\*+|(?<![A-Za-z0-9-])_+|_+(?![A-Za-z0-9-])/g, (marker, id?: string) => id ?? '').trim();
   const match = /^waiting on\s*:\s*(.*)$/i.exec(bare(lines[0] ?? ''));
   if (!match) return null;
   const phrase = (match[1] || bare(lines[1] ?? '')).replace(/\.$/, '').trim();
@@ -597,6 +600,12 @@ export interface WorkerCardState extends WorkerState {
    * never says the activity is missing.
    */
   activity: string | null;
+  /**
+   * The declared wait shortened to finish "Waiting for …" ("a turn on the
+   * PC"), written by `services/sessions/worker-wait-phrase.ts`. Null until it
+   * is written; the card shows the worker's own words meanwhile.
+   */
+  waitPhrase?: string | null;
 }
 
 /**
@@ -699,16 +708,37 @@ export type ProjectStateResponse = ProjectState & {
   unread?: Record<string, UnreadInboxSummary>;
 };
 
+/** A session named in a wait line, as `GET /workers` resolves it. */
+export interface SessionReference {
+  found: boolean;
+  /** What the sidebar would call it; null when nothing names it yet. */
+  name: string | null;
+  /** The project it belongs to, when that is not the panel's own. */
+  project: string | null;
+}
+
 export interface WorkersResponse {
   workers: WorkerCardState[];
   history: WorkerHistoryRow[];
   /** The coordinator's written project state (see `project-state.ts`); null when the conversation is not a coordinator. */
   project: ProjectState | null;
   /**
+   * A coordinator's: when the user last replied about each thread (`t:<seq>`)
+   * and card (`d:<id>`), read from its whole log (`repliedAt`), for the
+   * panel's Your calls. The page's own events may not reach back that far.
+   */
+  repliedAt?: Record<string, number>;
+  /**
    * What to call each session that has written to this conversation, keyed by
    * its id. A sender missing here is shown as the id it declared.
    */
   senders: Record<string, { name: string; role: 'worker' | 'coordinator' }>;
+  /**
+   * What to call each session a wait line names by full id, other than this
+   * panel's workers and coordinator. `found: false` means no session has
+   * that id. Absent from a server that predates it.
+   */
+  references?: Record<string, SessionReference>;
   /**
    * What each worker has been sent and has not taken into a turn yet, keyed
    * by its id. A worker with nothing waiting is absent. Absent altogether

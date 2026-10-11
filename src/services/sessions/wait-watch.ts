@@ -76,13 +76,13 @@ function escapeRegExp(text: string): string {
 }
 
 /** A session's liveness from its event log: running a turn, holding pending work, or neither. */
-interface Liveness {
+export interface Liveness {
   active: boolean;
   pendingWork: boolean;
   processAlive: boolean;
 }
 
-function readLiveness(sessionId: string, runtime: WorkerRuntime): Liveness {
+export function readLiveness(sessionId: string, runtime: WorkerRuntime): Liveness {
   const events = getEventStorage().readStatusWindow(sessionId, STATUS_WINDOW);
   const derived = deriveSessionStatusFromEvents(events);
   return {
@@ -184,7 +184,7 @@ function nudgeDeliveredAt(worker: string): Date | null {
   return row ? new Date(row.read_at) : null;
 }
 
-function isArchived(sessionId: string): boolean {
+export function isArchived(sessionId: string): boolean {
   const row = DatabaseProvider.getInstance().getDb().prepare(
     `SELECT archived FROM sessions WHERE session_id = ? OR conversation_id = ? LIMIT 1`,
   ).get(sessionId, sessionId) as { archived: number } | undefined;
@@ -192,7 +192,7 @@ function isArchived(sessionId: string): boolean {
 }
 
 /** Whether an inbox item with this delivery id was ever queued for the session, delivered or not. */
-function alreadyQueued(sessionId: string, deliveryId: string): boolean {
+export function alreadyQueued(sessionId: string, deliveryId: string): boolean {
   return DatabaseProvider.getInstance().getDb().prepare(
     `SELECT 1 FROM session_inbox WHERE session_id = ? AND delivery_id = ?`,
   ).get(sessionId, deliveryId) !== undefined;
@@ -273,7 +273,7 @@ export async function checkWaitingWorkers(coordinator: string, deps: WaitWatchDe
 }
 
 /** Coordinators with worker activity recently enough that a wait could still matter. */
-function activeCoordinators(sinceMs: number): string[] {
+export function activeCoordinators(sinceMs: number): string[] {
   const rows = DatabaseProvider.getInstance().getDb().prepare(
     `SELECT c.conversation_id AS id FROM conversations c
       WHERE c.coordinator = 1
@@ -286,7 +286,7 @@ function activeCoordinators(sinceMs: number): string[] {
 }
 
 /** How far back a coordinator's last worker event may be for its waits to be checked. */
-const ACTIVE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+export const ACTIVE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
 /** The periodic pass: every recently active coordinator. */
 export async function checkAllWaitingWorkers(now: number = Date.now()): Promise<void> {

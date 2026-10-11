@@ -140,6 +140,12 @@ export interface ProjectNotedData {
    * the thread says what was dismissed.
    */
   label?: string;
+  /**
+   * For `open` and `update`: what the user is asked, written for them in
+   * full: the context they need and each question. Required when the note
+   * makes the thread the user's and waiting on a decision.
+   */
+  ask?: string;
   /** For `rank`: open thread ids in the user's order of priority, most important first. */
   order?: number[];
   /** For `open` and `update`: where the evidence for this thread is, added to what it already has. */
@@ -208,6 +214,12 @@ export interface ProjectOpenThread {
   evidence: string[];
   /** The next step in a few words for the user's panel; null until the coordinator writes one. */
   label: string | null;
+  /**
+   * What the user is asked, in full, as the opened row in Your calls shows
+   * it. Cleared when the owner or wait changes, so an ask never outlives the
+   * hand-over it was written for.
+   */
+  ask?: string;
   /** What the thread is about in a few words, shown with its label; null until the coordinator writes one. */
   name: string | null;
   /** null when the thread has never been reconciled — prose from before ownership was recorded. */
@@ -373,7 +385,11 @@ function applyThreadFields(thread: ProjectOpenThread, data: Partial<ProjectNoted
   if (typeof data.label === 'string' && data.label.trim()) thread.label = data.label.trim();
   if (typeof data.name === 'string' && data.name.trim()) thread.name = data.name.trim();
   if ('waitingOn' in data) thread.waitingOn = data.waitingOn === null ? null : normalizeWait(data.waitingOn) ?? thread.waitingOn;
-  if (JSON.stringify([thread.owner, thread.waitingOn]) !== waitBefore) thread.waitingSince = at;
+  if (JSON.stringify([thread.owner, thread.waitingOn]) !== waitBefore) {
+    thread.waitingSince = at;
+    delete thread.ask;
+  }
+  if (typeof data.ask === 'string' && data.ask.trim()) thread.ask = data.ask.trim();
   if (Array.isArray(data.workers)) {
     for (const worker of data.workers) {
       if (typeof worker === 'string' && worker && !thread.workers.includes(worker)) thread.workers.push(worker);

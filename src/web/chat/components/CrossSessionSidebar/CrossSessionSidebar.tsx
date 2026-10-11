@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { useFeedbackInboxUnread, useFeedbackStatus } from '../../hooks/useFeedback';
 import { SessionCard } from '../shared/SessionCard';
+import { PluginSidebarLinks } from '../../plugins/PluginSidebarLinks';
 import { LatticeLogo } from '../shared/LatticeLogo';
 
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip';
@@ -29,6 +30,10 @@ import { parseJson } from '../../../../utils/json.js';
 
 
 const COLLAPSED_KEY = 'lattice-sidebar-collapsed';
+
+/** A thin ring in the row's background (`--row-bg`) round the Feedback count, cutting it out of the icon's lines it crosses. */
+const COUNT_OUTLINE = [[-1, -1], [1, -1], [-1, 1], [1, 1], [0, -1.5], [0, 1.5], [-1.5, 0], [1.5, 0]]
+  .map(([x, y]) => `${x}px ${y}px 0 var(--row-bg)`).join(', ');
 
 function loadCollapsed(): Record<string, boolean> {
   try {
@@ -285,25 +290,45 @@ export function CrossSessionSidebar({
 
       {/* Session list */}
       <div className="relative flex-1 overflow-y-auto px-3 pt-2 pb-3 flex flex-col gap-5">
-        {feedbackInbox && (
-          <button
-            onClick={() => {
-              void navigate('/feedback');
-              if (window.innerWidth < 768) onClose();
-            }}
-            data-testid="sidebar-feedback-inbox"
-            className={`flex items-center justify-between gap-2 px-2 py-1.5 rounded-md text-sm transition-colors cursor-pointer ${
-              onFeedbackPage ? 'bg-surface-2 text-fg' : 'text-fg-2 hover:text-fg hover:bg-surface'
-            }`}
-          >
-            {/* The icon sits in the cards' 28px icon column, so it and the label line up with the rows below. */}
-            <span className="flex items-center gap-2.5">
-              <span className="flex w-7 shrink-0 justify-center"><Inbox size={16} className="text-fg-3" /></span>
-              <span>Feedback</span>
-            </span>
-            {feedbackUnread ? <span className="font-mono text-[11px] text-accent">{feedbackUnread} unread</span> : null}
-          </button>
-        )}
+        {/* Plugin links and Feedback stack as one group of rows, spaced like the project rows below. */}
+        <div className="flex flex-col gap-px empty:hidden">
+          <PluginSidebarLinks onNavigate={() => { if (window.innerWidth < 768) onClose(); }} />
+
+          {feedbackInbox && (
+            <button
+              onClick={() => {
+                void navigate('/feedback');
+                if (window.innerWidth < 768) onClose();
+              }}
+              data-testid="sidebar-feedback-inbox"
+              aria-label={feedbackUnread ? `Feedback, ${feedbackUnread} unread` : 'Feedback'}
+              className={`flex items-center gap-2 px-2 py-1.5 rounded-sm text-sm transition-colors cursor-pointer ${
+                onFeedbackPage ? 'bg-surface-2 text-fg [--row-bg:var(--color-surface-2)]' : `${feedbackUnread ? 'text-fg' : 'text-fg-2 hover:text-fg'} hover:bg-surface [--row-bg:var(--color-bg-2)] hover:[--row-bg:var(--color-surface)]`
+              }`}
+            >
+              {/* The icon sits in the cards' 28px icon column, so it and the label line up with the rows below.
+                  Unread turns the icon cyan and the label bright, with the count at the icon's bottom-right
+                  corner, growing away from the icon and outlined in the row's own background. */}
+              <span className="flex items-center gap-2.5">
+                <span className="flex w-7 shrink-0 justify-center">
+                  <span className="relative flex">
+                    <Inbox size={16} className={feedbackUnread ? 'text-accent' : 'text-fg-3'} />
+                    {feedbackUnread ? (
+                      <span
+                        className="absolute left-[calc(100%-3px)] -bottom-[5px] text-[10px] font-semibold leading-none text-accent transition-[text-shadow]"
+                        style={{ textShadow: COUNT_OUTLINE }}
+                        aria-hidden="true"
+                      >
+                        {feedbackUnread}
+                      </span>
+                    ) : null}
+                  </span>
+                </span>
+                <span>Feedback</span>
+              </span>
+            </button>
+          )}
+        </div>
 
         <div data-testid="projects-section">
           <div className="flex items-center justify-between px-2 pb-1.5 text-xs font-medium text-fg-3">

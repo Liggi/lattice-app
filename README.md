@@ -133,6 +133,12 @@ Feedback is on by default and nothing is sent until you press Send. The first se
 
 Whoever runs the collector reads what arrives in their own Lattice: put `{"collectorUrl": "https://…", "readToken": "…"}` in `~/.lattice-app/feedback-inbox.json` with mode 600, and a Feedback inbox appears in the sidebar. Without that file there is no inbox.
 
+## Plugins
+
+A plugin adds a feature to your own Lattice without it being part of Lattice for everyone: a page with a sidebar link, server routes and background work, sessions it starts, and confirm cards whose answer runs its code. Install one into `~/.lattice-app/plugins` (`npm install --prefix ~/.lattice-app/plugins <package>`), name it in `config.json` as `"plugins": ["<package>"]`, and restart Lattice. Settings → General lists the plugins Lattice found, and why any did not load.
+
+A plugin runs with all of Lattice's access to your sessions, files and keys, so install only ones you trust. Lattice loads only the plugins `config.json` names, and only from `~/.lattice-app/plugins`. To write one, see [packages/plugin-kit](packages/plugin-kit/README.md).
+
 ## Personal settings
 
 Agents refer to you as "the user" unless you set a name. Standing guidance you want every coordinator or worker to follow goes here too:
@@ -157,6 +163,7 @@ Agents refer to you as "the user" unless you set a name. Standing guidance you w
 | `src/` | The Lattice server, CLI and web app |
 | `packages/harness` | `@liggi/agent-ui-harness`: runs an agent CLI process and streams its events to a browser |
 | `packages/toolkit` | `@liggi/agent-ui-toolkit`: React components for rendering agent tool calls |
+| `packages/plugin-kit` | `@liggi/lattice-plugin-kit`: the plugin contract, React shims, theme names and build helper |
 
 ## Development
 

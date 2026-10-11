@@ -1,30 +1,34 @@
 import { test, expect } from '@playwright/experimental-ct-react';
 import { ComposerHeightHarness } from './fixtures/ComposerHeightHarness';
 
-// ── COMPOSER_TEXTAREA_HEIGHT_CAP ──
+// ── COMPOSER_INPUT_HEIGHT_CAP ──
 //
-// The textarea auto-grows to fit its content but is capped at ~3 rows
-// (TEXTAREA_MAX_HEIGHT_PX = 85 in Composer.tsx). Beyond that it scrolls.
+// The text box auto-grows to fit its content but is capped at 8 rows
+// (INPUT_MAX_HEIGHT_PX = 198 in Composer.tsx). Beyond that it scrolls.
+// The box is an editor; its scrolling element wraps the editable content.
 
-const CAP_PX = 85;
+const CAP_PX = 198;
 
-test.describe('composer textarea auto-grow cap', () => {
-  test('stops growing at ~3 rows and scrolls the overflow', async ({ mount }) => {
+test.describe('composer input auto-grow cap', () => {
+  test('stops growing at 8 rows and scrolls the overflow', async ({ mount }) => {
     const component = await mount(<ComposerHeightHarness lines={12} />);
-    const textarea = component.getByTestId('composer-input');
-    await expect(textarea).toBeVisible();
+    const input = component.getByTestId('composer-input');
+    await expect(input).toBeVisible();
 
-    const box = await textarea.evaluate((el: HTMLTextAreaElement) => ({
-      clientHeight: el.clientHeight,
-      scrollHeight: el.scrollHeight,
-      maxHeight: getComputedStyle(el).maxHeight,
-      overflowY: getComputedStyle(el).overflowY,
-    }));
+    const box = await input.evaluate((el) => {
+      const s = el.closest('.cm-scroller') as HTMLElement;
+      return {
+        clientHeight: s.clientHeight,
+        scrollHeight: s.scrollHeight,
+        maxHeight: getComputedStyle(s).maxHeight,
+        overflowY: getComputedStyle(s).overflowY,
+      };
+    });
 
-    // Capped: never taller than the 3-row budget (small tolerance for rounding).
-    expect(box.clientHeight).toBeLessThanOrEqual(90);
-    // Actually grew to the cap rather than staying at the 1-row minimum.
-    expect(box.clientHeight).toBeGreaterThan(60);
+    // Capped: never taller than the 8-row budget (small tolerance for rounding).
+    expect(box.clientHeight).toBeLessThanOrEqual(CAP_PX + 2);
+    // Actually grew to the cap rather than staying near one row.
+    expect(box.clientHeight).toBeGreaterThan(160);
     // Content overflows and is reachable by scrolling.
     expect(box.scrollHeight).toBeGreaterThan(box.clientHeight);
     expect(box.overflowY).toBe('auto');
@@ -33,11 +37,12 @@ test.describe('composer textarea auto-grow cap', () => {
 
   test('is scrollable to the bottom of the overflowing content', async ({ mount }) => {
     const component = await mount(<ComposerHeightHarness lines={12} />);
-    const textarea = component.getByTestId('composer-input');
+    const input = component.getByTestId('composer-input');
 
-    const scrolled = await textarea.evaluate((el: HTMLTextAreaElement) => {
-      el.scrollTop = el.scrollHeight;
-      return el.scrollTop;
+    const scrolled = await input.evaluate((el) => {
+      const s = el.closest('.cm-scroller') as HTMLElement;
+      s.scrollTop = s.scrollHeight;
+      return s.scrollTop;
     });
 
     expect(scrolled).toBeGreaterThan(0);
@@ -45,21 +50,20 @@ test.describe('composer textarea auto-grow cap', () => {
 
   test('shrinks back down when the content becomes short again', async ({ mount }) => {
     const component = await mount(<ComposerHeightHarness lines={12} />);
-    const textarea = component.getByTestId('composer-input');
+    const input = component.getByTestId('composer-input');
+    const height = () => input.evaluate((el) => (el.closest('.cm-scroller') as HTMLElement).clientHeight);
 
-    const tall = await textarea.evaluate((el: HTMLTextAreaElement) => el.clientHeight);
-    expect(tall).toBeLessThanOrEqual(90);
+    const tall = await height();
+    expect(tall).toBeLessThanOrEqual(CAP_PX + 2);
 
     await component.getByTestId('set-single-line').click();
 
-    await expect
-      .poll(async () => textarea.evaluate((el: HTMLTextAreaElement) => el.clientHeight))
-      .toBeLessThan(tall);
+    await expect.poll(height).toBeLessThan(tall);
 
-    const short = await textarea.evaluate((el: HTMLTextAreaElement) => ({
-      clientHeight: el.clientHeight,
-      scrollHeight: el.scrollHeight,
-    }));
+    const short = await input.evaluate((el) => {
+      const s = el.closest('.cm-scroller') as HTMLElement;
+      return { clientHeight: s.clientHeight, scrollHeight: s.scrollHeight };
+    });
     // A single line no longer overflows.
     expect(short.scrollHeight).toBeLessThanOrEqual(short.clientHeight + 1);
   });

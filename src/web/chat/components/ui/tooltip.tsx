@@ -10,6 +10,9 @@ const Tooltip = TooltipPrimitive.Root
 
 const TooltipTrigger = TooltipPrimitive.Trigger
 
+/** A tooltip floats over the page: the lighter surface, a firmer edge and a shadow, so it never reads as part of what it covers. */
+const FLOAT = "border border-line-2 bg-surface-2 shadow-[0_6px_20px_rgba(0,0,0,0.5)]"
+
 type LatticeTooltipContentProps =
   React.ComponentPropsWithoutRef<typeof TooltipPrimitive.Content> & {
     /** Optional header label. Without it the tooltip is a single line. */
@@ -28,7 +31,7 @@ const TooltipContent = React.forwardRef<
         ref={ref}
         sideOffset={sideOffset}
         className={cn(
-          "z-50 max-w-[360px] overflow-hidden rounded-md border border-line bg-surface",
+          "z-50 max-w-[360px] overflow-hidden rounded-md", FLOAT,
           "animate-in fade-in-0 zoom-in-95 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95",
           "data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2",
           className
@@ -68,7 +71,7 @@ const TooltipContentPlain = React.forwardRef<
       ref={ref}
       sideOffset={sideOffset}
       className={cn(
-        "z-50 rounded-md border border-line bg-surface px-2 py-1 text-xs text-fg",
+        "z-50 rounded-md px-2 py-1 text-xs text-fg", FLOAT,
         "animate-in fade-in-0 zoom-in-95 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95",
         className
       )}

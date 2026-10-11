@@ -49,9 +49,11 @@ import { ensureDaemon } from './process-daemon/ensure-daemon.js';
 import type { ActiveSession } from './process-daemon/types.js';
 import { ConversationService } from './services/sessions/conversation-service.js';
 import { drainAllInboxes } from './services/sessions/session-inbox.js';
+import { resumeHeldReplies } from './services/sessions/held-replies.js';
 import { settleHeldDeliveries } from './services/sessions/held-delivery-settlement.js';
 import { wakeRestartWaiters } from './services/sessions/wait-watch.js';
 import { builtClientDir, servesViteDevClient } from './server/vite-dev-client.js';
+import { loadPlugins, stopPlugins } from './services/plugins/plugin-registry.js';
 
 // ViteExpress will be imported dynamically in initialize() if needed
 let ViteExpress: typeof import('vite-express') | undefined;
@@ -87,6 +89,8 @@ export class LatticeServer {
   private autoArchiveTickHandle: NodeJS.Timeout | null = null;
   private idleReapTickHandle: NodeJS.Timeout | null = null;
   private waitWatchTickHandle: NodeJS.Timeout | null = null;
+  private jobStallTickHandle: NodeJS.Timeout | null = null;
+  private jobReadTickHandle: NodeJS.Timeout | null = null;
 
   /**
    * Periodic auto-gen interval for the session-summary index. 30 min — latency
@@ -112,6 +116,7 @@ export class LatticeServer {
   private static readonly IDLE_REAP_TICK_INTERVAL_MS = 5 * 60 * 1000;
   /** How often waiting workers are checked for having nothing set up to wake them. */
   private static readonly WAIT_WATCH_TICK_INTERVAL_MS = 2 * 60 * 1000;
+  private static readonly JOB_STALL_TICK_INTERVAL_MS = 60 * 1000;
 
   constructor(configOverrides?: { port?: number; host?: string; cwd?: string }) {
     this.app = express();
@@ -200,6 +205,8 @@ export class LatticeServer {
       this.initializeAutoArchiveSweep();
       this.initializeIdleSessionReaper();
       this.initializeWaitWatch();
+      this.initializeJobStallWatch();
+      this.initializeJobReads();
       this.ensureManagedClaudeHooks();
       startEventLoopMonitor();
 
@@ -292,6 +299,7 @@ export class LatticeServer {
     this.logger.debug('Setting up routes');
     await this.setupHarness();
     await this.initializeInsightsAndQueueDispatch();
+    await loadPlugins(this.configService.getConfig().plugins);
     this.setupRoutes();
   }
 
@@ -525,6 +533,42 @@ export class LatticeServer {
     }, LatticeServer.WAIT_WATCH_TICK_INTERVAL_MS);
   }
 
+  /**
+   * A job in a coordinator's Running list that stops moving: its coordinator
+   * is told once, close to when the panel turns it amber. See job-stall-watch.ts.
+   */
+  /**
+   * Running jobs are counted from their work: every 30 seconds each one's
+   * count is read from where it lands. See job-watch.ts. The first time, any
+   * job whose count was typed in by hand is ended, the file copied aside first.
+   */
+  private initializeJobReads(): void {
+    void (async () => {
+      const { jobWatch } = await import('./services/sessions/job-watch.js');
+      const watch = jobWatch();
+      const retired = watch.store.retireHandReported();
+      if (retired > 0) this.logger.info('Ended hand-reported jobs; Lattice counts jobs from their work now', { retired });
+      this.jobReadTickHandle = setInterval(() => { void watch.readAll(); }, 30_000);
+    })().catch((err) => {
+      this.logger.error('Starting job reads failed', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
+  }
+
+  private initializeJobStallWatch(): void {
+    this.jobStallTickHandle = setInterval(() => {
+      void (async () => {
+        const { checkAllJobStalls } = await import('./services/sessions/job-stall-watch.js');
+        await checkAllJobStalls();
+      })().catch((err) => {
+        this.logger.error('Job stall watch failed', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
+    }, LatticeServer.JOB_STALL_TICK_INTERVAL_MS);
+  }
+
   private initializeIdleSessionReaper(): void {
     this.idleReapTickHandle = setInterval(() => {
       void (async () => {
@@ -592,6 +636,12 @@ export class LatticeServer {
         .then(() => rerunCutOffCompactions())
         .then(() => wakeRestartWaiters())
         .then(() => drainAllInboxes());
+      // Replies held in the panel when the last process stopped go when due.
+      try {
+        resumeHeldReplies();
+      } catch (err) {
+        this.logger.error('Resuming held replies failed', err);
+      }
 
     } catch (error) {
       this.logger.error('Failed to start server:', error, {
@@ -731,6 +781,7 @@ export class LatticeServer {
     });
 
     this.stopBackgroundServices();
+    await stopPlugins();
     // The daemon is left running with its agents, for the next server.
     await this.closeHttpServer();
   }
@@ -748,6 +799,14 @@ export class LatticeServer {
     if (this.waitWatchTickHandle) {
       clearInterval(this.waitWatchTickHandle);
       this.waitWatchTickHandle = null;
+    }
+    if (this.jobReadTickHandle) {
+      clearInterval(this.jobReadTickHandle);
+      this.jobReadTickHandle = null;
+    }
+    if (this.jobStallTickHandle) {
+      clearInterval(this.jobStallTickHandle);
+      this.jobStallTickHandle = null;
     }
     if (this.idleReapTickHandle) {
       clearInterval(this.idleReapTickHandle);

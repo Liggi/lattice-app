@@ -94,7 +94,7 @@ export const SESSION_VERBS: VerbSpec[] = [
       { name: 'from', kind: 'string', value: 'CONV', desc: 'Start as a worker picked up from this coordinator conversation.' },
       { name: 'task', kind: 'string', value: 'TEXT', desc: 'With --from: one line saying what the worker is to find out or do (shown on its card).' },
       { name: 'thread', kind: 'int', value: 'ID', desc: 'With --from: the coordinator\'s open thread this worker is being put on (the id `session state` shows).' },
-      { name: 'coordinator', kind: 'boolean', desc: 'Start as a coordinator (front persona; Codex unless --provider says otherwise).' },
+      { name: 'coordinator', kind: 'boolean', desc: 'Start as a coordinator (front persona; on --provider, else the provider of --model, else the configured coordinator provider).' },
       { name: 'archived', kind: 'boolean', desc: 'Create it already archived, so it never appears in the sidebar. For verification fixtures.' },
       { name: 'prompt-file', kind: 'string', value: 'PATH', desc: 'Read the prompt from a file.' },
       { name: 'prompt', kind: 'string', value: 'TEXT', desc: 'Prompt text.' },
@@ -108,9 +108,8 @@ export const SESSION_VERBS: VerbSpec[] = [
     notes: [
       'Prompt source precedence: --prompt-file, then --prompt, then --message,\n' +
         '  then the trailing positional text.',
-      '--reasoning-effort reaches Codex sessions only, and is how an Astra assignment\n' +
-        '  is created at the effort the work needs: `--provider codex --model gpt-6-astra\n' +
-        '  --reasoning-effort xhigh`. A Claude --model is ignored by it.',
+      '--reasoning-effort reaches Codex sessions only and sets the effort a Codex\n' +
+        '  model runs at; a Claude session ignores it.',
 
       'With --from, the new session inherits the parent\'s cwd and workspace unless\n' +
         '  --cwd/--workspace are given, gets a worker preamble ahead of the prompt, and\n' +
@@ -302,6 +301,7 @@ export const SESSION_VERBS: VerbSpec[] = [
       { name: 'summary', kind: 'string', value: 'TEXT', desc: 'With --thread: where that work has actually got to, replacing the last summary.' },
 
       { name: 'label', kind: 'string', value: 'TEXT', desc: 'With --open/--thread: the next step in a few words, as the user\'s panel lists it ("Publish 0.4.1?").' },
+      { name: 'ask', kind: 'string', value: 'TEXT', desc: 'With --open/--thread: what you are asking the user, in plain words, no ids, paths or commit hashes. One or two sentences of context, then each question on its own numbered line: one sentence, detail only where it changes the answer, ending "Recommendation: <a few words>" where you have one. Their Your calls row lays the questions out with each recommendation as the answer they can change; Lattice refuses context over 240 characters, a question over 160 or a recommendation over 60. Required when the note makes the thread theirs and waiting on a decision; a change of owner or wait clears it.' },
       { name: 'rank', kind: 'string', value: 'IDS', desc: 'Open thread ids in the user\'s order of priority, most important first; restate the whole order each time.' },
       { name: 'evidence', kind: 'string', value: 'TEXT', desc: 'With --open/--thread: where to look for what established that — a branch, a commit, a report seq.' },
       { name: 'owner', kind: 'string', value: 'WHO', desc: 'With --open/--thread: you | user | a worker conv id | any other name.' },

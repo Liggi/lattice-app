@@ -8,7 +8,9 @@ import { remarkSlackBullets } from '../../utils/slack-bullets';
 import { AgentMessage } from './AgentMessage';
 import { JsonViewer } from '../JsonViewer/JsonViewer';
 import { ToolUseRenderer, type BackgroundTaskState } from '@liggi/agent-ui-toolkit';
-import { LazyCodeHighlight } from '../CodeHighlight';
+import { LazyCodeHighlight, MAX_COLLAPSED_LINES } from '../CodeHighlight';
+import { CodeCopyButton } from './CodeCopyButton';
+import { cn } from '@/web/chat/lib/utils';
 import { ViewableImage } from './ImageViewer';
 import { DiagramBlock, DiagramStreamingContext } from './DiagramBlock';
 import type { ChatMessage, ToolResult, QuestionRequest, DisplayContentBlock } from '../../types';
@@ -22,6 +24,7 @@ import { UserText } from './UserText';
 import type { PastedSpan } from '@liggi/agent-ui-harness/protocol';
 import { AttachedText } from './AttachedText';
 import { isAttachedTextFileBlock, parseAttachedTextFile } from '@/constants/attached-text-file';
+import { isSavedImageNoteBlock } from '@/constants/saved-image-note';
 // import type { ContentBlockParam } from '@anthropic-ai/sdk/resources/messages/messages';
 
 interface MessageItemProps {
@@ -480,12 +483,27 @@ export const markdownComponents: Record<string, React.ComponentType<MarkdownComp
   // Fenced blocks with a language render their own box (CodeHighlight), so
   // the wrapping <pre> becomes a plain container; otherwise the global `pre`
   // border and padding would frame the highlighter's box a second time.
+  // Every fenced block but a diagram gets a copy button for the text between
+  // its fences; a long highlighted block keeps its expand button in the
+  // corner, so the copy button sits to its left. The code scrolls in a box
+  // that ends short of the buttons, so no line ever runs underneath them.
   pre({ node: _node, children, ...props }: MarkdownComponentProps) {
     const kids = React.Children.toArray(children);
-    const first = kids.length === 1 && React.isValidElement<{ className?: string }>(kids[0]) ? kids[0] : null;
-    const hasLanguage = first !== null && /language-\w+/.test(first.props.className || '');
-    if (hasLanguage) return <div className="not-prose my-3">{children}</div>;
-    return <pre {...props}>{children}</pre>;
+    const first = kids.length === 1 && React.isValidElement<{ className?: string; children?: React.ReactNode }>(kids[0]) ? kids[0] : null;
+    const language = /language-(\w+)/.exec(first?.props.className || '')?.[1];
+    if (language === 'diagram') return <div className="not-prose my-3">{children}</div>;
+    const text = first ? String(first.props.children ?? '').replace(/\n$/, '') : '';
+    const long = Boolean(language) && text.trimEnd().split('\n').length > MAX_COLLAPSED_LINES;
+    const copy = first && <CodeCopyButton text={text} className={long ? 'right-9' : 'right-2'} />;
+    if (language) return <div className={cn('group/code relative not-prose my-3', long ? '[&_.shiki]:!mr-16' : '[&_.shiki]:!mr-10')}>{children}{copy}</div>;
+    return (
+      <div className="group/code relative">
+        <pre {...props} className={cn(props.className as string | undefined, first && '!overflow-x-hidden !pr-10')}>
+          {first ? <span className="block overflow-x-auto">{children}</span> : children}
+        </pre>
+        {copy}
+      </div>
+    );
   },
   code({ node: _node, inline, className, children, ...props }: MarkdownComponentProps) {
     const match = /language-(\w+)/.exec(className || '');
@@ -597,11 +615,12 @@ export function MessageItem({
 
   // Handle user messages
   if (message.type === 'user') {
-    // Extract text content
+    // Extract the typed text: not attached files, nor the note telling a
+    // coordinator where its images were saved.
     const rawContent = typeof message.content === 'string'
       ? message.content
       : Array.isArray(message.content)
-        ? message.content.filter((block: { type: string; text?: string }) => block.type === 'text' && !isAttachedTextFileBlock(block)).map((block: { type: string; text?: string }) => block.text || '').join('\n')
+        ? message.content.filter((block: { type: string; text?: string }) => block.type === 'text' && !isAttachedTextFileBlock(block) && !isSavedImageNoteBlock(block)).map((block: { type: string; text?: string }) => block.text || '').join('\n')
         : '';
 
     const content = rawContent.trim();

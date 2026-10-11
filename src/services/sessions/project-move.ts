@@ -218,6 +218,7 @@ export async function moveWorker(input: {
     db().prepare('UPDATE conversations SET picked_up_from = ?, updated_at = ? WHERE conversation_id = ?')
       .run(to, new Date().toISOString(), worker);
     db().prepare('UPDATE worker_activity SET coordinator = ? WHERE worker = ?').run(to, worker);
+    db().prepare('UPDATE worker_wait_phrase SET coordinator = ? WHERE worker = ?').run(to, worker);
   })();
   appendWorkerEvent(from, 'worker:moved', { worker, to, project: toProject, task: card.task });
 

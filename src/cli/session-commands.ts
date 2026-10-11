@@ -27,6 +27,7 @@ import {
   type ThreadWait,
 } from '../types/project-state.js';
 import { parseJson } from '../utils/json.js';
+import { modelProviderMismatch, providerForModel } from '../constants/model-provider.js';
 import { deriveSessionStatusFromEvents } from '../harness/derive-session-status.js';
 import { workerResumedAfterReport, workerRuntimeWord, workerWaitingOn, type ProjectStateResponse, type WorkersResponse } from '../types/worker-events.js';
 import type { UnreadInboxSummary } from '../types/inbox.js';
@@ -677,6 +678,7 @@ async function cmdNote(cmd: ParsedCommand): Promise<void> {
   const summary = str(cmd, 'summary');
   const evidence = str(cmd, 'evidence');
   const label = str(cmd, 'label');
+  const ask = str(cmd, 'ask');
   if (waitingOn && ready) fail('--waiting-on and --ready contradict each other; pass one');
   // `--with` is the evidence line, and each of these wants its own.
   const usesWith = [
@@ -694,6 +696,7 @@ async function cmdNote(cmd: ParsedCommand): Promise<void> {
     ...(worker ? { workers: [worker] } : {}),
     ...(evidence ? { evidence: [evidence] } : {}),
     ...(label ? { label } : {}),
+    ...(ask ? { ask } : {}),
     ...(name && !outcome ? { name } : {}),
   };
 
@@ -920,9 +923,12 @@ async function cmdNew(cmd: ParsedCommand): Promise<void> {
   if (providerFlag && providerFlag !== 'claude' && providerFlag !== 'codex') {
     fail(`--provider must be claude or codex, got "${providerFlag}"`);
   }
-  // A coordinator with no --provider is left to the server, which starts it on
-  // the configured coordinator provider (coordinator-defaults.ts).
-  const provider = providerFlag ?? (coordinator ? undefined : 'claude');
+  const mismatch = modelProviderMismatch(providerFlag, model);
+  if (mismatch) fail(mismatch);
+  // With no --provider the model decides; a coordinator with neither is left
+  // to the server, which starts it on the configured coordinator provider
+  // (coordinator-defaults.ts).
+  const provider = providerFlag ?? providerForModel(model) ?? (coordinator ? undefined : 'claude');
   // Codex reads effort; Claude has no equivalent, so naming one there is a
   // silently ignored flag rather than a setting. The create route already
   // accepted this — the CLI was the only supported way to dispatch and it

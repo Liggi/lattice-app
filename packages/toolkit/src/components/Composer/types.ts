@@ -104,7 +104,16 @@ export interface ComposerRuntimeConfig {
   sessionModelFallback?: boolean;
   /** Models the user may pick from. When non-empty and onModelChange is
    *  provided, the model badge becomes an interactive selector. */
-  availableModels?: Array<{ id: string; label: string; description?: string; isDefault?: boolean }>;
+  availableModels?: Array<{
+    id: string;
+    label: string;
+    description?: string;
+    isDefault?: boolean;
+    /** Listed behind a collapsed "Other models" row instead of with the rest. */
+    other?: boolean;
+  }>;
+  /** A plain line shown at the foot of the model menu, such as where its list came from. */
+  modelMenuNote?: string;
   /** The model id the user has chosen; null/undefined means "server default". */
   selectedModel?: string | null;
   /** Called when the user picks a model; null means "revert to default". */

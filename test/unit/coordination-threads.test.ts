@@ -123,10 +123,34 @@ describe('the note route', () => {
     expect((await note({ kind: 'update', text: long, ref: id, waitingOn: { kind: 'decision', text: "Gui's OK" } })).status).toBe(200);
     const refused = await note({ kind: 'update', text: long, ref: id, owner: { kind: 'user' } });
     expect(refused.status).toBe(400);
-    expect(refused.body.error).toContain('--evidence');
-    await note({ kind: 'update', text: '', ref: id, owner: { kind: 'user' } });
+    expect(refused.body.error).toContain('--ask');
+    await note({ kind: 'update', text: '', ref: id, owner: { kind: 'user' }, ask: 'Is Gui happy with the beta?' });
     expect((await note({ kind: 'update', text: long, ref: id })).status).toBe(400);
     expect((await note({ kind: 'update', text: 'x'.repeat(160), ref: id })).status).toBe(200);
+  });
+
+  it('refuses a hand-over to the user on a decision without an ask, and nothing else for want of one', async () => {
+    const id = (await note({ kind: 'open', text: 'the war redesign', owner: { kind: 'coordinator' } })).body.seq as number;
+    const handOver = { kind: 'update', text: 'draft 2', ref: id, owner: { kind: 'user' }, waitingOn: { kind: 'decision', text: 'five answers' } };
+    const refused = await note(handOver);
+    expect(refused.status).toBe(400);
+    expect(refused.body.error).toContain('--ask');
+    expect((await note({ ...handOver, ask: '1. Backstop? 2. Sleep or destroy?' })).status).toBe(200);
+    expect((await note({ kind: 'update', text: 'truce checked', ref: id })).status).toBe(200);
+    expect((await note({ kind: 'open', text: 'try it on your phone', owner: { kind: 'user' } })).status).toBe(200);
+    const other = (await note({ kind: 'open', text: 'the beta', owner: { kind: 'coordinator' } })).body.seq as number;
+    expect((await note({ kind: 'update', text: '', ref: other, ask: 'Ship it?' })).status).toBe(400);
+  });
+
+  it('refuses an ask too long to read at a glance, saying how to shorten it', async () => {
+    const id = (await note({ kind: 'open', text: 'the war redesign', owner: { kind: 'coordinator' } })).body.seq as number;
+    const handOver = { kind: 'update', text: '', ref: id, owner: { kind: 'user' }, waitingOn: { kind: 'decision', text: 'answers' } };
+    const longQuestion = await note({ ...handOver, ask: `It ends when an empire breaks.\n1. ${'Should it '.repeat(17)}end?\n2. Sleep? Recommendation: yes.` });
+    expect(longQuestion.status).toBe(400);
+    expect(longQuestion.body.error).toContain('question 1');
+    expect(longQuestion.body.error).toContain('one sentence');
+    expect((await note({ ...handOver, ask: 'x'.repeat(401) })).status).toBe(400);
+    expect((await note({ ...handOver, ask: 'It ends when an empire breaks.\n1. A backstop? Recommendation: no backstop.\n2. Sleep? Recommendation: yes.' })).status).toBe(200);
   });
 
   it('keeps a thread name to a few words, and takes one on its own as an update', async () => {

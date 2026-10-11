@@ -1,8 +1,11 @@
 import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { AlertTriangle, Bot, Check, Loader2, PanelLeft, RefreshCw, ShieldAlert } from 'lucide-react';
 import { api } from '../../services/api';
 import { feedbackInboxQueryKey } from '../../hooks/useFeedback';
+import { usePreferencesContext } from '../../contexts/PreferencesContext';
+import { useConversations } from '../../contexts/ConversationsContext';
 import { LatticeLogo } from '../shared/LatticeLogo';
 import type { FeedbackInboxItem, FeedbackInboxView } from '@/types/feedback';
 
@@ -34,6 +37,32 @@ function ago(iso: string, now = Date.now()): string {
   return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 
+/** Model for sessions started from an inbox item to address it. */
+const ADDRESS_MODEL = 'claude-opus-5-5';
+
+function contextLine(item: FeedbackInboxItem): string {
+  return [
+    item.scope === 'session' ? 'About a session' : 'About Lattice',
+    item.provider ? (item.model ? `${item.provider}, ${item.model}` : item.provider) : null,
+    item.latticeVersion ? `Lattice ${item.latticeVersion}` : null,
+    SCREEN_LABEL[item.screen] ?? null,
+  ].filter(Boolean).join(', ');
+}
+
+/** The opening message of a session started to address an inbox item. */
+function addressMessage(item: FeedbackInboxItem): string {
+  const from = item.source === 'agent' ? 'proposed by an agent' : 'sent by a user';
+  return [
+    `Address this feedback about Lattice, ${from} and received ${new Date(item.receivedAt).toLocaleString()}.`,
+    '',
+    `${CATEGORY_LABEL[item.category]}:`,
+    '',
+    item.message,
+    '',
+    contextLine(item),
+  ].join('\n');
+}
+
 function Flags({ item }: { item: FeedbackInboxItem }): JSX.Element | null {
   if (item.classificationState !== 'classified') {
     return (
@@ -57,12 +86,31 @@ function Flags({ item }: { item: FeedbackInboxItem }): JSX.Element | null {
 
 function InboxItem({ item, onMark }: { item: FeedbackInboxItem; onMark: (changes: { read?: boolean; done?: boolean }) => void }): JSX.Element {
   const unread = !item.readAt && !item.doneAt;
-  const context = [
-    item.scope === 'session' ? 'About a session' : 'About Lattice',
-    item.provider ? (item.model ? `${item.provider}, ${item.model}` : item.provider) : null,
-    item.latticeVersion ? `Lattice ${item.latticeVersion}` : null,
-    SCREEN_LABEL[item.screen] ?? null,
-  ].filter(Boolean);
+  const navigate = useNavigate();
+  const { serverConfig } = usePreferencesContext();
+  const { invalidateConversations } = useConversations();
+  const [starting, setStarting] = useState(false);
+  const [startError, setStartError] = useState<string | null>(null);
+
+  const address = async () => {
+    setStarting(true);
+    setStartError(null);
+    try {
+      const created = await api.createConversation({
+        provider: 'claude',
+        model: ADDRESS_MODEL,
+        message: addressMessage(item),
+        workingDirectory: serverConfig?.defaultWorkingDirectory || serverConfig?.cwd || '~',
+        ...(serverConfig?.defaultPermissionMode ? { permissionMode: serverConfig.defaultPermissionMode } : {}),
+      });
+      if (!item.readAt && !item.doneAt) onMark({ read: true });
+      void invalidateConversations();
+      void navigate(`/c/${created.conversationId}`);
+    } catch (error) {
+      setStartError(`The session could not be started: ${error instanceof Error ? error.message : String(error)}`);
+      setStarting(false);
+    }
+  };
   return (
     <article className="px-4 py-3 border-b border-line space-y-2" data-testid="feedback-inbox-item">
       <div className="flex items-center justify-between gap-3">
@@ -93,10 +141,20 @@ function InboxItem({ item, onMark }: { item: FeedbackInboxItem; onMark: (changes
 
       <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
         <div className="flex flex-col gap-1 min-w-0">
-          <span className="text-[11px] text-fg-3">{context.join(', ')}</span>
+          <span className="text-[11px] text-fg-3">{contextLine(item)}</span>
           <Flags item={item} />
+          {startError && <span className="text-[11px] text-rose-300">{startError}</span>}
         </div>
-        <div className="flex items-center gap-1 shrink-0">
+        <div className="flex items-center gap-1 shrink-0 -mx-2">
+          <button
+            onClick={() => void address()}
+            disabled={starting}
+            title="Start a new Opus 5.5 session with this feedback as its first message"
+            className="flex items-center gap-1.5 px-2 py-1 rounded-md text-xs text-fg-3 hover:text-fg hover:bg-surface-2 transition-colors cursor-pointer disabled:cursor-default disabled:opacity-60"
+          >
+            {starting && <Loader2 size={12} className="animate-spin" />}
+            {starting ? 'Starting session' : 'Address with Opus 5.5'}
+          </button>
           <button
             onClick={() => onMark({ read: !(item.readAt || item.doneAt) })}
             className="px-2 py-1 rounded-md text-xs text-fg-3 hover:text-fg hover:bg-surface-2 transition-colors cursor-pointer"

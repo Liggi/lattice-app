@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { Maximize2, Minimize2 } from 'lucide-react';
 import { codeToHtml } from 'shiki';
 import { cn } from "@/web/chat/lib/utils";
+import { MAX_COLLAPSED_LINES } from './max-collapsed-lines';
 
 interface CodeHighlightProps {
   code: string;
@@ -9,8 +10,6 @@ interface CodeHighlightProps {
   showLineNumbers?: boolean;
   className?: string;
 }
-
-const MAX_COLLAPSED_LINES = 12;
 
 export const CodeHighlight: React.FC<CodeHighlightProps> = ({
   code,

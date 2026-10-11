@@ -11,7 +11,10 @@ import { main as startServer } from './server.js';
 import { runSessionCommand } from './cli/session-commands.js';
 import { renderSessionUsageBlock } from './cli/session-cli-spec.js';
 import { FEEDBACK_USAGE, runFeedbackCommand } from './cli/feedback-command.js';
+import { JOB_USAGE, runJobCommand } from './cli/job-command.js';
+import { runProgressCommand } from './cli/progress-command.js';
 import { ASK_USAGE, runAskCommand } from './cli/ask-command.js';
+import { PLUGIN_USAGE, runPluginCommand } from './cli/plugin-command.js';
 import { EXPLAIN_USAGE, runExplainCommand } from './cli/explain-command.js';
 import { DIAGRAM_USAGE, runDiagramCommand } from './cli/diagram-command.js';
 import { FRAME_USAGE, runFrameCommand } from './cli/frame-command.js';
@@ -33,8 +36,9 @@ which is what the session commands below are written for.
 
 ${renderSessionUsageBlock()}
 
-${FEEDBACK_USAGE}
+${FEEDBACK_USAGE}${JOB_USAGE}
 ${ASK_USAGE}
+${PLUGIN_USAGE}
 ${EXPLAIN_USAGE}
 ${FRAME_USAGE}
 ${DIAGRAM_USAGE}
@@ -82,6 +86,16 @@ export async function run(): Promise<void> {
     return;
   }
 
+  if (first === 'job') {
+    await runJobCommand(args.slice(1));
+    return;
+  }
+
+  if (first === 'progress') {
+    runProgressCommand();
+    return;
+  }
+
   if (first === 'frame') {
     await runFrameCommand(args.slice(1));
     return;
@@ -94,6 +108,11 @@ export async function run(): Promise<void> {
 
   if (first === 'ask') {
     await runAskCommand(args.slice(1));
+    return;
+  }
+
+  if (first === 'plugin') {
+    await runPluginCommand(args.slice(1));
     return;
   }
 

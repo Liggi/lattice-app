@@ -361,6 +361,21 @@ class SessionInfoSchemaBootstrapRunner {
       );
       CREATE INDEX IF NOT EXISTS idx_worker_activity_coordinator
         ON worker_activity(coordinator);
+
+      -- A waiting worker's declared wait, shortened for its card ("a turn on
+      -- the PC"); see services/sessions/worker-wait-phrase.ts. wait_text is the
+      -- declared wait it was written from: the phrase is served only while the
+      -- worker still declares exactly that. One row per worker, replaced in place.
+      CREATE TABLE IF NOT EXISTS worker_wait_phrase (
+        worker TEXT PRIMARY KEY,
+        coordinator TEXT NOT NULL,
+        wait_text TEXT NOT NULL,
+        text TEXT NOT NULL,
+        model TEXT NOT NULL,
+        at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_worker_wait_phrase_coordinator
+        ON worker_wait_phrase(coordinator);
     `);
   }
 
@@ -542,6 +557,7 @@ class SessionInfoSchemaBootstrapRunner {
       this.migrateSessionCreatedHiddenColumn(columnNames);
       this.migrateSessionProjectNameColumn(columnNames);
       this.migrateSessionArchivedAtColumn(columnNames);
+      this.migrateSessionUnarchivedAtColumn(columnNames);
       this.addSessionsColumnIfMissing(columnNames, 'slept_at', 'ALTER TABLE sessions ADD COLUMN slept_at TEXT DEFAULT NULL');
       // Covering index for archived filter — the sessions table contains large
       // identity_image blobs, so a full scan for WHERE archived = 0 is very slow.
@@ -614,6 +630,28 @@ class SessionInfoSchemaBootstrapRunner {
       WHEN old.archived = 1 AND new.archived = 0
       BEGIN
         UPDATE sessions SET archived_at = NULL WHERE session_id = new.session_id;
+      END;
+    `);
+  }
+
+  /**
+   * When a session was last brought back from the archive, by any route. The
+   * auto-archive sweep leaves a session alone until it has activity after this
+   * time, so bringing one back keeps it back. Never cleared; the next
+   * unarchive overwrites it. NULL on rows nobody has unarchived since it existed.
+   */
+  private migrateSessionUnarchivedAtColumn(columnNames: string[]): void {
+    this.addSessionsColumnIfMissing(
+      columnNames,
+      'unarchived_at',
+      'ALTER TABLE sessions ADD COLUMN unarchived_at TEXT DEFAULT NULL'
+    );
+    this.db.exec(`
+      CREATE TRIGGER IF NOT EXISTS sessions_unarchived_at_set
+      AFTER UPDATE OF archived ON sessions
+      WHEN old.archived = 1 AND new.archived = 0
+      BEGIN
+        UPDATE sessions SET unarchived_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE session_id = new.session_id;
       END;
     `);
   }

@@ -23,6 +23,7 @@ import { getHarnessSessionManager } from '@/harness/setup.js';
 import { DEFAULT_CODEX_MODEL_ID } from '@/constants/codex-models.js';
 import { DEFAULT_OPENCODE_MODEL_ID } from '@/constants/opencode-models.js';
 import { supersededModelRefusal } from '@/constants/superseded-models.js';
+import { modelProviderMismatch, providerForModel } from '@/constants/model-provider.js';
 import { resolveResumeModel } from '@/services/sessions/resume-model.js';
 import { coordinatorClaudeModel, coordinatorCodexDefaults, coordinatorProvider } from '@/services/sessions/coordinator-defaults.js';
 import {
@@ -139,7 +140,7 @@ export function registerUnifiedConversationLifecycleRoutes(
 
   router.post('/create', asyncHandler(async (req: RequestWithRequestId, res) => {
     const body = req.body as {
-      /** May be omitted for a coordinator, which then takes coordinatorProvider(). */
+      /** May be omitted: the model's provider, else coordinatorProvider() for a coordinator. */
       provider: Provider;
       message: string;
       workingDirectory: string;
@@ -212,7 +213,11 @@ export function registerUnifiedConversationLifecycleRoutes(
 
     const normalizedWorkingDirectory = normalizeWorkingDirectory(body.workingDirectory);
     const { message, permissionMode: requestedMode, workspace } = body;
-    const provider: Provider = body.provider ?? (body.coordinator ? await coordinatorProvider() : body.provider);
+    const mismatch = modelProviderMismatch(body.provider, body.model);
+    if (mismatch) throw new LatticeError('INVALID_REQUEST', mismatch, 400);
+    const provider: Provider = body.provider
+      ?? providerForModel(body.model)
+      ?? (body.coordinator ? await coordinatorProvider() : body.provider);
     // A coordinator the caller did not pin runs on the coordinator defaults
     // rather than the general Codex ones (coordinator-defaults.ts). Resolved
     // here so the segment records the model a resume will keep it on.
@@ -524,6 +529,9 @@ export function registerUnifiedConversationLifecycleRoutes(
     if (!latestSegment) {
       throw new LatticeError('NO_SEGMENTS', `Conversation ${conversationId} has no segments`, 500);
     }
+    // Moving a conversation to another provider is a switch, not a resume.
+    const resumeMismatch = modelProviderMismatch(latestSegment.provider, model);
+    if (resumeMismatch) throw new LatticeError('INVALID_REQUEST', `${resumeMismatch} To move it, switch provider.`, 400);
 
     // A text file too large to send inline goes as its saved path
     // (large-attached-files.ts); malformed blocks still fail in the adapters.

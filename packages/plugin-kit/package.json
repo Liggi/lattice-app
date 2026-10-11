@@ -1,0 +1,24 @@
+{
+  "name": "@liggi/lattice-plugin-kit",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Types, React shims, theme tokens and a build helper for Lattice plugins",
+  "license": "MIT",
+  "type": "module",
+  "types": "./src/index.d.ts",
+  "exports": {
+    ".": { "types": "./src/index.d.ts" },
+    "./build": "./src/build.mjs",
+    "./theme.css": "./theme.css",
+    "./plugin.css": "./plugin.css"
+  },
+  "bin": {
+    "lattice-plugin-build": "./src/cli.mjs"
+  },
+  "files": ["src", "theme.css", "plugin.css", "README.md"],
+  "dependencies": {
+    "@tailwindcss/cli": "^4.2.2",
+    "esbuild": "^0.28.2",
+    "tailwindcss": "^4.3.3"
+  }
+}

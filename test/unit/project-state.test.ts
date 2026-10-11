@@ -122,6 +122,15 @@ describe('threads', () => {
     expect(thread.updatedAt).toBe(progress.timestamp);
   });
 
+  it('keeps an ask while the hand-over stands, and drops it when the owner or wait changes', () => {
+    const opened = note('open', 'redesign the war', { owner: { kind: 'coordinator' } });
+    const handed = note('update', 'draft 2', { ref: opened.seq, owner: { kind: 'user' }, waitingOn: { kind: 'decision', text: 'five answers' }, ask: 'Five questions, in full.' });
+    const progress = note('update', 'truce checked', { ref: opened.seq });
+    expect(foldProjectState([opened, handed, progress]).open[0].ask).toBe('Five questions, in full.');
+    const back = note('update', 'answered', { ref: opened.seq, owner: { kind: 'coordinator' }, waitingOn: null });
+    expect(foldProjectState([opened, handed, progress, back]).open[0].ask).toBeUndefined();
+  });
+
   it('leaves a thread written before ownership was recorded without an owner, rather than guessing one from its words', () => {
     const [thread] = foldProjectState([note('open', 'front checks whether the live fixes cover the mobile case')]).open;
     expect(thread.owner).toBeNull();

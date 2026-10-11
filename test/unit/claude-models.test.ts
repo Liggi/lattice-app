@@ -7,15 +7,16 @@ import {
 import { supersededModelRefusal } from '../../src/constants/superseded-models.js';
 
 describe('claude-models registry', () => {
-  it('holds the ten known model ids', () => {
+  it('holds the eleven known model ids', () => {
     expect(CLAUDE_MODELS.map((m) => m.id)).toEqual([
-      'claude-fable-5-1',
-      'claude-fable-5',
       'claude-opus-5-5',
       'claude-opus-5',
       'claude-opus-4-8',
       'claude-opus-4-7',
       'claude-opus-4-6',
+      'claude-fable-5-1',
+      'claude-fable-5',
+      'claude-sonnet-5-5',
       'claude-sonnet-5',
       'claude-sonnet-4-5-20250929',
       'claude-haiku-4-5-20251001',
@@ -30,7 +31,6 @@ describe('claude-models registry', () => {
       'claude-opus-4-7',
       'claude-opus-4-6',
       'claude-sonnet-4-5-20250929',
-      'claude-haiku-4-5-20251001',
     ]) {
       expect(getClaudeModel(id)?.composerSelectable).toBe(false);
     }
@@ -40,10 +40,16 @@ describe('claude-models registry', () => {
     for (const id of [
       'claude-fable-5-1',
       'claude-opus-5-5',
+      'claude-sonnet-5-5',
       'claude-sonnet-5',
+      'claude-haiku-4-5-20251001',
     ]) {
       expect(getClaudeModel(id)?.composerSelectable).toBe(true);
     }
+  });
+
+  it('puts only Sonnet 5 under Other in the built-in list', () => {
+    expect(CLAUDE_MODELS.filter((m) => m.other).map((m) => m.id)).toEqual(['claude-sonnet-5']);
   });
 
   it('uses version-explicit labels for models with siblings', () => {

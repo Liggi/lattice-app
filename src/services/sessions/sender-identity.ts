@@ -14,6 +14,7 @@ import type Database from 'better-sqlite3';
 import { DatabaseProvider } from '../infrastructure/database-provider.js';
 import { PROJECT_NOTED_EVENT } from '../../types/project-state.js';
 import { getEventsVersion } from '../../session-history/repository.js';
+import type { SessionReference } from '../../types/worker-events.js';
 
 export type SenderRole = 'worker' | 'coordinator';
 
@@ -132,4 +133,48 @@ export function senderIdentities(conversationId: string): Record<string, SenderI
     if (outcome) identities[sender] = { name: outcome, role: 'coordinator' };
   }
   return identities;
+}
+
+const CONVERSATION_ID = /(?<![A-Za-z0-9_-])conv-[A-Za-z0-9_-]+/g;
+
+function sessionRow(id: string): { custom_name: string | null; project_name: string | null; picked_up_from: string | null; coordinator: number | null } | null {
+  const row = db().prepare(
+    `SELECT s.custom_name, s.project_name, c.picked_up_from, c.coordinator
+       FROM conversations c LEFT JOIN sessions s ON s.session_id = c.conversation_id
+      WHERE c.conversation_id = ?`,
+  ).get(id) as { custom_name: string | null; project_name: string | null; picked_up_from: string | null; coordinator: number | null } | undefined;
+  return row ?? null;
+}
+
+/** A project's name: the user's, else the generated one, else its outcome. Null for a session that runs no project. */
+function projectName(coordinator: string): string | null {
+  const row = sessionRow(coordinator);
+  if (!row?.coordinator) return null;
+  return row?.custom_name?.trim() || row?.project_name?.trim() || coordinatorOutcome(coordinator);
+}
+
+/**
+ * Names for the sessions a panel's wait lines mention by full id, other than
+ * the ones in `known` (its workers and coordinator), which it names itself. A
+ * session is named the way the sidebar names it — the user's name, a
+ * project's name, the task it was dispatched on, a coordinator's outcome —
+ * and an id no session has is reported as not found rather than guessed at.
+ */
+export function sessionReferences(texts: readonly string[], known: ReadonlySet<string>, coordinator: string): Record<string, SessionReference> {
+  const ids = new Set<string>();
+  for (const text of texts) for (const match of text.matchAll(CONVERSATION_ID)) if (!known.has(match[0])) ids.add(match[0]);
+  if (ids.size === 0) return {};
+  const tasks = dispatchedTasks([...ids]);
+  const references: Record<string, SessionReference> = {};
+  for (const id of ids) {
+    const row = sessionRow(id);
+    if (!row) {
+      references[id] = { found: false, name: null, project: null };
+      continue;
+    }
+    const name = row.custom_name?.trim() || row.project_name?.trim() || tasks.get(id) || coordinatorOutcome(id);
+    const home = row.coordinator ? null : row.picked_up_from;
+    references[id] = { found: true, name, project: home && home !== coordinator ? projectName(home) : null };
+  }
+  return references;
 }

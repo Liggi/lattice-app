@@ -1,35 +1,45 @@
 // @vitest-environment happy-dom
 
 /**
- * The panel's to-do list as drawn: the sections in their order, the last
- * completed thread under them, and a dismissal that says so in place with
- * Undo rather than making the row vanish. Which thread goes in which section
- * is pinned in state-of-play.test.ts; this is the rendering.
+ * The panel as drawn: Your calls first, each row its short name over its ask,
+ * fading with age; a row opens in place to be answered, and parking says so
+ * in place with Undo. Which call is listed, and how it fades, is pinned in
+ * your-calls.test.ts; this is the rendering.
  */
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { TooltipProvider } from '../../src/web/chat/components/ui/tooltip.js';
 import { foldProjectState, PROJECT_NOTED_EVENT, type ProjectEventLike, type ProjectNotedData } from '../../src/types/project-state.js';
 
+// Running's jobs are refetched on the activity stream's jobs-changed frames; no stream here.
+vi.mock('../../src/web/chat/contexts/ActivityStreamContext.js', () => ({
+  useActivityStreamSubscription: () => undefined,
+  useActivityStream: () => ({ isConnected: false, connectionState: { lastConnectedAt: null } }),
+}));
+
 const { StateOfPlaySection } = await import('../../src/web/chat/components/InsightsPanel/StateOfPlaySection.js');
 
+const HOUR = 60 * 60 * 1000;
 let seq = 0;
-function note(data: Partial<ProjectNotedData>): ProjectEventLike {
+function note(data: Partial<ProjectNotedData>, ago: number): ProjectEventLike {
   seq += 1;
-  return { seq, type: PROJECT_NOTED_EVENT, timestamp: seq, data: { text: '', by: 'coordinator', ...data } };
+  return { seq, type: PROJECT_NOTED_EVENT, timestamp: Date.now() - ago, data: { text: '', by: 'coordinator', ...data } };
 }
 
 const project = foldProjectState([
-  note({ kind: 'open', text: 'Release', owner: { kind: 'user' }, label: 'Publish 0.4.1?', }), // 1
-  note({ kind: 'open', text: 'Queued idea', owner: { kind: 'coordinator' } }), // 2
-  note({ kind: 'open', text: 'Scenes can be judged in context', owner: { kind: 'user' }, nextAction: 'Walk through the pack', waitingOn: { kind: 'decision', text: 'your notes on the pack' } }), // 3
-  note({ kind: 'open', text: 'Finished earlier' }), // 4
-  note({ kind: 'open', text: 'Finished last' }), // 5
-  note({ kind: 'update', ref: 1, text: 'Built and checked on a clean machine; the changelog still names two fixes' }),
-  note({ kind: 'close', text: 'done', ref: 4 }),
-  note({ kind: 'close', text: 'done', ref: 5 }),
+  note({ kind: 'open', text: 'Ship 0.4.1', name: 'Release', owner: { kind: 'user' }, label: 'Publish 0.4.1?' }, 0.1 * HOUR), // 1
+  note({ kind: 'open', text: 'Queued idea', owner: { kind: 'coordinator' } }, HOUR), // 2
+  note({ kind: 'open', text: 'Scenes can be judged in context', owner: { kind: 'user' }, waitingOn: { kind: 'decision', text: 'your notes on the pack' } }, 2 * HOUR), // 3
+  note({ kind: 'open', text: 'Darker sidebar', name: 'Darker sidebar', owner: { kind: 'user' }, label: 'Approve the shade?' }, 10 * HOUR), // 4
+  note({ kind: 'open', text: 'Old theme', name: 'Old theme cleanup', owner: { kind: 'user' }, label: 'Delete it?' }, 30 * HOUR), // 5
+  note({ kind: 'update', ref: 1, text: 'Built and checked on a clean machine' }, 0.1 * HOUR),
 ]);
+
+// The panel also asks for running jobs and pull requests; nothing answers here.
+beforeEach(() => {
+  vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 404 })));
+});
 
 afterEach(() => {
   cleanup();
@@ -44,39 +54,57 @@ function draw() {
   );
 }
 
+const section = () => screen.getByTestId('play-needs-you');
+
 describe('StateOfPlaySection', () => {
-  it('draws Needs you before Next, and the last completed thread under them', () => {
+  it('lists Your calls first, each by name over its ask, and leaves queued work out', () => {
     draw();
     const text = document.body.textContent ?? '';
-    expect(text.indexOf('Needs you')).toBeLessThan(text.indexOf('Next'));
-    expect(screen.getByTestId('play-needs-you').textContent).toContain('Publish 0.4.1?');
-    expect(screen.getByTestId('play-next').textContent).toContain('Queued idea');
-    expect(screen.getByTestId('project-thread-done').textContent).toBe('Finished last');
+    expect(text.indexOf('Your calls')).toBeLessThan(text.indexOf('Running'));
+    const first = section().querySelector('[data-testid="call-row"]')!;
+    expect(first.textContent).toMatch(/^Release\d+mPublish 0\.4\.1\?/);
+    expect(section().textContent).toContain('Waiting on your notes on the pack');
+    expect(text).not.toContain('Queued idea');
   });
 
-  it('says what an unlabelled Needs you item is asking for', () => {
+  it('shows a call over eight hours old by name alone, and drops one over a day old', () => {
     draw();
-    expect(screen.getByTestId('play-needs-you').textContent).toContain('Waiting on your notes on the pack');
+    expect(section().textContent).toContain('Darker sidebar');
+    expect(section().textContent).not.toContain('Approve the shade?');
+    expect(section().textContent).not.toContain('Old theme cleanup');
   });
 
-  it('shows a labelled Needs you item as its ask, what the work is and how long it has waited, with the summary a tap away', () => {
+  it('opens a row in place with the thread as its briefing, and closes it on Escape', () => {
     draw();
-    const section = screen.getByTestId('play-needs-you');
-    expect(section.textContent).not.toContain('Built and checked');
-    // No short name yet, so what the thread is for says which work it is.
-    expect(section.querySelector('[data-testid="play-item"]')?.textContent).toMatch(/^Publish 0\.4\.1\?Release\d+d$/);
-    fireEvent.click(screen.getByText('Publish 0.4.1?'));
-    expect(screen.getByTestId('play-needs-you-detail').textContent).toBe('Built and checked on a clean machine; the changelog still names two fixes');
+    fireEvent.click(within(section()).getByText('Release'));
+    const open = section().querySelector('[data-open]') as HTMLElement;
+    fireEvent.click(within(open).getByTestId('call-brief-toggle'));
+    expect(within(open).getByTestId('call-brief').textContent).toContain('Built and checked on a clean machine');
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(section().querySelector('[data-open]')).toBeNull();
   });
 
-  it('asks the server to dismiss, and keeps the row in place saying so, with Undo', async () => {
+  it('holds a reply in the user\'s own words for the thread', async () => {
+    const fetchMock = vi.fn(async () => new Response('{"id":"r1","until":0}', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    draw();
+    fireEvent.click(within(section()).getByText('Release'));
+    fireEvent.change(screen.getByLabelText('Your answer'), { target: { value: 'Ship it' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/conv/conv-coord/project/replies', expect.objectContaining({
+      method: 'POST',
+      body: JSON.stringify({ target: { kind: 'thread', thread: 1 }, text: 'Ship it' }),
+    })));
+  });
+
+  it('parks a call, keeps its place saying so, and brings it back with Undo', async () => {
     const fetchMock = vi.fn(async () => new Response('{}', { status: 200 }));
     vi.stubGlobal('fetch', fetchMock);
     draw();
-    fireEvent.click(screen.getAllByTestId('play-dismiss')[0]);
-    await waitFor(() => expect(screen.getByTestId('play-dismissed').textContent).toContain('Dismissed, moved to Parked'));
-    expect(fetchMock).toHaveBeenCalledWith('/api/conv/conv-coord/project/threads/1/dismiss', { method: 'POST' });
-    fireEvent.click(screen.getByTestId('play-undo'));
+    fireEvent.click(within(section()).getAllByTestId('call-park')[0]);
+    await waitFor(() => expect(screen.getByTestId('call-gone').textContent).toContain('parked'));
+    expect(fetchMock).toHaveBeenCalledWith('/api/conv/conv-coord/project/threads/1/park', { method: 'POST' });
+    fireEvent.click(screen.getByTestId('call-gone-undo'));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/conv/conv-coord/project/threads/1/restore', { method: 'POST' }));
   });
 });

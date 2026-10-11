@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Check, CheckCircle2, Pencil, X } from 'lucide-react';
+import { Check, CheckCircle2, Pencil, Undo2, X } from 'lucide-react';
 import type { QuestionDefinition, QuestionOption } from '../types.js';
 import { tk } from '../tokens.js';
 
@@ -17,6 +17,11 @@ export interface DecisionCardProps {
   /** Offered on an answered card while the answer can still be taken back. */
   canChange?: boolean;
   onDismiss?: () => void | Promise<void>;
+  /**
+   * An answer (or, with `answer` null, a dismissal) chosen elsewhere that has
+   * not gone to the agent yet: the card shows it with Undo until it goes.
+   */
+  held?: { answer: string | null; onUndo: () => void | Promise<void> };
 }
 
 const RECOMMENDED_SUFFIX = /\s*\(Recommended\)\s*$/i;
@@ -49,13 +54,35 @@ const PRIMARY_BTN = 'px-3 py-1.5 rounded-md bg-cyan-500/10 dark:bg-cyan-400/10 t
  * single-choice question sends on tap; several questions, or a multi-choice
  * one, are chosen first and sent together.
  */
-export function DecisionCard({ questions, answered, closed, onAnswer, canChange, onDismiss }: DecisionCardProps): React.JSX.Element {
+export function DecisionCard({ questions, answered, closed, onAnswer, canChange, onDismiss, held }: DecisionCardProps): React.JSX.Element {
   const [reopened, setReopened] = useState(false);
   const [chosen, setChosen] = useState<Record<number, string[]>>({});
   const [writing, setWriting] = useState<Record<number, boolean>>({});
   const [words, setWords] = useState<Record<number, string>>({});
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  if (held) {
+    return (
+      <div data-testid="decision-card-held" className={`w-full max-w-[68ch] rounded-lg border ${tk.card.border} ${tk.card.bg} px-3.5 py-2.5`}>
+        <div className="flex items-start gap-2 text-sm leading-[1.55]">
+          {held.answer === null
+            ? <X size={14} className={`mt-[3px] shrink-0 ${tk.text.muted}`} />
+            : <CheckCircle2 size={14} className="mt-[3px] shrink-0 text-emerald-600 dark:text-emerald-400" />}
+          <div className="min-w-0 flex-1">
+            <div className={tk.text.muted}>{questions[0]?.question}</div>
+            <div className="whitespace-pre-wrap break-words">
+              <span className={held.answer === null ? tk.text.muted : tk.text.heading}>{held.answer === null ? 'Dismissed' : displayLabel(held.answer)}</span>
+              <span className={`ml-2 text-[12px] ${tk.text.muted}`}>sending</span>
+            </div>
+          </div>
+          <button type="button" onClick={() => void held.onUndo()} className="-my-1.5 -mr-2 flex items-center gap-1 rounded-md px-2.5 py-1.5 text-[13px] font-medium text-cyan-700 dark:text-cyan-400 hover:bg-cyan-500/10 transition-colors cursor-pointer" data-testid="decision-card-undo">
+            <Undo2 size={13} /> Undo
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   if ((answered && !reopened) || closed) {
     const shown = answered?.answers ?? {};
@@ -68,6 +95,7 @@ export function DecisionCard({ questions, answered, closed, onAnswer, canChange,
               : <CheckCircle2 size={14} className="mt-[3px] shrink-0 text-emerald-600 dark:text-emerald-400" />}
             <div className="min-w-0 flex-1">
               <div className={tk.text.muted}>{q.question}</div>
+              {q.detail && <QuestionDetail text={q.detail} />}
               {shown[q.question] && <div className={`${tk.text.heading} whitespace-pre-wrap break-words`}>{displayLabel(shown[q.question])}</div>}
               {i === questions.length - 1 && closed && <div className={`mt-0.5 text-[12px] ${tk.text.muted}`}>{closed}</div>}
             </div>
@@ -138,6 +166,7 @@ export function DecisionCard({ questions, answered, closed, onAnswer, canChange,
               </button>
             )}
           </div>
+          {q.detail && <QuestionDetail text={q.detail} />}
           <div className="mt-2.5 flex flex-col gap-1.5">
             {q.options.map((option) => {
               const selected = !writing[i] && (chosen[i] ?? []).includes(option.label);
@@ -216,6 +245,15 @@ export function DecisionCard({ questions, answered, closed, onAnswer, canChange,
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+/** Text the answer is about, verbatim: never trimmed, rewritten or cut short. */
+function QuestionDetail({ text }: { text: string }): React.JSX.Element {
+  return (
+    <div data-testid="decision-card-detail" className={`mt-2 rounded-md border ${tk.card.border} px-3 py-2 text-[14px] leading-[1.55] whitespace-pre-wrap break-words ${tk.text.heading}`}>
+      {text}
     </div>
   );
 }

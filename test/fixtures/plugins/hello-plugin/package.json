@@ -1,0 +1,8 @@
+{
+  "name": "hello-plugin",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "A toy Lattice plugin the tests build and load: a counter page, a sidebar link with its count, a session started with a message, and a confirm card whose Save runs on the server.",
+  "lattice": { "id": "hello", "api": 1, "server": "dist/server.js", "web": "dist/web.js", "css": "dist/web.css" }
+}

@@ -48,6 +48,12 @@ export function dismissedLine(thread: ProjectOpenThread, stopped: readonly strin
     + ' Stop working on it and do not bring it back; they can restore it from Parked themselves.';
 }
 
+/** The line the coordinator reads when the user parks a thread for later. Exported for tests. */
+export function parkedLine(thread: ProjectOpenThread): string {
+  return `${UserName()} parked thread [${thread.seq}] "${panelName(thread)}" from their panel for later.`
+    + ' It is not dismissed: leave it for now, and raise it with them again when it needs them.';
+}
+
 /** The line the coordinator reads when the user brings a dismissed or parked thread back. Exported for tests. */
 export function restoredLine(thread: ProjectOpenThread): string {
   return `${UserName()} brought thread [${thread.seq}] "${panelName(thread)}" back from Parked. It is open again;`
@@ -101,6 +107,27 @@ export async function dismissThread(coordinator: string, seq: number): Promise<{
 
   await tellCoordinator(coordinator, dismissedLine(thread, stopped));
   return { stopped };
+}
+
+/**
+ * Parking from the panel: the thread is kept for later, off the user's list,
+ * and its workers carry on. Unlike dismissing it, the coordinator may raise
+ * it again. Its open question card closes, as the thread is not asked now.
+ */
+export async function parkThread(coordinator: string, seq: number): Promise<void> {
+  const manager = getHarnessSessionManager();
+  if (!manager) throw new Error('No harness session manager');
+  const thread = openThread(coordinator, seq);
+  if (thread.parked) throw new DismissalError(`Thread ${seq} is already parked.`, 409);
+  if (appendProjectNote(coordinator, { kind: 'park', text: `${UserName()} parked it from the panel for later`, by: 'user', ref: seq, label: panelName(thread) }) === null) {
+    throw new Error(`The park could not be written to ${coordinator}`);
+  }
+  for (const decision of decisionsIn(coordinator).values()) {
+    if (decision.asked.thread === seq && isOpenDecision(decision)) {
+      appendCustomHarnessEvent(manager, coordinator, DECISION_DISMISSED_EVENT, { id: decision.asked.id });
+    }
+  }
+  await tellCoordinator(coordinator, parkedLine(thread));
 }
 
 export async function restoreThread(coordinator: string, seq: number): Promise<void> {
