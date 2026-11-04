@@ -5,7 +5,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { normalizeProjectName, PROJECT_NAME_MAX_CHARS } from '../../src/services/insights/anthropic-service.js';
+import { namesTheUser, normalizeProjectName, PROJECT_NAME_MAX_CHARS } from '../../src/services/insights/anthropic-service.js';
 import { __setGenerationOverridesForTests } from '../../src/services/infrastructure/generation-gates.js';
 import { resolveCardTitle } from '../../src/web/chat/components/shared/session-card-orientation.js';
 
@@ -13,7 +13,7 @@ const messagesCreate = vi.fn();
 const updateSessionInfo = vi.fn(async () => ({}));
 let storedProjectName: string | null = null;
 let isCoordinator = true;
-vi.mock('../../src/services/infrastructure/config-service.js', () => ({ ConfigService: { getInstance: () => ({ getConfig: () => ({}) }) } }));
+vi.mock('../../src/services/infrastructure/config-service.js', () => ({ ConfigService: { getInstance: () => ({ getConfig: () => ({ user: { name: 'Sam' } }) }) } }));
 
 vi.mock('../../src/services/infrastructure/anthropic-client-factory.js', () => ({
   anthropicClientFactory: {
@@ -99,6 +99,15 @@ describe('what counts as a project name', () => {
   it('has nothing to say about an empty answer', () => {
     expect(normalizeProjectName('   ')).toBeNull();
   });
+
+  it('is about the work, never the person whose sidebar it sits in', () => {
+    expect(namesTheUser("Sam's Stellaris")).toBe(true);
+    expect(namesTheUser('Sam’s Stellaris')).toBe(true);
+    expect(namesTheUser('Stellaris for Sam')).toBe(true);
+    expect(namesTheUser('My Stellaris playset')).toBe(true);
+    expect(namesTheUser('Stellaris planets mod')).toBe(false);
+    expect(namesTheUser('Samba server migration')).toBe(false);
+  });
 });
 
 describe('generating and storing a project name', () => {
@@ -137,6 +146,21 @@ describe('generating and storing a project name', () => {
     const name = await generateProjectName('conv-proj', 'Move Lattice onto Opus 5.5');
     expect(messagesCreate).toHaveBeenCalledTimes(2);
     expect(name).toBeNull();
+    expect(updateSessionInfo).not.toHaveBeenCalled();
+  });
+
+  it('asks again for a name that names the user, and drops it if the second answer still does', async () => {
+    messagesCreate
+      .mockResolvedValueOnce({ content: [{ type: 'text', text: "Sam's Stellaris" }], usage: { input_tokens: 90, output_tokens: 5 } })
+      .mockResolvedValueOnce({ content: [{ type: 'text', text: 'Stellaris playset and living galaxy' }], usage: { input_tokens: 120, output_tokens: 7 } });
+    const name = await generateProjectName('conv-proj', "Sam's Stellaris, rebuilt: a clean playset, then a living galaxy");
+    expect(name).toBe('Stellaris playset and living galaxy');
+    expect(messagesCreate.mock.calls[1][0].messages[2].content).toContain('names the person');
+
+    messagesCreate.mockReset();
+    updateSessionInfo.mockClear();
+    replies("Sam's Stellaris");
+    expect(await generateProjectName('conv-proj', "Sam's Stellaris, rebuilt")).toBeNull();
     expect(updateSessionInfo).not.toHaveBeenCalled();
   });
 
@@ -289,6 +313,14 @@ describe('a name the coordinator gives with its outcome', () => {
     await settle();
 
     expect(updateSessionInfo).toHaveBeenCalledWith('conv-proj', { project_name: 'Lattice workspace' });
+  });
+
+  it('falls back to generation when the name names the user', async () => {
+    replies('Stellaris planets mod');
+    onProjectOutcomeChanged('conv-proj', null, "Sam's Stellaris planets mod", "Sam's Stellaris");
+    await settle();
+
+    expect(updateSessionInfo).toHaveBeenCalledWith('conv-proj', { project_name: 'Stellaris planets mod' });
   });
 
   it('is not overwritten by a generation that was already running', async () => {

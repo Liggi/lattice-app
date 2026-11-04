@@ -1,15 +1,22 @@
 import { getClaudeModel } from './claude-models.js';
+import { endpointModelName } from './model-display.js';
 
 export interface ClaudeEndpoint {
   id: string;
   baseUrl: string;
   model: string;
+  /** What the model picker calls it; absent means a name made from the model id. */
+  name?: string;
   /** Absent in the browser, which never reads a saved key back. */
   apiKey?: string;
   /** Tokens the served model holds; absent means the CLI's 200k assumption. */
   contextWindow?: number;
   /** Absent means 'anthropic'. 'openai' endpoints serve background calls only. */
   protocol?: 'anthropic' | 'openai';
+  /** How a session sends the key: absent means `Authorization: Bearer`, 'x-api-key' the Anthropic-native header. */
+  authScheme?: 'x-api-key';
+  /** Whether the served model accepts images. Absent means it does not, so its sessions are never told to open one. */
+  readsImages?: boolean;
 }
 
 export const MIN_CONTEXT_WINDOW = 16_000;
@@ -39,7 +46,10 @@ export function modelEndpoints(config: unknown): ClaudeEndpoint[] {
     const apiKey = text(entry?.apiKey);
     const contextWindow = contextWindowProblem(entry?.contextWindow) ? undefined : entry?.contextWindow as number | undefined;
     const protocol = entry?.protocol === 'openai' ? 'openai' as const : undefined;
-    return [{ id: text(entry?.id) ?? model, baseUrl, model, ...(apiKey ? { apiKey } : {}), ...(contextWindow ? { contextWindow } : {}), ...(protocol ? { protocol } : {}) }];
+    const authScheme = entry?.authScheme === 'x-api-key' ? 'x-api-key' as const : undefined;
+    const readsImages = entry?.readsImages === true;
+    const name = text(entry?.name);
+    return [{ id: text(entry?.id) ?? model, baseUrl, model, ...(name ? { name } : {}), ...(apiKey ? { apiKey } : {}), ...(contextWindow ? { contextWindow } : {}), ...(protocol ? { protocol } : {}), ...(authScheme ? { authScheme } : {}), ...(readsImages ? { readsImages } : {}) }];
   });
 }
 
@@ -48,6 +58,16 @@ export function endpointForModel(config: unknown, model: string | null | undefin
   const id = model?.trim().replace(/\[[^\]]*\]$/, '');
   if (!id) return null;
   return claudeEndpoints(config).find((endpoint) => endpoint.model === id) ?? null;
+}
+
+/**
+ * Whether a session on `model` can be shown an image. Claude's own models can;
+ * a model a saved endpoint serves can only when its endpoint says so, because
+ * one that cannot rejects every later turn once an image is in the transcript.
+ */
+export function modelReadsImages(config: unknown, model: string | null | undefined): boolean {
+  const endpoint = endpointForModel(config, model);
+  return endpoint ? endpoint.readsImages === true : true;
 }
 
 /** Why `model` cannot name an endpoint, or null if it can. */
@@ -77,6 +97,8 @@ export function endpointHost(baseUrl: string): string {
 }
 
 /** An endpoint as an entry in a model picker. */
-export function endpointModelOption(endpoint: ClaudeEndpoint, isDefault = false): { id: string; label: string; description: string; isDefault: boolean } {
-  return { id: endpoint.model, label: endpoint.model, description: `Served by ${endpointHost(endpoint.baseUrl)}`, isDefault };
+export function endpointModelOption(endpoint: Pick<ClaudeEndpoint, 'model' | 'baseUrl' | 'name'>, isDefault = false): { id: string; label: string; description: string; detail: string; isDefault: boolean } {
+  const label = endpoint.name ?? endpointModelName(endpoint.model);
+  const host = endpointHost(endpoint.baseUrl).replace(/^api\./, '');
+  return { id: endpoint.model, label, description: `Served by ${host}`, detail: host, isDefault };
 }

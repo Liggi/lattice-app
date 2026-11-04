@@ -5,7 +5,7 @@ import type { Server } from 'http';
 import type { AddressInfo } from 'net';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { CONFIG_DIR } from '../../src/utils/constants.js';
-import { listPlugins, loadPlugins, stopPlugins } from '../../src/services/plugins/plugin-registry.js';
+import { listPlugins, loadPlugins, pluginSkills, stopPlugins } from '../../src/services/plugins/plugin-registry.js';
 import { createPluginsRoutes } from '../../src/routes/system/plugins.routes.js';
 
 const repo = path.resolve(import.meta.dirname, '../..');
@@ -56,6 +56,14 @@ describe('plugins', () => {
     expect(byName.get('../../etc')).toMatchObject({ status: 'failed', error: expect.stringContaining('is not a package name') });
     expect(byName.get('escapes')).toMatchObject({ status: 'failed', error: expect.stringContaining('inside the package') });
     expect(fs.existsSync(path.join(CONFIG_DIR, 'plugin-data', 'hello'))).toBe(true);
+  });
+
+  it('collects the skills a plugin gives sessions, naming the CLI agents run', () => {
+    expect(pluginSkills()).toEqual([{
+      name: 'hello-notes',
+      description: 'Use when the user asks to save a note.',
+      body: expect.stringMatching(/^Run `.+ plugin hello note --session <your conversation id>`/),
+    }]);
   });
 
   it('mounts the plugin\'s router under its id, with state in its data folder', async () => {

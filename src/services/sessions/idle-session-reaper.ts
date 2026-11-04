@@ -48,6 +48,8 @@ const STATUS_WINDOW_EVENTS = 200;
 export interface IdleReapResult {
   examined: number;
   reaped: string[];
+  /** Sessions with a live process that were left running: mid-turn, with pending work, compacting, or in a team. */
+  kept: number;
 }
 
 /** Injection seams for tests; production callers omit them. */
@@ -63,6 +65,8 @@ export interface IdleReapDeps {
     >;
   } | null;
   getLatestSegmentProviderSessionId?: (conversationId: string) => string | undefined;
+  /** How long a session must have been idle. Settings' restart passes 0. */
+  idleAfterMs?: number;
 }
 
 export async function reapIdleSessions(
@@ -71,14 +75,16 @@ export async function reapIdleSessions(
   deps: IdleReapDeps = {},
 ): Promise<IdleReapResult> {
   const manager = deps.manager !== undefined ? deps.manager : getHarnessSessionManager();
-  if (!manager) return { examined: 0, reaped: [] };
+  if (!manager) return { examined: 0, reaped: [], kept: 0 };
 
   const storage = deps.storage !== undefined ? deps.storage : (() => {
     try { return getEventStorage(); } catch { return null; }
   })();
-  if (!storage) return { examined: 0, reaped: [] };
+  if (!storage) return { examined: 0, reaped: [], kept: 0 };
 
+  const idleAfterMs = deps.idleAfterMs ?? IDLE_REAP_AFTER_MS;
   const reaped: string[] = [];
+  let kept = 0;
   const sessionIds = manager.getSessionIds();
 
   for (const sessionId of sessionIds) {
@@ -108,13 +114,14 @@ export async function reapIdleSessions(
     }
 
     const derived = deriveSessionStatusFromEvents(events);
-    if (derived.status !== 'idle') continue;
-    if (derived.pendingWork) continue;
-    if (derived.compacting) continue;
+    if (derived.status !== 'idle' || derived.pendingWork || derived.compacting) {
+      if (diagnostics) kept++;
+      continue;
+    }
 
     const lastTimestamp = events.at(-1)?.timestamp;
     if (typeof lastTimestamp !== 'number' || !Number.isFinite(lastTimestamp)) continue;
-    if (now - lastTimestamp < IDLE_REAP_AFTER_MS) continue;
+    if (now - lastTimestamp < idleAfterMs) continue;
 
     // Team sessions receive inbox messages without user input; an absent
     // process would silently miss them. team_name can live on either the
@@ -123,7 +130,10 @@ export async function reapIdleSessions(
       ? deps.getLatestSegmentProviderSessionId(sessionId)
       : ConversationService.getInstance().getLatestSegment(sessionId)?.providerSessionId ?? undefined;
     const info = sessionInfoService.getMergedSessionInfo(sessionId, segmentSessionId);
-    if (info?.team_name) continue;
+    if (info?.team_name) {
+      kept++;
+      continue;
+    }
 
     try {
       await manager.stop(sessionId);
@@ -140,5 +150,5 @@ export async function reapIdleSessions(
     }
   }
 
-  return { examined: sessionIds.length, reaped };
+  return { examined: sessionIds.length, reaped, kept };
 }

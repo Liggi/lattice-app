@@ -25,6 +25,36 @@ export interface PendingAnnotation {
   quoteStart?: number;
   /** Epoch ms, used only for stable ordering. */
   createdAt: number;
+  /**
+   * Set on a note on a screenshot rather than a passage: the image and the box
+   * drawn on it. `quote` then holds the image's caption, or its file name.
+   */
+  image?: ImageNoteTarget;
+}
+
+/** A box on an image, each side a fraction (0–1) of the image's own width or height. */
+export interface ImageBox {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+export interface ImageNoteTarget {
+  /** The image's address as the page loads it. */
+  src: string;
+  /** The path the agent wrote, when the image is a local file. */
+  path?: string;
+  box: ImageBox;
+}
+
+function readImageTarget(value: unknown): ImageNoteTarget | null {
+  if (!value || typeof value !== 'object') return null;
+  const { src, path, box } = value as Partial<ImageNoteTarget>;
+  if (typeof src !== 'string' || src === '' || !box || typeof box !== 'object') return null;
+  const sides = [box.x, box.y, box.w, box.h];
+  if (!sides.every((n) => typeof n === 'number' && Number.isFinite(n) && n >= 0 && n <= 1)) return null;
+  return { src, ...(typeof path === 'string' && path ? { path } : {}), box: { x: box.x, y: box.y, w: box.w, h: box.h } };
 }
 
 export const ANNOTATIONS_STORAGE_PREFIX = 'lattice-annotations-';
@@ -46,6 +76,8 @@ export function sanitizeStoredAnnotations(value: unknown): PendingAnnotation[] {
     if (typeof candidate.quote !== 'string' || candidate.quote === '') continue;
     if (typeof candidate.note !== 'string') continue;
     const { quoteStart } = candidate;
+    const image = candidate.image === undefined ? null : readImageTarget(candidate.image);
+    if (candidate.image !== undefined && !image) continue;
     result.push({
       id: candidate.id,
       messageId: candidate.messageId,
@@ -55,6 +87,7 @@ export function sanitizeStoredAnnotations(value: unknown): PendingAnnotation[] {
         ? { quoteStart }
         : {}),
       createdAt: typeof candidate.createdAt === 'number' ? candidate.createdAt : 0,
+      ...(image ? { image } : {}),
     });
   }
   return result;

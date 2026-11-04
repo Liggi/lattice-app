@@ -8,25 +8,22 @@ test.describe('subagent visual identity', () => {
     const component = await mount(<VisualHarness subagentType="Explore" />);
     await expect(component.getByText('Explorer')).toBeVisible();
     await expect(component.getByText('Explore', { exact: true })).toBeVisible(); // agent type badge
-    // Blue tint applied to card
-    const card = component.locator('[class*="border-blue"]');
-    await expect(card).toBeVisible();
+    // Cards stay neutral; the blue tint is on the icon
+    await expect(component.locator('svg[class*="text-blue"]')).toBeVisible();
   });
 
   test('Plan agent shows "Architect" label and amber tint', async ({ mount }) => {
     const component = await mount(<VisualHarness subagentType="Plan" />);
     await expect(component.getByText('Architect')).toBeVisible();
     await expect(component.getByText('Plan')).toBeVisible();
-    const card = component.locator('[class*="border-amber"]');
-    await expect(card).toBeVisible();
+    await expect(component.locator('svg[class*="text-amber"]')).toBeVisible();
   });
 
   test('code-reviewer agent shows "Reviewer" label and purple tint', async ({ mount }) => {
     const component = await mount(<VisualHarness subagentType="code-reviewer" />);
     await expect(component.getByText('Reviewer', { exact: true })).toBeVisible();
     await expect(component.getByText('code-reviewer')).toBeVisible();
-    const card = component.locator('[class*="border-purple"]');
-    await expect(card).toBeVisible();
+    await expect(component.locator('svg[class*="text-purple"]')).toBeVisible();
   });
 
   test('statusline-setup agent shows "Config" label and green tint', async ({ mount }) => {
@@ -41,8 +38,7 @@ test.describe('subagent visual identity', () => {
     const component = await mount(<VisualHarness subagentType="some-custom-agent" />);
     await expect(component.getByText('Agent', { exact: true })).toBeVisible();
     await expect(component.getByText('some-custom-agent')).toBeVisible();
-    const card = component.locator('[class*="border-purple"]');
-    await expect(card).toBeVisible();
+    await expect(component.locator('svg[class*="text-purple"]')).toBeVisible();
   });
 
   test('general-purpose type shows "Agent" label without type badge', async ({ mount }) => {
@@ -147,8 +143,17 @@ test.describe('smart scroll tracking', () => {
     const container = component.locator('.overflow-y-auto');
     await expect(container).toBeVisible();
 
-    // Wait for initial auto-scroll to settle
-    await container.evaluate(() => new Promise(resolve => setTimeout(resolve, 200)));
+    // Wait for the initial smooth scroll to reach the bottom; a frame still in
+    // flight would otherwise land after the scroll-up below
+    await container.evaluate(el =>
+      new Promise<void>(resolve => {
+        const check = () => {
+          if (el.scrollHeight - el.scrollTop - el.clientHeight < 1) { resolve(); return; }
+          requestAnimationFrame(check);
+        };
+        check();
+      }),
+    );
 
     // Scroll up significantly (more than 60px from bottom to trigger the flag)
     await container.evaluate(el => {

@@ -12,6 +12,7 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { sessionReadsImages } from './session-reads-images.js';
 import { DIAGRAM_COLUMN, DIAGRAM_CSS, DIAGRAM_EXPAND_BELOW, DIAGRAM_MARKERS, diagramLayouts, naturalWidth, type DiagramLayouts } from '../utils/diagram-style.js';
 
 export const DIAGRAM_USAGE = `  lattice diagram check <file | ->
@@ -19,7 +20,7 @@ export const DIAGRAM_USAGE = `  lattice diagram check <file | ->
       fences, or a bare <svg>) as the chat shows them on desktop and on a
       phone, and print the image paths. A fence with a second, wider layout
       is drawn wide on desktop and narrow on a phone. Open both images and look before
-      sending the reply.
+      sending the reply, unless your model cannot read images: then check the source.
 `;
 
 const PAD = 16;
@@ -159,11 +160,14 @@ export async function runDiagramCommand(args: string[]): Promise<void> {
     if (problems.length > 0) problemsFound = true;
     for (const problem of problems) lines.push(`  problem: ${problem}`);
   }
-  lines.push(
-    '',
+  lines.push('', ...(sessionReadsImages() ? [
     'Open both images and look as a reader would: text overflowing or clipped, labels colliding, arrows that miss',
     'their box or cross text, anything cramped, too small, or busier than it needs to be. Fix what you see and',
     problemsFound ? 'check again before sending.' : 'send the reply once it reads well.',
-  );
+  ] : [
+    'The model this session runs on cannot read images: do not open either PNG, with Read or any other tool, or every',
+    'later turn fails. Fix each problem listed above and check the diagram source for labels too long for their box,',
+    problemsFound ? 'then check again before sending.' : 'then send the reply.',
+  ]));
   process.stdout.write(lines.join('\n') + '\n');
 }

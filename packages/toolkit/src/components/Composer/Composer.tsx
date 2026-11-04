@@ -127,6 +127,7 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
   const sessionModelFallback = props.runtimeConfig?.sessionModelFallback ?? false;
   const availableModels = props.runtimeConfig?.availableModels ?? [];
   const modelMenuNote = props.runtimeConfig?.modelMenuNote;
+  const modelMenuLayout = props.runtimeConfig?.modelMenuLayout ?? 'rows';
   const selectedModel = props.runtimeConfig?.selectedModel ?? null;
   const onModelChange = props.runtimeConfig?.onModelChange;
   const isModelSelectorEnabled = availableModels.length > 0 && !!onModelChange;
@@ -184,6 +185,10 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
     }
   }, [currentStatus, isSessionActive, isSessionConnected, isInitializing, isStopRequested]);
 
+  // ── Draft persistence ──
+
+  const draftStorageKey = getDraftStorageKey(sessionId);
+
   // ── Attachments ──
 
   const {
@@ -195,11 +200,8 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
     isProcessing: isProcessingAttachments,
     hasAttachments,
     error: attachmentError,
-  } = useAttachments(props.largeTextFiles);
+  } = useAttachments(props.largeTextFiles, draftStorageKey);
 
-  // ── Draft persistence ──
-
-  const draftStorageKey = getDraftStorageKey(sessionId);
   const [storedDraft, setStoredDraft] = useLocalStorage<string>(draftStorageKey, '');
 
   const [uncontrolledValue, setUncontrolledValue] = useState(storedDraft);
@@ -361,18 +363,26 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
   // keyboard nav span "Model" + "Reasoning" as one list. Effort rows are only
   // present when the effort props are provided.
   // Models marked `other` sit behind one "Other models" row, opened in place.
-  const commonModels = availableModels.filter((m) => !m.other);
-  const otherModels = availableModels.filter((m) => m.other);
-  const visibleModels = showOtherModels ? [...commonModels, ...otherModels] : commonModels;
+  // The rail layout shows one group at a time, picked from a column of marks.
+  const isRail = modelMenuLayout === 'rail';
+  const modelGroups = Array.from(new Set(availableModels.map((m) => m.group ?? '')));
+  const [viewGroup, setViewGroup] = useState('');
+  const modelsInView = isRail ? availableModels.filter((m) => (m.group ?? '') === viewGroup) : availableModels;
+  const effortsInView = isEffortSelectorEnabled && (!isRail || (effectiveModel?.group ?? '') === viewGroup);
+  const commonModels = modelsInView.filter((m) => !m.other);
+  const otherModels = modelsInView.filter((m) => m.other);
+  const modelRowsFor = (otherShown: boolean) => [
+    ...commonModels.map((m) => ({ kind: 'model' as const, id: m.id, isDefault: m.isDefault })),
+    ...(otherModels.length > 0 ? [{ kind: 'other-models' as const, id: 'other-models' }] : []),
+    ...(otherShown ? otherModels.map((m) => ({ kind: 'model' as const, id: m.id, isDefault: m.isDefault })) : []),
+  ];
   const menuRows: Array<
     | { kind: 'model'; id: string; isDefault?: boolean }
     | { kind: 'other-models'; id: string; isDefault?: boolean }
     | { kind: 'effort'; id: string; isDefault?: boolean }
   > = [
-    ...commonModels.map((m) => ({ kind: 'model' as const, id: m.id, isDefault: m.isDefault })),
-    ...(otherModels.length > 0 ? [{ kind: 'other-models' as const, id: 'other-models' }] : []),
-    ...(showOtherModels ? otherModels.map((m) => ({ kind: 'model' as const, id: m.id, isDefault: m.isDefault })) : []),
-    ...(isEffortSelectorEnabled
+    ...modelRowsFor(showOtherModels),
+    ...(effortsInView
       ? availableEfforts.map((eff) => ({ kind: 'effort' as const, id: eff.id, isDefault: eff.isDefault }))
       : []),
   ];
@@ -384,7 +394,7 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
       if (row.kind === 'other-models') {
         setShowOtherModels((shown) => !shown);
       } else if (row.kind === 'model') {
-        onModelChange?.(row.isDefault ? null : row.id);
+        onModelChange?.(row.isDefault ? null : row.id, row.id);
         closeModelMenu(true);
       } else {
         onEffortChange?.(row.isDefault ? null : row.id);
@@ -399,12 +409,19 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
     if (!isModelMenuOpen) return;
     const inOther = effectiveModel?.other === true;
     setShowOtherModels(inOther);
-    const idx = inOther
-      ? commonModels.length + 1 + otherModels.findIndex((m) => m.id === effectiveModel.id)
-      : commonModels.findIndex((m) => m.id === (effectiveModel?.id ?? null));
+    setViewGroup(effectiveModel?.group ?? modelGroups[0] ?? '');
+    const idx = modelRowsFor(inOther).findIndex((row) => row.kind === 'model' && row.id === (effectiveModel?.id ?? null));
     setModelMenuFocusIndex(idx >= 0 ? idx : 0);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- on opening or a new effective model only, so a re-render cannot close Other models
   }, [isModelMenuOpen, effectiveModel?.id]);
+
+  // In the rail layout, focus follows the group being viewed.
+  useEffect(() => {
+    if (!isModelMenuOpen || !isRail) return;
+    const idx = modelRowsFor(showOtherModels).findIndex((row) => row.kind === 'model' && row.id === (effectiveModel?.id ?? null));
+    setModelMenuFocusIndex(idx >= 0 ? idx : 0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only when the viewed group changes
+  }, [viewGroup]);
 
   // Move DOM focus onto the active row as it changes.
   useEffect(() => {
@@ -1066,7 +1083,7 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
                           className={cn(
                             'composer-model-badge',
                             footBadge,
-                            'min-w-0 gap-1 cursor-pointer hover:bg-composer-surface-elevated hover:text-composer-text',
+                            'min-w-0 gap-1.5 cursor-pointer hover:bg-composer-surface-elevated hover:text-composer-text',
                             sessionModelFallback && 'text-amber-400',
                             isModelMenuOpen && 'bg-composer-surface-elevated text-composer-text',
                           )}
@@ -1075,13 +1092,16 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
                           aria-expanded={isModelMenuOpen}
                           title={sessionModelFallback && sessionModel ? `Select model. Serving model differs from the session's configured model (${sessionModel})` : 'Select model'}
                         >
+                          {effectiveModel?.icon && (
+                            <span className="flex size-3.5 shrink-0 items-center justify-center" aria-hidden>{effectiveModel.icon}</span>
+                          )}
                           <span
                             className="truncate"
                             data-model={selectedModel ?? undefined}
                             data-effort={selectedEffort ?? undefined}
                           >
                             {effectiveModel?.label ?? (effectiveModelId ? formatModelName(effectiveModelId) : 'Model')}
-                            {badgeEffortLabel && <span> · {badgeEffortLabel}</span>}
+                            {badgeEffortLabel && <span className="text-composer-text-faint"> · {badgeEffortLabel}</span>}
                           </span>
                           {isModelMenuOpen
                             ? <ChevronUp size={12} className="shrink-0" />
@@ -1257,7 +1277,7 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
               onClick={() => activateMenuRow({ kind, id: row.id, isDefault: row.isDefault })}
               className={cn(
                 'composer-model-menu-item flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left transition-colors cursor-pointer outline-none',
-                'hover:bg-composer-surface-elevated focus:bg-composer-surface-elevated focus-visible:bg-composer-surface-elevated',
+                'hover:bg-composer-surface-elevated focus-visible:bg-composer-surface-elevated',
               )}
               data-testid={`${kind}-option-${row.id}`}
             >
@@ -1284,11 +1304,155 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
             </button>
           );
 
+          const rowIndex = (kind: 'model' | 'other-models' | 'effort', id: string) =>
+            menuRows.findIndex((row) => row.kind === kind && row.id === id);
+
           const sectionHeader = (label: string) => (
             <div className="composer-model-menu-section px-2 pt-2 pb-1 text-xs font-medium text-composer-text-faint">
               {label}
             </div>
           );
+
+          if (isRail) {
+            const railRow = (
+              row: { id: string; label: string; isDefault?: boolean; detail?: string; other?: boolean },
+              kind: 'model' | 'effort',
+              isChecked: boolean,
+            ) => (
+              <button
+                key={row.id}
+                type="button"
+                role="menuitemradio"
+                aria-checked={isChecked}
+                data-menu-option
+                tabIndex={rowIndex(kind, row.id) === modelMenuFocusIndex ? 0 : -1}
+                onClick={() => activateMenuRow({ kind, id: row.id, isDefault: row.isDefault })}
+                className="composer-model-menu-item flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors cursor-pointer outline-none hover:bg-composer-surface-elevated focus-visible:bg-composer-surface-elevated"
+                data-testid={`${kind}-option-${row.id}`}
+              >
+                <span className="min-w-0 flex-1">
+                  <span className={cn('composer-model-menu-item-label block text-sm', isChecked ? 'text-composer-text' : row.other ? 'text-composer-text-faint' : 'text-composer-text-secondary')}>
+                    {row.label}
+                  </span>
+                  {row.detail && <span className="block truncate text-[11px] leading-snug text-composer-text-faint">{row.detail}</span>}
+                </span>
+                <span className="w-3.5 shrink-0">
+                  {isChecked && <Check size={14} className="text-composer-text" />}
+                </span>
+              </button>
+            );
+            // One height for every group, the tallest one's, so the marks stay
+            // put under the pointer while switching between groups.
+            // Never shorter than the column of marks: 36px squares 4px apart,
+            // inside its padding and the menu's border.
+            const markColumn = modelGroups.length > 1 ? 6 + modelGroups.length * 40 : 0;
+            const railHeight = Math.max(markColumn, ...modelGroups.map((group) => {
+              const inGroup = availableModels.filter((m) => (m.group ?? '') === group);
+              const rows = inGroup.filter((m) => !m.other).reduce((sum, m) => sum + (m.detail ? 47 : 32), 0);
+              const older = inGroup.some((m) => m.other) ? 28 : 0;
+              const efforts = (isEffortSelectorEnabled && (effectiveModel?.group ?? '') === group) || props.runtimeConfig?.effortGroup === group ? 59 : 0;
+              // Padding and border, the group's header, then its rows as drawn.
+              return 14 + (group ? 26 : 0) + rows + older + efforts;
+            }));
+            const groupIcon = (group: string) => availableModels.find((m) => (m.group ?? '') === group)?.icon;
+            return (
+              <div
+                ref={modelMenuListRef}
+                role="menu"
+                data-testid="model-menu"
+                onKeyDown={handleModelMenuKeyDown}
+                style={{ height: railHeight }}
+                className="composer-model-menu absolute right-0 bottom-full z-50 mb-2 flex max-h-[60dvh] w-[380px] overflow-hidden rounded-[10px] border border-composer-border bg-composer-surface max-sm:left-0 max-sm:w-auto"
+              >
+                {modelGroups.length > 1 && (
+                  <div className="flex w-11 shrink-0 flex-col gap-1 border-r border-composer-border p-1" role="tablist" aria-label="Providers">
+                    {modelGroups.map((group) => {
+                      const viewing = group === viewGroup;
+                      return (
+                        <button
+                          key={group}
+                          type="button"
+                          role="tab"
+                          aria-selected={viewing}
+                          aria-label={group}
+                          title={group}
+                          onClick={() => { setViewGroup(group); setShowOtherModels(false); }}
+                          className={cn(
+                            'relative flex aspect-square w-full items-center justify-center rounded-md transition-colors cursor-pointer outline-none [&_svg]:size-4',
+                            viewing ? 'bg-composer-surface-elevated text-composer-text' : 'text-composer-text-faint hover:bg-composer-surface-elevated hover:text-composer-text-secondary focus-visible:bg-composer-surface-elevated',
+                          )}
+                          data-testid={`model-group-${group}`}
+                        >
+                          {groupIcon(group)}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+                <div className="min-w-0 flex-1 overflow-y-auto overscroll-contain p-1">
+                  {viewGroup && (
+                    <div className="composer-model-menu-section px-2 pt-1.5 pb-1 text-xs font-medium text-composer-text-faint">{viewGroup}</div>
+                  )}
+                  {commonModels.map((model) => railRow(model, 'model', model.id === (effectiveModel?.id ?? null)))}
+                  {otherModels.length > 0 && (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      aria-expanded={showOtherModels}
+                      data-menu-option
+                      tabIndex={rowIndex('other-models', 'other-models') === modelMenuFocusIndex ? 0 : -1}
+                      onClick={() => activateMenuRow({ kind: 'other-models', id: 'other-models' })}
+                      className="composer-model-menu-item flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors cursor-pointer outline-none hover:bg-composer-surface-elevated focus-visible:bg-composer-surface-elevated"
+                      data-testid="model-menu-other"
+                    >
+                      <span className="flex-1 text-xs text-composer-text-faint">Older models</span>
+                      <span className="flex w-3.5 shrink-0 justify-center">
+                        {showOtherModels
+                          ? <ChevronUp size={14} aria-hidden className="text-composer-text-faint" />
+                          : <ChevronDown size={14} aria-hidden className="text-composer-text-faint" />}
+                      </span>
+                    </button>
+                  )}
+                  {showOtherModels && otherModels.map((model) => railRow(model, 'model', model.id === (effectiveModel?.id ?? null)))}
+                  {effortsInView && (
+                    <>
+                      <div className="mx-2 mt-1 border-t border-composer-border" />
+                      <div className="composer-model-menu-section px-2 pt-2.5 pb-1 text-xs font-medium text-composer-text-faint">Reasoning</div>
+                      <div className="flex flex-wrap gap-0.5 pb-1 pl-0.5">
+                        {availableEfforts.map((eff) => {
+                          const isChecked = eff.id === (effectiveEffort?.id ?? null);
+                          return (
+                            <button
+                              key={eff.id}
+                              type="button"
+                              role="menuitemradio"
+                              aria-checked={isChecked}
+                              data-menu-option
+                              tabIndex={rowIndex('effort', eff.id) === modelMenuFocusIndex ? 0 : -1}
+                              onClick={() => activateMenuRow({ kind: 'effort', id: eff.id, isDefault: eff.isDefault })}
+                              title={eff.isDefault ? `${eff.label} (default)` : eff.label}
+                              className={cn(
+                                'rounded-md px-1.5 py-1 text-xs transition-colors cursor-pointer outline-none',
+                                isChecked ? 'bg-composer-surface-elevated text-composer-text' : 'text-composer-text-secondary hover:bg-composer-surface-elevated hover:text-composer-text focus-visible:bg-composer-surface-elevated',
+                              )}
+                              data-testid={`effort-option-${eff.id}`}
+                            >
+                              {eff.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </>
+                  )}
+                  {modelMenuNote && viewGroup === modelGroups[0] && (
+                    <p className="composer-model-menu-note px-2 pt-2 pb-1 text-xs leading-snug text-composer-text-faint" data-testid="model-menu-note">
+                      {modelMenuNote}
+                    </p>
+                  )}
+                </div>
+              </div>
+            );
+          }
 
           return (
             <div
@@ -1299,8 +1463,8 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
               className="composer-model-menu absolute right-0 bottom-full z-50 mb-2 min-w-[200px] max-w-[min(300px,calc(100vw-2rem))] max-h-[60dvh] overflow-y-auto overscroll-contain rounded-[10px] border border-composer-border bg-composer-surface p-1"
             >
               {isEffortSelectorEnabled && sectionHeader('Model')}
-              {commonModels.map((model, i) =>
-                renderRow(model, 'model', i, model.id === (effectiveModel?.id ?? null)),
+              {commonModels.map((model) =>
+                renderRow(model, 'model', rowIndex('model', model.id), model.id === (effectiveModel?.id ?? null)),
               )}
               {otherModels.length > 0 && (
                 <button
@@ -1308,11 +1472,11 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
                   role="menuitem"
                   aria-expanded={showOtherModels}
                   data-menu-option
-                  tabIndex={commonModels.length === modelMenuFocusIndex ? 0 : -1}
+                  tabIndex={rowIndex('other-models', 'other-models') === modelMenuFocusIndex ? 0 : -1}
                   onClick={() => activateMenuRow({ kind: 'other-models', id: 'other-models' })}
                   className={cn(
                     'composer-model-menu-item flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors cursor-pointer outline-none',
-                    'hover:bg-composer-surface-elevated focus:bg-composer-surface-elevated focus-visible:bg-composer-surface-elevated',
+                    'hover:bg-composer-surface-elevated focus-visible:bg-composer-surface-elevated',
                   )}
                   data-testid="model-menu-other"
                 >
@@ -1323,8 +1487,8 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
                     : <ChevronDown size={14} aria-hidden className="shrink-0 text-composer-text-faint" />}
                 </button>
               )}
-              {showOtherModels && otherModels.map((model, i) =>
-                renderRow(model, 'model', commonModels.length + 1 + i, model.id === (effectiveModel?.id ?? null)),
+              {showOtherModels && otherModels.map((model) =>
+                renderRow(model, 'model', rowIndex('model', model.id), model.id === (effectiveModel?.id ?? null)),
               )}
               {modelMenuNote && !isEffortSelectorEnabled && (
                 <p className="composer-model-menu-note pl-[30px] pr-2 pt-2 pb-1 text-xs leading-snug text-composer-text-faint" data-testid="model-menu-note">
@@ -1334,13 +1498,8 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
               {isEffortSelectorEnabled && (
                 <>
                   {sectionHeader('Reasoning')}
-                  {availableEfforts.map((eff, i) =>
-                    renderRow(
-                      eff,
-                      'effort',
-                      visibleModels.length + (otherModels.length > 0 ? 1 : 0) + i,
-                      eff.id === (effectiveEffort?.id ?? null),
-                    ),
+                  {availableEfforts.map((eff) =>
+                    renderRow(eff, 'effort', rowIndex('effort', eff.id), eff.id === (effectiveEffort?.id ?? null)),
                   )}
                 </>
               )}

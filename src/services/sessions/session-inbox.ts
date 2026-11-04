@@ -68,7 +68,9 @@ import {
   type InboxSource,
   type InboxUndeliverableData,
   type InboxWithdrawnData,
+  type SideQuestionSummary,
   type UnreadInboxSummary,
+  RIDE_ALONG_SOURCES,
 } from '../../types/inbox.js';
 import { latticeCli } from './pickup-prompts.js';
 import { withTurnAdmission, type TurnAdmission } from './turn-admission.js';
@@ -172,6 +174,8 @@ export function enqueueInboxItem(input: {
   deliveryId?: string | null;
   /** The sender asked for this to wait for the turn to end rather than go into it. */
   afterTurn?: boolean;
+  /** Display only, for a `side-question` item: rides on the queued event. */
+  sideQuestion?: SideQuestionSummary;
 }): string {
   const id = randomUUID();
   const inserted = db().prepare(
@@ -220,6 +224,7 @@ export function enqueueInboxItem(input: {
       ...(input.passedOn ? { passedOn: true } : {}),
       ...(typeof input.sourceSeq === 'number' ? { sourceSeq: input.sourceSeq } : {}),
       ...(input.afterTurn ? { afterTurn: true } : {}),
+      ...(input.sideQuestion ? { sideQuestion: input.sideQuestion } : {}),
     } satisfies InboxQueuedData);
   }
   return id;
@@ -379,8 +384,17 @@ export function resolveUncertainReservation(reservationId: string, as: 'release'
   return rows.length;
 }
 
-export function hasUnreadInboxItems(sessionId: string): boolean {
-  return Boolean(db().prepare(`SELECT 1 FROM session_inbox WHERE session_id = ? AND read_at IS NULL LIMIT 1`).get(sessionId));
+const RIDE_ALONG_IN = `(${RIDE_ALONG_SOURCES.map((source) => `'${source}'`).join(', ')})`;
+
+/**
+ * Whether the session has anything unread that wants a turn. Items that only
+ * ride along with the next delivery (a side question added to the thread) do
+ * not count, so they never hold a worker awake or start a drain; the send
+ * route asks with `includeRideAlong` so a message joins them in one batch.
+ */
+export function hasUnreadInboxItems(sessionId: string, options: { includeRideAlong?: boolean } = {}): boolean {
+  const filter = options.includeRideAlong ? '' : `AND source NOT IN ${RIDE_ALONG_IN}`;
+  return Boolean(db().prepare(`SELECT 1 FROM session_inbox WHERE session_id = ? AND read_at IS NULL ${filter} LIMIT 1`).get(sessionId));
 }
 
 /**
@@ -445,7 +459,7 @@ export function unreadInboxSummaries(sessionIds: readonly string[], asker: strin
     `SELECT session_id, COUNT(*) AS count, MIN(created_at) AS oldest,
             SUM(CASE WHEN sender = ? THEN 1 ELSE 0 END) AS from_you
      FROM session_inbox
-     WHERE read_at IS NULL AND session_id IN (${placeholders})
+     WHERE read_at IS NULL AND source NOT IN ${RIDE_ALONG_IN} AND session_id IN (${placeholders})
      GROUP BY session_id`,
   ).all(asker, ...sessionIds) as Array<{ session_id: string; count: number; oldest: string; from_you: number }>;
   for (const row of rows) {
@@ -460,7 +474,9 @@ export function unreadInboxSummaries(sessionIds: readonly string[], asker: strin
 
 /** Sessions with anything unread. */
 export function sessionsWithUnreadInbox(): string[] {
-  const rows = db().prepare(`SELECT DISTINCT session_id FROM session_inbox WHERE read_at IS NULL`).all() as Array<{ session_id: string }>;
+  const rows = db().prepare(
+    `SELECT DISTINCT session_id FROM session_inbox WHERE read_at IS NULL AND source NOT IN ${RIDE_ALONG_IN}`,
+  ).all() as Array<{ session_id: string }>;
   return rows.map((row) => row.session_id);
 }
 
@@ -616,6 +632,7 @@ function renderItem(row: InboxRow, cli: string, batched: boolean): string {
     case 'decision':
     case 'explain':
     case 'dismissal':
+    case 'side-question':
       return batched ? `${row.text} · ${clock(row.created_at)}` : row.text;
     case 'user':
     default:
@@ -760,7 +777,8 @@ export async function drainAllInboxes(): Promise<void> {
 
 async function drainOnce(sessionId: string, admission: TurnAdmission): Promise<DrainResult> {
   const rows = unreadInboxItems(sessionId);
-  if (rows.length === 0) return { outcome: 'nothing' };
+  // Context the user added from a side chat waits for something that wants a turn.
+  if (rows.every((row) => RIDE_ALONG_SOURCES.includes(row.source))) return { outcome: 'nothing' };
   if (sessionBusy(sessionId)) {
     logger.info('Session mid-turn; inbox waits for turn end', { sessionId, unread: rows.length });
     return { outcome: 'busy', unread: rows.length };

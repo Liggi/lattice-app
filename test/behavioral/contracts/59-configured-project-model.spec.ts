@@ -21,7 +21,7 @@ test('a new project displays and launches the configured Codex model', async ({ 
   page.on('dialog', (dialog) => { void dialog.dismiss(); });
 
   await page.goto('/new?coordinator=1');
-  await expect(page.getByTestId('new-project-summary')).toHaveText('Coordinator on Sol 6.1');
+  await expect(page.getByTestId('session-model')).toHaveText(/Sol 6\.1/);
   await page.getByTestId('composer-input').fill('Check the configured project model');
   await page.getByTestId('composer-input').press('Enter');
   await expect.poll(() => submitted).toMatchObject({

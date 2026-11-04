@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Loader2, MessageSquareText } from 'lucide-react';
+import { Loader2, MessageSquareText, X } from 'lucide-react';
 import type { PendingAnnotation } from '../../utils/annotations-format';
 import {
   ANNOTATION_BUTTON_BASE,
@@ -11,7 +11,9 @@ import {
   ANNOTATION_PANEL_LABEL,
 } from './annotation-styles';
 
-const POPOVER_WIDTH_PX = 220;
+const POPOVER_WIDTH_PX = 340;
+const THUMB_W = 72;
+const THUMB_H = 52;
 const VIEWPORT_MARGIN_PX = 12;
 
 /**
@@ -28,6 +30,8 @@ const TOUCH_TARGET_44 =
 interface AnnotationStatusBadgeProps {
   annotations: PendingAnnotation[];
   onClearAll: () => void;
+  /** Drops one note before it is sent. */
+  onRemove: (id: string) => void;
   /**
    * Sends the notes on their own. The toolkit composer refuses an empty submit
    * (`if (!trimmedValue && !hasAttachments) return`), so this is the only route
@@ -50,12 +54,13 @@ interface AnnotationStatusBadgeProps {
 export function AnnotationStatusBadge({
   annotations,
   onClearAll,
+  onRemove,
   onSendNotesOnly,
   sendDisabled = false,
   sendingCount = 0,
 }: AnnotationStatusBadgeProps): JSX.Element | null {
   const [open, setOpen] = useState(false);
-  const [anchor, setAnchor] = useState<{ top: number; left: number } | null>(null);
+  const [anchor, setAnchor] = useState<{ top: number; left: number; right: number } | null>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
 
   const count = annotations.length;
@@ -90,7 +95,9 @@ export function AnnotationStatusBadge({
     setOpen((prev) => {
       if (prev) return false;
       const rect = buttonRef.current?.getBoundingClientRect();
-      if (rect) setAnchor({ top: rect.top, left: rect.left + rect.width / 2 });
+      // Lined up with the composer's edges, so the popover reads as part of it.
+      const bar = buttonRef.current?.closest('[data-testid="composer-status-bar"]')?.getBoundingClientRect();
+      if (rect) setAnchor({ top: rect.top, left: bar?.left ?? VIEWPORT_MARGIN_PX, right: bar?.right ?? window.innerWidth - VIEWPORT_MARGIN_PX });
       return true;
     });
   }, []);
@@ -99,13 +106,10 @@ export function AnnotationStatusBadge({
 
   const viewportWidth = typeof window !== 'undefined' ? window.innerWidth : 1024;
   const viewportHeight = typeof window !== 'undefined' ? window.innerHeight : 768;
-  const width = Math.min(POPOVER_WIDTH_PX, viewportWidth - 2 * VIEWPORT_MARGIN_PX);
-  const left = anchor
-    ? Math.min(
-      Math.max(anchor.left - width / 2, VIEWPORT_MARGIN_PX),
-      Math.max(VIEWPORT_MARGIN_PX, viewportWidth - width - VIEWPORT_MARGIN_PX),
-    )
-    : VIEWPORT_MARGIN_PX;
+  const span = anchor ? anchor.right - anchor.left : viewportWidth - 2 * VIEWPORT_MARGIN_PX;
+  // A phone gets the composer's full width; a wider screen a column at its right edge.
+  const width = viewportWidth < 640 ? span : Math.min(POPOVER_WIDTH_PX, span);
+  const left = anchor ? anchor.right - width : VIEWPORT_MARGIN_PX;
 
   return (
     <>
@@ -153,18 +157,50 @@ export function AnnotationStatusBadge({
           <div className={ANNOTATION_PANEL_HEADER}>
             <MessageSquareText size={12} className="text-fg-3 flex-shrink-0" />
             <span className={ANNOTATION_PANEL_LABEL}>
-              {sending ? `${sendingLabel}…` : `${countLabel} pending`}
+              {sending ? `${sendingLabel}…` : 'Notes for your next message'}
             </span>
           </div>
-          <div className="px-3 pt-2 text-xs leading-snug text-fg-3">
-            Rides at the front of your next message.
-          </div>
-          <div className="flex items-center justify-between gap-1 px-2 pb-2 pt-1">
+          <ol
+            data-testid="annotation-status-list"
+            className="max-h-[min(60vh,420px)] overflow-y-auto overflow-x-hidden"
+          >
+            {annotations.map((annotation) => (
+              <li
+                key={annotation.id}
+                data-testid="annotation-status-item"
+                className="flex items-start gap-2.5 border-b border-line py-2 pl-3 pr-1"
+              >
+                {annotation.image && <BoxThumb src={annotation.image.src} box={annotation.image.box} />}
+                <div className="min-w-0 flex-1 py-0.5">
+                  <div className="break-words text-xs leading-snug text-fg-3">
+                    {annotation.image ? annotation.quote : `“${annotation.quote}”`}
+                  </div>
+                  <div className="mt-0.5 whitespace-pre-wrap break-words text-[13px] leading-snug text-fg">
+                    {annotation.note}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  data-testid="annotation-status-remove"
+                  aria-label="Remove this note"
+                  title="Remove this note"
+                  disabled={sending}
+                  onClick={() => onRemove(annotation.id)}
+                  className={`${TOUCH_TARGET_44} grid h-7 w-7 shrink-0 place-items-center rounded-sm text-fg-3 transition-colors hover:bg-surface-2 hover:text-fg disabled:opacity-40 cursor-pointer`}
+                  style={{ touchAction: 'manipulation', WebkitTapHighlightColor: 'transparent' }}
+                >
+                  <X size={14} />
+                </button>
+              </li>
+            ))}
+          </ol>
+          <div className="flex items-center justify-between gap-1 px-1">
             <button
               type="button"
               data-testid="annotation-clear-all"
               onClick={() => { onClearAll(); setOpen(false); }}
-              className={`${ANNOTATION_BUTTON_BASE} ${ANNOTATION_BUTTON_GHOST} px-2`}
+              disabled={sending}
+              className={`${ANNOTATION_BUTTON_BASE} ${ANNOTATION_BUTTON_GHOST} px-2 disabled:opacity-40`}
               style={{ touchAction: 'manipulation', WebkitTapHighlightColor: 'transparent' }}
             >
               Clear all
@@ -174,16 +210,57 @@ export function AnnotationStatusBadge({
               data-testid="annotation-send-notes"
               onClick={() => { onSendNotesOnly(); setOpen(false); }}
               disabled={sendDisabled || sending}
-              className={`${ANNOTATION_BUTTON_BASE} ${ANNOTATION_BUTTON_PRIMARY} px-3`}
+              className={`${ANNOTATION_BUTTON_BASE} ${ANNOTATION_BUTTON_PRIMARY} px-2`}
               style={{ touchAction: 'manipulation', WebkitTapHighlightColor: 'transparent' }}
               title="Send just these notes, with no message text"
             >
-              {sending ? 'Sending…' : 'Send'}
+              {sending ? 'Sending…' : 'Send notes now'}
             </button>
           </div>
         </div>,
         document.body,
       )}
     </>
+  );
+}
+
+/**
+ * The part of a screenshot a note is about: the box with some of the image
+ * around it, scaled to fill a small tile, and the box outlined in the accent.
+ */
+function BoxThumb({ src, box }: { src: string; box: { x: number; y: number; w: number; h: number } }): JSX.Element {
+  const [natural, setNatural] = useState<{ w: number; h: number } | null>(null);
+  let img: React.CSSProperties = { visibility: 'hidden' };
+  let outline: React.CSSProperties | null = null;
+  if (natural) {
+    const bw = box.w * natural.w;
+    const bh = box.h * natural.h;
+    // The box nearly fills the tile, so what it marks is as legible as the tile allows.
+    const scale = Math.min((THUMB_W * 0.92) / bw, (THUMB_H * 0.92) / bh);
+    const cx = (box.x + box.w / 2) * natural.w * scale;
+    const cy = (box.y + box.h / 2) * natural.h * scale;
+    const left = THUMB_W / 2 - cx;
+    const top = THUMB_H / 2 - cy;
+    img = { position: 'absolute', left, top, width: natural.w * scale, height: natural.h * scale, maxWidth: 'none' };
+    outline = { left: left + box.x * natural.w * scale, top: top + box.y * natural.h * scale, width: bw * scale, height: bh * scale };
+  }
+  return (
+    <div
+      aria-hidden
+      data-testid="annotation-status-thumb"
+      className="relative shrink-0 overflow-hidden rounded-sm border border-line bg-black"
+      style={{ width: THUMB_W, height: THUMB_H }}
+    >
+      <img
+        src={src}
+        alt=""
+        draggable={false}
+        onLoad={(e) => setNatural({ w: e.currentTarget.naturalWidth, h: e.currentTarget.naturalHeight })}
+        style={img}
+      />
+      {outline && (
+        <div className="absolute rounded-[2px]" style={{ ...outline, boxShadow: '0 0 0 1.5px #22d3ee' }} />
+      )}
+    </div>
   );
 }

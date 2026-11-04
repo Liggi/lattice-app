@@ -33,6 +33,15 @@ describe('agent skills', () => {
     expect(claude.split('---\n').slice(2).join('---\n')).toBe(codex.split('---\n').slice(2).join('---\n'));
   });
 
+  it('writes the skills plugins give after the shipped ones, as given', () => {
+    writeAgentSkills('/x/lattice', root, [{ name: 'agent-messages', description: 'Use when the user wants to message a teammate.', body: 'Run `/x/lattice plugin agent-messages draft`.' }]);
+
+    const claude = fs.readFileSync(path.join(claudePluginDir(root), 'skills', 'agent-messages', 'SKILL.md'), 'utf-8');
+    expect(claude).toBe('---\nname: agent-messages\ndescription: "Use when the user wants to message a teammate."\n---\n\nRun `/x/lattice plugin agent-messages draft`.');
+    expect(fs.existsSync(path.join(codexSkillsRoot(root), 'lattice-agent-messages', 'SKILL.md'))).toBe(true);
+    expect(fs.existsSync(path.join(claudePluginDir(root), 'skills', 'resume', 'SKILL.md'))).toBe(true);
+  });
+
   it('replaces what an earlier start wrote', () => {
     writeAgentSkills('/old/lattice', root);
     fs.writeFileSync(path.join(codexSkillsRoot(root), 'stale.md'), 'x');

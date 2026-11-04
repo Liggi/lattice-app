@@ -24,6 +24,7 @@ import timelineRouter from '@/routes/debug/timeline.routes.js';
 import { createContextTransfersRoutes } from '@/routes/session/context-transfers.routes.js';
 import { createUnifiedConversationRoutes } from '@/routes/conversation/unified-conversation.routes.js';
 import { createNotesRoutes } from '@/routes/session/notes.routes.js';
+import { createSideQuestionRoutes } from '@/routes/conversation/side-questions.routes.js';
 import { createProviderAuthRoutes } from '@/routes/integrations/provider-auth.routes.js';
 import { createChatGPTPlanRoutes } from '@/routes/integrations/chatgpt-plan.routes.js';
 import { createBackgroundRoutes } from '@/routes/system/background.routes.js';
@@ -136,6 +137,7 @@ export function registerAppRoutes(deps: RegisterAppRoutesDeps): void {
   // Misc
   app.use('/api/context-transfers', createContextTransfersRoutes());
   app.use('/api/notes', createNotesRoutes());
+  app.use('/api/side-questions', createSideQuestionRoutes());
   app.use('/api/teams', createTeamsRoutes());
 
   // Learning map — agent write path for typed article nodes.

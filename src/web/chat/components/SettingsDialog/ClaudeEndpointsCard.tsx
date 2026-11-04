@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Eye, EyeOff, Loader2, Plus } from 'lucide-react';
-import { contextWindowProblem, endpointHost, endpointModelProblem } from '@/constants/claude-endpoint';
+import { contextWindowProblem, endpointModelOption, endpointModelProblem } from '@/constants/claude-endpoint';
+import { endpointModelName } from '@/constants/model-display';
 import type { ClaudeEndpointSetting } from '../../services/api/types';
 
 /** One endpoint as sent to the server: `apiKey` a string replaces, null removes, absent keeps. */
@@ -91,17 +92,18 @@ export function ClaudeEndpointsCard({ endpoints, onSave }: ClaudeEndpointsCardPr
           onSubmit={submit}
         />
       ) : (
-        <div key={endpoint.id} className="flex items-center justify-between gap-3 border-t border-line px-4 py-3">
+        <div key={endpoint.id} className="flex items-center justify-between gap-x-3 gap-y-1 border-t border-line px-4 py-3 max-sm:flex-col max-sm:items-start">
           <div className="min-w-0">
-            <p className="text-[13px] font-mono text-fg break-all">{endpoint.model}</p>
-            <p className="mt-0.5 text-xs text-fg-3 break-all">
-              {endpointHost(endpoint.baseUrl)}
+            <p className="text-[13px] text-fg break-words">{endpointModelOption(endpoint).label}</p>
+            <p className="mt-0.5 text-xs font-mono text-fg-3 break-all">{endpoint.model}</p>
+            <p className="mt-0.5 text-xs text-fg-3">
+              {endpointModelOption(endpoint).detail}
               {endpoint.protocol === 'openai'
                 ? <span className="whitespace-nowrap"> · OpenAI API, background calls only</span>
                 : endpoint.contextWindow ? <span className="whitespace-nowrap"> · {endpoint.contextWindow.toLocaleString('en-US')} tokens</span> : null}
             </p>
           </div>
-          <div className="flex items-center gap-1 shrink-0">
+          <div className="flex items-center gap-1 shrink-0 max-sm:-ml-2.5">
             <button type="button" onClick={() => { setEditing(endpoint.id); setError(null); }} disabled={busyId !== null} className={QUIET_BTN}>
               Edit
             </button>
@@ -140,8 +142,11 @@ function EndpointForm({ initial, others, busy, error, onCancel, onSubmit }: {
   const [protocol, setProtocol] = useState<'anthropic' | 'openai'>(initial?.protocol ?? 'anthropic');
   const [baseUrl, setBaseUrl] = useState(initial?.baseUrl ?? '');
   const [model, setModel] = useState(initial?.model ?? '');
+  const [name, setName] = useState(initial?.name ?? '');
   const [contextWindow, setContextWindow] = useState(initial?.contextWindow ? String(initial.contextWindow) : '');
   const [apiKey, setApiKey] = useState('');
+  const [authScheme, setAuthScheme] = useState<'bearer' | 'x-api-key'>(initial?.authScheme ?? 'bearer');
+  const [readsImages, setReadsImages] = useState(initial?.readsImages === true);
   const [removeKey, setRemoveKey] = useState(false);
   const [showKey, setShowKey] = useState(false);
 
@@ -160,8 +165,11 @@ function EndpointForm({ initial, others, busy, error, onCancel, onSubmit }: {
       id: initial?.id ?? newId(),
       baseUrl: baseUrl.trim(),
       model: model.trim(),
+      ...(!openai && name.trim() ? { name: name.trim() } : {}),
       ...(openai ? { protocol } : windowValue !== undefined ? { contextWindow: windowValue } : {}),
       ...(apiKey.trim() ? { apiKey: apiKey.trim() } : removeKey ? { apiKey: null } : {}),
+      ...(!openai && authScheme === 'x-api-key' ? { authScheme } : {}),
+      ...(!openai && readsImages ? { readsImages } : {}),
     });
   };
 
@@ -218,6 +226,27 @@ function EndpointForm({ initial, others, busy, error, onCancel, onSubmit }: {
         {modelProblem && <p className="text-xs text-amber-300">{modelProblem}</p>}
       </div>
       {!openai && <div className="space-y-2">
+        <label htmlFor="claude-endpoint-name" className="text-xs font-medium text-fg-2 flex items-center gap-2">
+          Name
+          <span className="text-xs text-fg-3">Optional</span>
+        </label>
+        <input
+          id="claude-endpoint-name"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="What the model picker calls it"
+          autoComplete="off"
+          spellCheck={false}
+          disabled={busy}
+          className={INPUT.replace('font-mono', 'font-sans')}
+        />
+        {model.trim() && (
+          <p className="text-xs text-fg-3">
+            {name.trim() ? `The picker shows ${name.trim()}` : `Leave empty to show ${endpointModelName(model.trim())}`}
+          </p>
+        )}
+      </div>}
+      {!openai && <div className="space-y-2">
         <label htmlFor="claude-endpoint-context" className="text-xs font-medium text-fg-2 flex items-center gap-2">
           Context window
           <span className="text-xs text-fg-3">Optional</span>
@@ -258,7 +287,7 @@ function EndpointForm({ initial, others, busy, error, onCancel, onSubmit }: {
             type={showKey ? 'text' : 'password'}
             value={apiKey}
             onChange={(e) => { setApiKey(e.target.value); setRemoveKey(false); }}
-            placeholder={removeKey ? 'Removed when you save' : keySaved ? 'Saved. Type a new one to replace it' : 'Only if the server asks for one'}
+            placeholder={removeKey ? 'Removed when you save' : keySaved ? 'Saved' : 'Only if the server asks for one'}
             autoComplete="off"
             disabled={busy}
             className={`${INPUT} pr-10`}
@@ -273,6 +302,45 @@ function EndpointForm({ initial, others, busy, error, onCancel, onSubmit }: {
           </button>
         </div>
       </div>
+      {!openai && <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+        <span className="text-xs font-medium text-fg-2">Send key as</span>
+        <div role="radiogroup" aria-label="The header the key is sent in" className="inline-flex items-center gap-0.5 rounded-md border border-line p-0.5">
+          {([['bearer', 'Bearer token'], ['x-api-key', 'x-api-key']] as const).map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              role="radio"
+              aria-checked={authScheme === value}
+              onClick={() => setAuthScheme(value)}
+              disabled={busy}
+              className={`px-2.5 py-1 text-xs rounded transition-colors cursor-pointer ${authScheme === value ? 'bg-surface-2 text-fg' : 'text-fg-3 hover:text-fg'}`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>}
+      {!openai && <div className="space-y-1.5">
+        <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+          <span className="text-xs font-medium text-fg-2">Reads images</span>
+          <div role="radiogroup" aria-label="Whether the model reads images" className="inline-flex items-center gap-0.5 rounded-md border border-line p-0.5">
+            {([[false, 'No'], [true, 'Yes']] as const).map(([value, label]) => (
+              <button
+                key={label}
+                type="button"
+                role="radio"
+                aria-checked={readsImages === value}
+                onClick={() => setReadsImages(value)}
+                disabled={busy}
+                className={`px-2.5 py-1 text-xs rounded transition-colors cursor-pointer ${readsImages === value ? 'bg-surface-2 text-fg' : 'text-fg-3 hover:text-fg'}`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+        <p className="text-xs text-fg-3">Choose No if this model can't read images. Its sessions won't be asked to open any.</p>
+      </div>}
       {error && <p className="text-xs text-rose-300">{error}</p>}
       <div className="flex items-center justify-end gap-1">
         <button type="button" onClick={onCancel} disabled={busy} className={QUIET_BTN}>Cancel</button>

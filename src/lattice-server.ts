@@ -53,7 +53,7 @@ import { resumeHeldReplies } from './services/sessions/held-replies.js';
 import { settleHeldDeliveries } from './services/sessions/held-delivery-settlement.js';
 import { wakeRestartWaiters } from './services/sessions/wait-watch.js';
 import { builtClientDir, servesViteDevClient } from './server/vite-dev-client.js';
-import { loadPlugins, stopPlugins } from './services/plugins/plugin-registry.js';
+import { loadPlugins, pluginSkills, stopPlugins } from './services/plugins/plugin-registry.js';
 
 // ViteExpress will be imported dynamically in initialize() if needed
 let ViteExpress: typeof import('vite-express') | undefined;
@@ -90,6 +90,7 @@ export class LatticeServer {
   private idleReapTickHandle: NodeJS.Timeout | null = null;
   private waitWatchTickHandle: NodeJS.Timeout | null = null;
   private jobStallTickHandle: NodeJS.Timeout | null = null;
+  private askDecayTickHandle: NodeJS.Timeout | null = null;
   private jobReadTickHandle: NodeJS.Timeout | null = null;
 
   /**
@@ -206,6 +207,7 @@ export class LatticeServer {
       this.initializeIdleSessionReaper();
       this.initializeWaitWatch();
       this.initializeJobStallWatch();
+      this.initializeAskDecayWatch();
       this.initializeJobReads();
       this.ensureManagedClaudeHooks();
       startEventLoopMonitor();
@@ -569,6 +571,19 @@ export class LatticeServer {
     }, LatticeServer.JOB_STALL_TICK_INTERVAL_MS);
   }
 
+  /** An ask the user leaves unanswered for three hours moves to the project's backlog. See ask-decay-watch.ts. */
+  private initializeAskDecayWatch(): void {
+    this.askDecayTickHandle = setInterval(() => {
+      void import('./services/sessions/ask-decay-watch.js')
+        .then(({ checkAllAskDecay }) => checkAllAskDecay())
+        .catch((err) => {
+          this.logger.error('Ask decay watch failed', {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        });
+    }, LatticeServer.JOB_STALL_TICK_INTERVAL_MS);
+  }
+
   private initializeIdleSessionReaper(): void {
     this.idleReapTickHandle = setInterval(() => {
       void (async () => {
@@ -720,7 +735,7 @@ export class LatticeServer {
   /** The `lattice` command agents dispatch with (agent-cli.ts), and the skills that name it (agent-skills.ts). */
   private writeAgentCli(): void {
     try {
-      writeAgentSkills(latticeCli());
+      writeAgentSkills(latticeCli(), AGENT_SKILLS_DIR, pluginSkills());
     } catch (error) {
       this.logger.error('Failed to write the skills Lattice ships to sessions', error, { path: AGENT_SKILLS_DIR });
     }
@@ -807,6 +822,10 @@ export class LatticeServer {
     if (this.jobStallTickHandle) {
       clearInterval(this.jobStallTickHandle);
       this.jobStallTickHandle = null;
+    }
+    if (this.askDecayTickHandle) {
+      clearInterval(this.askDecayTickHandle);
+      this.askDecayTickHandle = null;
     }
     if (this.idleReapTickHandle) {
       clearInterval(this.idleReapTickHandle);

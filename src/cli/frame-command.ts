@@ -14,11 +14,13 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { sessionReadsImages } from './session-reads-images.js';
 
 export const FRAME_USAGE = `  lattice frame <file.svg | -> [--out <file.png>]
       Render a frame (a 1920-wide SVG) to a PNG and print its path, with a
       second image showing how small it sits inline in the chat on a phone.
-      Open both and look before embedding the PNG as ![what it shows](path).
+      Open both and look before embedding the PNG as ![what it shows](path),
+      unless your model cannot read images: then check the SVG source instead.
 `;
 
 export const FRAME_WIDTH = 1920;
@@ -177,12 +179,16 @@ export async function runFrameCommand(args: string[]): Promise<void> {
     lines.push(`Frame:        ${rendered.png}`, `Phone inline: ${rendered.phone} (how small it sits in the chat on a phone)`);
   }
   for (const problem of problems) lines.push(`  problem: ${problem}`);
-  lines.push(
-    '',
+  lines.push('', ...(sessionReadsImages() ? [
     'Open both images and look as a reader would: text running past a box or the frame edge, labels colliding,',
     'arrows that miss their box, anything cramped or busier than it needs to be, and on the phone image, anything',
     'you cannot read. Fix what you see and render again. Embed the frame by its path: ![what it shows](path).',
-  );
+  ] : [
+    'The model this session runs on cannot read images: do not open either PNG, with Read or any other tool, or every',
+    'later turn fails. Fix each problem listed above, then check the SVG source: work out where each line of text ends',
+    'from its x, anchor and font size, and keep it 30px inside its box and inside the frame; make sure no two labels',
+    'overlap and each arrow ends at its box. Render again, then embed the frame by its path: ![what it shows](path).',
+  ]));
   process.stdout.write(lines.join('\n') + '\n');
   if (!rendered) process.exitCode = 1;
 }

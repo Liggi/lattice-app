@@ -65,7 +65,8 @@
  * interactive. At rest only a dotted underline, so notes stay findable without
  * weighing on the text; hovered or open, it turns solid with a faint fill.
  */
-::highlight(lattice-annotation) {
+::highlight(lattice-annotation),
+::highlight(lattice-side-question) {
   text-decoration: underline dotted;
   text-decoration-color: rgba(34, 211, 238, 0.75);
   text-decoration-thickness: 1.5px;
@@ -73,7 +74,8 @@
 }
 
 /* The noted span under the pointer or open in the editor (AnnotationSpanIcons). */
-::highlight(lattice-annotation-active) {
+::highlight(lattice-annotation-active),
+::highlight(lattice-side-question-active) {
   background-color: rgba(34, 211, 238, 0.06);
   text-decoration: underline solid;
   text-decoration-color: rgba(34, 211, 238, 0.9);
@@ -367,4 +369,10 @@ body {
 @keyframes insight-scan {
   0% { transform: translateX(-100%); }
   100% { transform: translateX(400%); }
+}
+
+/* Undo's countdown: the bar under it empties over the undo window. */
+@keyframes undoCountdown {
+  from { transform: scaleX(1); }
+  to { transform: scaleX(0); }
 }

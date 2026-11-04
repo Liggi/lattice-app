@@ -20,6 +20,16 @@ export interface ClaudeModels {
   note?: string;
 }
 
+/**
+ * The CLI names a model by family ("Opus") and opens its description with the
+ * full name ("Opus 5.5 · Best for…"); the menus show the full name.
+ */
+function withVersionedLabel(model: ClaudeCatalogModel): ClaudeCatalogModel {
+  const [head, ...rest] = (model.description ?? '').split(' · ');
+  if (!head.startsWith(`${model.label} `)) return model;
+  return { ...model, label: head, description: rest.join(' · ') || undefined };
+}
+
 const FALLBACK_NOTE = "Couldn't check your sign-in's models; showing the built-in list";
 
 /** The Claude models every model menu offers: the ones this sign-in can use. */
@@ -35,6 +45,6 @@ export function useClaudeModels(): ClaudeModels {
     retry: false,
   });
   return data?.source === 'cli'
-    ? { models: data.models, cliDefaultModel: data.defaultModel }
+    ? { models: data.models.map(withVersionedLabel), cliDefaultModel: data.defaultModel }
     : { models: REGISTRY_MODELS, cliDefaultModel: null, ...(data || isError ? { note: FALLBACK_NOTE } : {}) };
 }

@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { MessageSquare, MessageSquarePlus, Trash2 } from 'lucide-react';
+import { MessageCircleQuestion, MessageSquare, MessageSquarePlus, Trash2 } from 'lucide-react';
 import {
   isInsideAnnotationUi,
   readAssistantSelection,
@@ -8,7 +8,7 @@ import {
   type SelectionReader,
 } from '../../utils/annotation-selection';
 import {
-  computeDockedPillBottom,
+  computeDockedBarPlacement,
   computeKeyboardInset,
   shouldDockAnnotationUi,
 } from '../../utils/annotation-viewport';
@@ -34,7 +34,7 @@ const VIEWPORT_MARGIN_PX = 12;
  * being moved, short enough that a deliberate dismissal still feels immediate.
  */
 export const SELECTION_HIDE_DELAY_MS = 300;
-export const COMPOSER_DOCK_SELECTOR = '[data-composer-dock="true"]';
+export const COMPOSER_BOX_SELECTOR = '[data-composer-box="true"]';
 
 /** Horizontal placement for a fixed element anchored to a selection rect. */
 export function computeAnchoredLeft(
@@ -102,6 +102,8 @@ interface AnnotationSelectionLayerProps {
    * bar is where touch reaches per-message actions.
    */
   renderDockedActions?: (messageId: string) => React.ReactNode;
+  /** Opens a side question about the captured span. Shows Ask beside Add note. */
+  onAsk?: (target: AssistantSelectionTarget) => void;
 }
 
 interface NoteEditorProps {
@@ -191,8 +193,8 @@ export function NoteEditor({ quote, note, onNoteChange, onSubmit, onCancel, onDe
  * unmounted by the transcript's block budgeting.
  *
  * Two layouts. On a mouse, the "Add note" pill and the note editor anchor to
- * the selection rect. On touch (or a narrow viewport) both dock near the
- * composer instead: the pill renders in normal flow above the composer, and the
+ * the selection rect. On touch (or a narrow viewport) both dock at the
+ * composer instead: the bar covers the composer card, and the
  * editor becomes a bottom sheet pinned to the visual viewport so it rides above
  * the software keyboard.
  */
@@ -200,6 +202,7 @@ export function AnnotationSelectionLayer({
   onAdd,
   readSelection = readAssistantSelection,
   renderDockedActions,
+  onAsk,
 }: AnnotationSelectionLayerProps): JSX.Element | null {
   const [target, setTarget] = useState<AnchoredTarget | null>(null);
   const [composing, setComposing] = useState<AssistantSelectionTarget | null>(null);
@@ -211,8 +214,8 @@ export function AnnotationSelectionLayer({
   const touchedRef = useRef(false);
   /** Bridges the watcher effect's debounce timer out to the open handler. */
   const hideTargetNowRef = useRef<(() => void) | null>(null);
-  /** Composer dock top edge, for placing the floating pill just above it. */
-  const [dockTop, setDockTop] = useState<number | null>(null);
+  /** The composer card's box, which the touch bar covers. */
+  const [composerBox, setComposerBox] = useState<{ top: number; bottom: number; left: number; right: number } | null>(null);
 
   const viewport = useVisualViewport();
   const coarsePointer = useCoarsePointer();
@@ -326,18 +329,30 @@ export function AnnotationSelectionLayer({
     if (composing) inputRef.current?.focus();
   }, [composing]);
 
-  // Measure the composer dock so the floating pill can sit just above it.
-  // Only while a pill is actually pending, and never during composing.
+  // Measure the composer so the touch bar can sit over it.
+  // Only while a bar is actually pending, and never during composing.
   useEffect(() => {
     if (!docked || !target || composing) return;
     if (typeof document === 'undefined') return;
-    const dock = document.querySelector(COMPOSER_DOCK_SELECTOR);
-    if (!dock) {
-      setDockTop((prev) => (prev === null ? prev : null));
+    const box = document.querySelector(COMPOSER_BOX_SELECTOR);
+    if (!box) {
+      setComposerBox((prev) => (prev === null ? prev : null));
       return;
     }
-    const top = Math.round(dock.getBoundingClientRect().top);
-    setDockTop((prev) => (prev === top ? prev : top));
+    // The box pads the card in from the screen edges; the bar covers the card.
+    const rect = box.getBoundingClientRect();
+    const style = getComputedStyle(box);
+    const next = {
+      top: Math.round(rect.top),
+      bottom: Math.round(rect.bottom),
+      left: Math.round(rect.left + parseFloat(style.paddingLeft || '0')),
+      right: Math.round(rect.right - parseFloat(style.paddingRight || '0')),
+    };
+    setComposerBox((prev) => (
+      prev && prev.top === next.top && prev.bottom === next.bottom && prev.left === next.left && prev.right === next.right
+        ? prev
+        : next
+    ));
   }, [docked, target, composing, viewport.height, viewport.width, viewport.offsetTop]);
 
   const openComposer = useCallback(() => {
@@ -349,6 +364,15 @@ export function AnnotationSelectionLayer({
     setTarget(null);
     setNote('');
   }, [target]);
+
+  const openAsk = useCallback(() => {
+    if (!target || !onAsk) return;
+    hideTargetNowRef.current?.();
+    setTarget(null);
+    // The side chat marks the passage itself; a live selection would bring this toolbar back.
+    window.getSelection()?.removeAllRanges();
+    onAsk(target);
+  }, [target, onAsk]);
 
   const cancel = useCallback(() => {
     setComposing(null);
@@ -440,22 +464,21 @@ export function AnnotationSelectionLayer({
   if (!target) return null;
 
   if (docked) {
-    // Floating and portalled, pinned just above the composer dock and
-    // horizontally centred. Not selection-anchored (that collides with the iOS
-    // edit menu) and not in normal flow (that shifted the composer area every
-    // time the button appeared).
+    // Floating and portalled, covering the composer card. Not above the
+    // composer (it covered the transcript's last lines, where the bottom of a
+    // message being selected sits), not selection-anchored (that collides
+    // with the iOS edit menu) and not in normal flow (that shifted the
+    // composer area every time the bar appeared).
     const keyboardInset = computeKeyboardInset(viewport.layoutHeight, viewport);
-    const bottom = computeDockedPillBottom(viewport.layoutHeight, dockTop, keyboardInset);
+    const placement = computeDockedBarPlacement(composerBox, keyboardInset);
     return createPortal(
       <div
         data-annotation-ui="true"
         data-testid="annotation-docked-bar"
-        className={`fixed z-50 whitespace-nowrap ${ANNOTATION_TOOLBAR}`}
-        style={{
-          bottom,
-          left: '50%',
-          transform: 'translateX(-50%)',
-        }}
+        className={`fixed z-50 whitespace-nowrap ${ANNOTATION_TOOLBAR} ${placement.over ? 'justify-evenly' : ''}`}
+        style={placement.over
+          ? { top: placement.top, left: placement.left, width: placement.width, height: placement.height }
+          : { bottom: placement.bottom, left: '50%', transform: 'translateX(-50%)' }}
       >
         <button
           type="button"
@@ -485,39 +508,88 @@ export function AnnotationSelectionLayer({
           <MessageSquarePlus size={20} className="flex-shrink-0" />
           Add note
         </button>
+        {onAsk && (
+          <button
+            type="button"
+            data-annotation-ui="true"
+            data-testid="annotation-ask-button"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={openAsk}
+            className={ANNOTATION_TOOLBAR_BUTTON}
+            style={{ touchAction: 'manipulation', WebkitTapHighlightColor: 'transparent' }}
+          >
+            <MessageCircleQuestion size={20} className="flex-shrink-0" />
+            Ask
+          </button>
+        )}
         {renderDockedActions?.(target.messageId)}
       </div>,
       portalHost,
     );
   }
 
-  // A small icon-only square, so it covers as little of the line above the
+  // Small icon-only squares, so they cover as little of the line above the
   // selection as possible.
-  const left = computeAnchoredLeft(target.rect, ANNOTATION_ICON_BUTTON_PX, viewport.width);
+  const groupWidth = onAsk ? ANNOTATION_ICON_BUTTON_PX + 62 : ANNOTATION_ICON_BUTTON_PX;
+  const left = computeAnchoredLeft(target.rect, groupWidth, viewport.width);
   const top = computeAnchoredTop(target.rect, ANNOTATION_ICON_BUTTON_PX, viewport.height, target.visibleTop);
+  const square = {
+    width: ANNOTATION_ICON_BUTTON_PX,
+    height: ANNOTATION_ICON_BUTTON_PX,
+    touchAction: 'manipulation' as const,
+    WebkitTapHighlightColor: 'transparent',
+  };
 
+  if (!onAsk) {
+    return createPortal(
+      <button
+        type="button"
+        data-annotation-ui="true"
+        data-testid="annotation-add-button"
+        // Keep the selection alive: mousedown on a button would otherwise
+        // collapse it before the click handler reads the captured target.
+        onMouseDown={(event) => event.preventDefault()}
+        onClick={openComposer}
+        aria-label="Add note"
+        className={`fixed z-50 ${ANNOTATION_ICON_BUTTON}`}
+        style={{ ...square, top, left }}
+      >
+        <MessageSquarePlus size={14} className="flex-shrink-0" />
+      </button>,
+      portalHost,
+    );
+  }
+
+  // With Ask: one joined bar, Add note's square then Ask with its word.
   return createPortal(
-    <button
-      type="button"
-      data-annotation-ui="true"
-      data-testid="annotation-add-button"
-      // Keep the selection alive: mousedown on a button would otherwise
-      // collapse it before the click handler reads the captured target.
-      onMouseDown={(event) => event.preventDefault()}
-      onClick={openComposer}
-      aria-label="Add note"
-      className={`fixed z-50 ${ANNOTATION_ICON_BUTTON}`}
-      style={{
-        top,
-        left,
-        width: ANNOTATION_ICON_BUTTON_PX,
-        height: ANNOTATION_ICON_BUTTON_PX,
-        touchAction: 'manipulation',
-        WebkitTapHighlightColor: 'transparent',
-      }}
-    >
-      <MessageSquarePlus size={14} className="flex-shrink-0" />
-    </button>,
+    <div data-annotation-ui="true" className="fixed z-50 flex rounded-sm border border-line bg-surface [&>button]:border-0 [&>button]:rounded-none [&>button+button]:border-l [&>button+button]:border-line" style={{ top, left }}>
+      <button
+        type="button"
+        data-annotation-ui="true"
+        data-testid="annotation-add-button"
+        // Keep the selection alive: mousedown on a button would otherwise
+        // collapse it before the click handler reads the captured target.
+        onMouseDown={(event) => event.preventDefault()}
+        onClick={openComposer}
+        aria-label="Add note"
+        className={ANNOTATION_ICON_BUTTON}
+        style={square}
+      >
+        <MessageSquarePlus size={14} className="flex-shrink-0" />
+      </button>
+      <button
+        type="button"
+        data-annotation-ui="true"
+        data-testid="annotation-ask-button"
+        onMouseDown={(event) => event.preventDefault()}
+        onClick={openAsk}
+        className={`${ANNOTATION_ICON_BUTTON} gap-1.5 px-2 text-xs font-medium`}
+        style={{ ...square, width: undefined }}
+      >
+        <MessageCircleQuestion size={14} className="flex-shrink-0" />
+        <span className="text-fg">Ask</span>
+      </button>
+    </div>,
     portalHost,
   );
 }

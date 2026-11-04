@@ -116,6 +116,7 @@ export class CodexAppServerClient extends EventEmitter {
   constructor(
     private readonly key: string,
     private readonly cwd: string,
+    private readonly launchConfig: string[] = [],
   ) {
     super();
     this.setMaxListeners(100);
@@ -285,6 +286,7 @@ export class CodexAppServerClient extends EventEmitter {
     this.child = spawn('codex', [
       '-c', 'preferred_auth_method=chatgpt',
       '-c', 'features.goals=true',
+      ...this.launchConfig,
       'app-server',
       '--listen', 'stdio://',
     ], {
@@ -520,11 +522,21 @@ export class CodexAppServerClient extends EventEmitter {
 
 const clients = new Map<string, CodexAppServerClient>();
 
-export function getCodexAppServerClient(key: string, cwd: string): CodexAppServerClient {
+/**
+ * Codex's spawn_agent, which a coordinator must not have (process-daemon.ts,
+ * COORDINATOR_DISALLOWED_TOOLS, says why). Codex 0.155 drops it only for a
+ * whole app-server: it ignores this as a per-thread override and keeps the
+ * tool under `--disable multi_agent`. So a workspace's coordinators get an
+ * app-server of their own, launched with it.
+ */
+const COORDINATOR_LAUNCH_CONFIG = ['-c', 'agents.max_depth=0'];
+
+export function getCodexAppServerClient(workspaceKey: string, cwd: string, options: { coordinator?: boolean } = {}): CodexAppServerClient {
+  const key = options.coordinator ? `coordinator:${workspaceKey}` : workspaceKey;
   const existing = clients.get(key);
   if (existing) return existing;
 
-  const client = new CodexAppServerClient(key, cwd);
+  const client = new CodexAppServerClient(key, cwd, options.coordinator ? COORDINATOR_LAUNCH_CONFIG : []);
   clients.set(key, client);
   client.on('exit', () => {
     if (clients.get(key) === client) {

@@ -3,7 +3,7 @@ import { devices } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { ComposerAttachmentsHarness } from './fixtures/ComposerAttachmentsHarness';
+import { ComposerAttachmentsHarness, ComposerSessionSwitchHarness } from './fixtures/ComposerAttachmentsHarness';
 
 // ── PHONE_PHOTO_ATTACH ──
 //
@@ -18,6 +18,8 @@ test.use({ ...iPhone, browserName: 'webkit' });
 
 const HEIC = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures/files/photo.heic');
 const MAX_BASE64 = 5 * 1024 * 1024;
+const PNG_1PX =
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==';
 
 const sentAttachments = async (output: import('@playwright/test').Locator) =>
   JSON.parse((await output.textContent()) || '[]') as string[];
@@ -81,4 +83,25 @@ test('a file that cannot be used says why, even when nothing else is attached', 
     buffer: Buffer.from('not an image'),
   });
   await expect(component.getByText(/broken\.heic: .*send a JPEG or PNG/)).toBeVisible();
+});
+
+test('an attached image is still there after switching to another session and back', async ({
+  mount,
+}) => {
+  const component = await mount(<ComposerSessionSwitchHarness />);
+  await component.locator('input[type="file"]').setInputFiles({
+    name: 'screenshot.png',
+    mimeType: 'image/png',
+    buffer: Buffer.from(PNG_1PX, 'base64'),
+  });
+  await expect(component.getByText('screenshot.png')).toBeVisible();
+
+  await component.getByRole('button', { name: 'Open B' }).click();
+  await expect(component.getByText('screenshot.png')).toHaveCount(0);
+
+  await component.getByRole('button', { name: 'Open A' }).click();
+  await expect(component.getByText('screenshot.png')).toBeVisible();
+  await expect(component.getByTestId('send-button')).toBeEnabled();
+  await component.getByTestId('send-button').click();
+  expect(await sentAttachments(component.getByTestId('sent'))).toEqual(['screenshot.png']);
 });

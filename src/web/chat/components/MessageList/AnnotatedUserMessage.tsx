@@ -1,5 +1,6 @@
 import React, { useLayoutEffect, useRef, useState } from 'react';
 import type { ParsedAnnotatedMessage } from '../../utils/annotations-format';
+import { parseScreenshotQuote } from '../../utils/image-note-crop';
 
 /**
  * A highlighted passage, set in a darker inset. Clamped to three lines; a
@@ -45,17 +46,34 @@ function QuotedPassage({ quote }: { quote: string }): JSX.Element {
   );
 }
 
-/** Body of a user bubble whose text is a notes block: passage, then note, then anything typed after. */
-export function AnnotatedUserMessage({ parsed }: { parsed: ParsedAnnotatedMessage }): JSX.Element {
+/**
+ * Body of a user bubble whose text is a notes block: passage, then note, then anything typed after.
+ * A note on a screenshot shows its marked copy, taken from `images` (the message's attached images,
+ * in order), and the screenshot's caption in place of the line written for the agent.
+ */
+export function AnnotatedUserMessage({ parsed, images = [] }: { parsed: ParsedAnnotatedMessage; images?: React.ReactNode[] }): JSX.Element {
   return (
     <div className="flex flex-col" data-testid="annotated-message">
-      {parsed.annotations.map((annotation, index) => (
-        <div key={index} className={`flex flex-col gap-1.5 ${index === 0 ? '' : 'mt-3.5'}`}>
-          {/* Selections often carry a stray edge space or newline; the sent text keeps it. */}
-          <QuotedPassage quote={annotation.quote.trim()} />
-          <div className="whitespace-pre-wrap break-words">{annotation.note}</div>
-        </div>
-      ))}
+      {parsed.annotations.map((annotation, index) => {
+        const shot = parseScreenshotQuote(annotation.quote.trim());
+        const copy = shot?.image ? images[shot.image - 1] : undefined;
+        return (
+          <div key={index} className={`flex flex-col gap-1.5 ${index === 0 ? '' : 'mt-3.5'}`}>
+            {shot ? (
+              <div className="flex flex-col gap-1" data-testid="annotated-screenshot">
+                {copy}
+                <div className="text-xs leading-snug text-fg-3 break-words">
+                  {shot.label}{shot.image === null ? ' · no marked copy' : ''}
+                </div>
+              </div>
+            ) : (
+              /* Selections often carry a stray edge space or newline; the sent text keeps it. */
+              <QuotedPassage quote={annotation.quote.trim()} />
+            )}
+            <div className="whitespace-pre-wrap break-words">{annotation.note}</div>
+          </div>
+        );
+      })}
       {parsed.body && (
         <div className="mt-3 pt-2.5 border-t border-line whitespace-pre-wrap break-words">
           {parsed.body}

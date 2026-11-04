@@ -29,7 +29,7 @@ import type { RawEvent } from '../../session-history/types.js';
 import { contextTokensNewestFirst, type UsageEventLike } from '../../session-history/context-tokens.js';
 import { ConversationService } from './conversation-service.js';
 import { buildCoordinatorPreamble, buildSessionPreamble, buildWorkerPreamble, latticeCli } from './pickup-prompts.js';
-import { claudeEndpointModels, installedProviders } from './installed-providers.js';
+import { claudeEndpointModels, installedProviders, sessionReadsImages } from './installed-providers.js';
 import { tryAdmitTurn } from './turn-admission.js';
 import { unfinishedSwitch } from './coordinator-switch-state.js';
 import { foldProjectState, type ProjectOpenThread } from '../../types/project-state.js';
@@ -212,7 +212,10 @@ function buildCoordinatorRestoreBlock(
   end: string = CONTEXT_RESTORE_END,
 ): string {
   const cli = latticeCli();
-  const preamble = buildCoordinatorPreamble({ conversationId, workingDirectory, cli, installedProviders: installedProviders(), claudeEndpointModels: claudeEndpointModels() });
+  const preamble = buildCoordinatorPreamble({
+    conversationId, workingDirectory, cli, installedProviders: installedProviders(), claudeEndpointModels: claudeEndpointModels(),
+    readsImages: sessionReadsImages(ConversationService.getInstance().getLatestSegment(conversationId)?.model),
+  });
   const roster = renderWorkerRoster(events, cli);
 
   // The project state is not here. It follows in its own block, written by
@@ -267,6 +270,7 @@ function buildWorkerRestoreBlock(conversationId: string, conversation: {
       workingDirectory: conversation.workingDirectory,
       cli,
       thread: thread ? { seq: thread.seq, text: thread.text } : null,
+      readsImages: sessionReadsImages(ConversationService.getInstance().getLatestSegment(conversationId)?.model),
     }).replace(/\n+---\s*$/, '').trimEnd(),
     '',
     card ? `What front dispatched you to do: ${card.task}` : 'Front\'s record of your dispatch is not in its log.',
@@ -371,7 +375,7 @@ export function buildCoordinatorRestore(conversationId: string): string {
       `${CONTEXT_RESTORE_PREFIX} Your context was just compacted. What follows is your standing preamble; the message after`,
       'the end marker is the one to act on.]',
       '',
-      buildSessionPreamble(latticeCli(), conversationId).replace(/\n+---\s*$/, '').trimEnd(),
+      buildSessionPreamble(latticeCli(), conversationId, sessionReadsImages(ConversationService.getInstance().getLatestSegment(conversationId)?.model)).replace(/\n+---\s*$/, '').trimEnd(),
       '',
       CONTEXT_RESTORE_END,
       '',

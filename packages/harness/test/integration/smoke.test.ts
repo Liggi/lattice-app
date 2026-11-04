@@ -86,34 +86,21 @@ describe('End-to-end integration', () => {
   })
 
   it('activity derivation: thinking → tool → null', async () => {
-    const activities: (string | null)[] = []
-
     await manager.start('s1', { prompt: 'test' })
-
-    // Poll activity during the run
-    const interval = setInterval(() => {
-      const events = manager.getLog('s1')?.all() ?? []
-      const activity = deriveActivity(events)
-      const key = activity ? activity.type : null
-      if (activities.length === 0 || activities[activities.length - 1] !== key) {
-        activities.push(key)
-      }
-    }, 10)
-
     await waitFor(() => manager.getStatus('s1') === 'idle', 5000)
 
-    // One final poll after idle to capture the null transition
-    const finalEvents = manager.getLog('s1')!.all()
-    const finalActivity = deriveActivity(finalEvents)
-    const finalKey = finalActivity ? finalActivity.type : null
-    if (activities[activities.length - 1] !== finalKey) {
-      activities.push(finalKey)
+    // Replay the finished log one event at a time, as a client applying each
+    // event would see it. Sampling on a timer missed the brief thinking phase
+    // whenever the run outpaced the timer.
+    const events = manager.getLog('s1')!.all()
+    const activities: (string | null)[] = []
+    for (let i = 1; i <= events.length; i++) {
+      const activity = deriveActivity(events.slice(0, i))
+      const key = activity ? activity.type : null
+      if (activities.length === 0 || activities[activities.length - 1] !== key) activities.push(key)
     }
-    clearInterval(interval)
 
-    // Should have seen at least some activity transitions
     expect(activities).toContain('thinking')
-    // Eventually null (idle)
     expect(activities[activities.length - 1]).toBeNull()
   })
 

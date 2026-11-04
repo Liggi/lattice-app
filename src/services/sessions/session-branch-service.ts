@@ -176,6 +176,40 @@ export class SessionBranchService {
   }
 
   /**
+   * Copy a session's whole transcript, as it stands, to a new provider session
+   * id beside it: the start of a side chat (services/side-questions). Taken
+   * mid-turn it ends where the turn has got to, the same as
+   * `claude --resume --fork-session` would read it. Nothing is written to the
+   * database; the caller records the new session.
+   */
+  async copyWholeTranscript(sessionId: string): Promise<string> {
+    const sourceFile = await this.findSessionFile(sessionId);
+    if (!sourceFile) throw new Error(`Session not found: ${sessionId}`);
+    const content = await fs.readFile(sourceFile, 'utf-8');
+    const newSessionId = randomUUID();
+    const lines = content.split('\n').filter(line => line.trim()).map((line) => {
+      let entry: RawJsonEntry | null;
+      try {
+        entry = parseJson(line) as RawJsonEntry | null;
+      } catch {
+        // A line still being written when the copy was taken is left out.
+        return null;
+      }
+      if (!entry || typeof entry !== 'object') return null;
+      return JSON.stringify(entry.sessionId ? { ...entry, sessionId: newSessionId } : entry);
+    }).filter((line): line is string => line !== null);
+    await fs.writeFile(path.join(path.dirname(sourceFile), `${newSessionId}.jsonl`), lines.join('\n') + '\n', { mode: 0o600 });
+    logger.info('Transcript copied', { sourceSession: sessionId.slice(0, 8), newSession: newSessionId.slice(0, 8), lines: lines.length });
+    return newSessionId;
+  }
+
+  /** Delete a provider session's transcript; one that is already gone is fine. */
+  async removeTranscript(sessionId: string): Promise<void> {
+    const file = await this.findSessionFile(sessionId);
+    if (file) await fs.rm(file, { force: true });
+  }
+
+  /**
    * Copy session turns from source to branch.
    * Only copies data for turns <= afterTurn.
    */

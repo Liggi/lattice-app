@@ -28,6 +28,7 @@ import {
 } from '../types/project-state.js';
 import { parseJson } from '../utils/json.js';
 import { modelProviderMismatch, providerForModel } from '../constants/model-provider.js';
+import { claudeEndpoints } from '../constants/claude-endpoint.js';
 import { deriveSessionStatusFromEvents } from '../harness/derive-session-status.js';
 import { workerResumedAfterReport, workerRuntimeWord, workerWaitingOn, type ProjectStateResponse, type WorkersResponse } from '../types/worker-events.js';
 import type { UnreadInboxSummary } from '../types/inbox.js';
@@ -472,6 +473,15 @@ export function readServerAddress(): { host: string; port: number } {
     return { host, port: server.port ?? 3001 };
   } catch {
     return { host: '127.0.0.1', port: 3001 };
+  }
+}
+
+/** The models of the saved Anthropic-API endpoints, from the same config file; none if it is unreadable. */
+function readEndpointModels(): string[] {
+  try {
+    return claudeEndpoints(parseJson(fs.readFileSync(path.join(CONFIG_DIR, 'config.json'), 'utf-8'))).map((endpoint) => endpoint.model);
+  } catch {
+    return [];
   }
 }
 
@@ -923,12 +933,13 @@ async function cmdNew(cmd: ParsedCommand): Promise<void> {
   if (providerFlag && providerFlag !== 'claude' && providerFlag !== 'codex') {
     fail(`--provider must be claude or codex, got "${providerFlag}"`);
   }
-  const mismatch = modelProviderMismatch(providerFlag, model);
+  const endpointModels = readEndpointModels();
+  const mismatch = modelProviderMismatch(providerFlag, model, endpointModels);
   if (mismatch) fail(mismatch);
   // With no --provider the model decides; a coordinator with neither is left
   // to the server, which starts it on the configured coordinator provider
   // (coordinator-defaults.ts).
-  const provider = providerFlag ?? providerForModel(model) ?? (coordinator ? undefined : 'claude');
+  const provider = providerFlag ?? providerForModel(model, endpointModels) ?? (coordinator ? undefined : 'claude');
   // Codex reads effort; Claude has no equivalent, so naming one there is a
   // silently ignored flag rather than a setting. The create route already
   // accepted this — the CLI was the only supported way to dispatch and it

@@ -85,7 +85,7 @@ describe('dismissThread', () => {
     expect(custom).toEqual([{ session: 'conv-coord', type: 'decision:dismissed', data: { id: 'card-1' } }]);
     expect(inbox).toHaveLength(1);
     expect(inbox[0].source).toBe('dismissal');
-    expect(inbox[0].text).toBe('Jason dismissed thread [1] "Publish 0.4.1?" from their panel. It is parked as their call. Its worker conv-busy was stopped. Stop working on it and do not bring it back; they can restore it from Parked themselves.');
+    expect(inbox[0].text).toBe('You dismissed thread [1] "Publish 0.4.1?" from your panel. It is parked as your call. Its worker conv-busy was stopped. Stop working on it and do not bring it back; you can restore it from Parked yourself.');
   });
 
   it('refuses a thread that is already parked', async () => {
@@ -99,6 +99,6 @@ describe('restoreThread', () => {
     await dismissThread('conv-coord', 1);
     await restoreThread('conv-coord', 1);
     expect(foldProjectState(log).open.find((candidate) => candidate.seq === 1)?.parked).toBeUndefined();
-    expect(inbox.at(-1)?.text).toContain('Jason brought thread [1] "Publish 0.4.1?" back from Parked');
+    expect(inbox.at(-1)?.text).toContain('You brought thread [1] "Publish 0.4.1?" back from Parked');
   });
 });

@@ -44,10 +44,13 @@ export function claudeSpawnEnv(model?: string, readConfig: () => string | null =
 
   const endpoint = endpointForModel(config, model);
   if (endpoint) {
+    // The CLI sends ANTHROPIC_AUTH_TOKEN as `Authorization: Bearer` and ANTHROPIC_API_KEY as `x-api-key`.
+    const key = endpoint.apiKey ?? ENDPOINT_PLACEHOLDER_KEY;
+    const xApiKey = endpoint.authScheme === 'x-api-key';
     return {
       ANTHROPIC_BASE_URL: endpoint.baseUrl,
-      ANTHROPIC_AUTH_TOKEN: endpoint.apiKey ?? ENDPOINT_PLACEHOLDER_KEY,
-      ANTHROPIC_API_KEY: undefined,
+      ANTHROPIC_AUTH_TOKEN: xApiKey ? undefined : key,
+      ANTHROPIC_API_KEY: xApiKey ? key : undefined,
       ANTHROPIC_MODEL: endpoint.model,
       ANTHROPIC_DEFAULT_OPUS_MODEL: endpoint.model,
       ANTHROPIC_DEFAULT_SONNET_MODEL: endpoint.model,

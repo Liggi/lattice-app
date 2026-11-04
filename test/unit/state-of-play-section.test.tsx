@@ -57,10 +57,10 @@ function draw() {
 const section = () => screen.getByTestId('play-needs-you');
 
 describe('StateOfPlaySection', () => {
-  it('lists Your calls first, each by name over its ask, and leaves queued work out', () => {
+  it('lists Waiting on you first, each by name over its ask, and leaves queued work out', () => {
     draw();
     const text = document.body.textContent ?? '';
-    expect(text.indexOf('Your calls')).toBeLessThan(text.indexOf('Running'));
+    expect(text.indexOf('Waiting on you')).toBeLessThan(text.indexOf('Running'));
     const first = section().querySelector('[data-testid="call-row"]')!;
     expect(first.textContent).toMatch(/^Release\d+mPublish 0\.4\.1\?/);
     expect(section().textContent).toContain('Waiting on your notes on the pack');

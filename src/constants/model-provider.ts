@@ -9,9 +9,15 @@ import type { Provider } from '../types/unified-messages.js';
 
 const CLAUDE_ALIASES = new Set(['opus', 'sonnet', 'haiku', 'fable', 'opusplan']);
 
-/** The provider `model` belongs to, or undefined when the id does not say. */
-export function providerForModel(model: string | null | undefined): Provider | undefined {
-  const id = model?.trim().replace(/\[[^\]]*\]$/, '').toLowerCase();
+/**
+ * The provider `model` belongs to, or undefined when the id does not say.
+ * `endpointModels` are the models of the saved Anthropic-API endpoints, which
+ * run on Claude whatever their shape (`moonshotai/kimi-k3.1-pro` on a gateway).
+ */
+export function providerForModel(model: string | null | undefined, endpointModels: readonly string[] = []): Provider | undefined {
+  const bare = model?.trim().replace(/\[[^\]]*\]$/, '');
+  if (bare && endpointModels.includes(bare)) return 'claude';
+  const id = bare?.toLowerCase();
   if (!id) return undefined;
   // opencode ids are its own `provider/model`, whatever model they name.
   if (id.includes('/')) return 'opencode';
@@ -25,8 +31,8 @@ export function providerForModel(model: string | null | undefined): Provider | u
  * say. Refused rather than switched, so a caller that named both learns which
  * one is wrong.
  */
-export function modelProviderMismatch(provider: string | undefined, model: string | null | undefined): string | null {
-  const owner = providerForModel(model);
+export function modelProviderMismatch(provider: string | undefined, model: string | null | undefined, endpointModels: readonly string[] = []): string | null {
+  const owner = providerForModel(model, endpointModels);
   if (!provider || !owner || owner === provider) return null;
   return `${model!.trim()} is a ${owner} model, but the provider is ${provider}: drop the provider or name a ${provider} model.`;
 }

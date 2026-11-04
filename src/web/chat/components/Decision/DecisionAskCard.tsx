@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useRef, type ReactNode } from 'react';
 import { DecisionCard } from '@liggi/agent-ui-toolkit';
-import { isOpenDecision, type DecisionAskedData, type ThreadDecisions } from '@/types/decisions';
+import { isOpenDecision, type DecisionAskedData, type DecisionState, type ThreadDecisions } from '@/types/decisions';
 
 /** Told whether an open card is in sight in the chat, so its question can be kept in reach when it is not. */
 type OnCardInSight = (decisionId: string, inSight: boolean) => void;
@@ -78,6 +78,14 @@ export async function dismissQuestion(sessionId: string, decisionId: string): Pr
   throw new Error(body?.error ?? `HTTP ${response.status}`);
 }
 
+/** Why a card no longer takes an answer, in the line that replaces its options. */
+function closedLabel(state: DecisionState | undefined): string | undefined {
+  if (state?.replaced) return 'Replaced by a later question';
+  if (state?.dismissed) return 'Dismissed';
+  if (state?.withdrawn) return state.withdrawn.reason ? `Withdrawn: ${state.withdrawn.reason}` : 'Withdrawn';
+  return undefined;
+}
+
 /**
  * An agent's question to the user (`lattice ask`). Once answered the card
  * keeps only the question: the answer is the user's own message below it,
@@ -110,7 +118,7 @@ export function DecisionAskCard({ decision }: { decision: DecisionAskedData }): 
       <DecisionCard
         questions={questions}
         answered={state?.answer != null || state?.settled ? {} : undefined}
-        closed={state?.replaced ? 'Replaced by a later question' : state?.dismissed ? 'Dismissed' : undefined}
+        closed={closedLabel(state)}
         canChange={state?.latest && state.answer != null && !state.actionRan}
         onAnswer={onAnswer}
         onDismiss={onDismiss}

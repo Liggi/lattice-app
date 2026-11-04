@@ -294,6 +294,28 @@ class SessionInfoSchemaBootstrapRunner {
       CREATE INDEX IF NOT EXISTS idx_dev_notes_status ON dev_notes(status);
       CREATE INDEX IF NOT EXISTS idx_dev_notes_created ON dev_notes(created_at);
 
+      -- Side questions: a side chat about a passage of an agent's message,
+      -- answered by a fork of the session (--resume --fork-session) so the
+      -- main conversation never sees it. fork_session_id is the fork's Claude
+      -- session, resumed for follow-ups; exchanges_json holds each question
+      -- and its answer in order; added_at is when the user added it to the
+      -- thread. See services/side-questions/side-questions.ts.
+      CREATE TABLE IF NOT EXISTS side_questions (
+        id TEXT PRIMARY KEY,
+        conversation_id TEXT NOT NULL,
+        message_id TEXT NOT NULL,
+        quote TEXT NOT NULL,
+        quote_start INTEGER,
+        fork_session_id TEXT,
+        side_conversation_id TEXT,
+        model TEXT,
+        exchanges_json TEXT NOT NULL DEFAULT '[]',
+        added_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_side_questions_conversation ON side_questions(conversation_id, created_at);
+
       -- Session inbox: what arrived while the session could not read it. A
       -- user's message to a mid-turn Codex process (parked in adapter memory
       -- otherwise, and lost on restart), or a worker's report or question for
@@ -477,6 +499,7 @@ class SessionInfoSchemaBootstrapRunner {
     this.migrateKmMapsDefaultConvColumn();
     this.migrateKmArticlesNodeContentColumns();
     this.migrateKmEdgesLabelColumn();
+    this.migrateSideQuestionConversationColumn();
     this.consolidateConversationInsightsRows();
   }
 
@@ -538,6 +561,24 @@ class SessionInfoSchemaBootstrapRunner {
       }
     } catch (error) {
       this.logger.debug('km_edges label migration check failed', { error });
+    }
+  }
+
+  /**
+   * Migration: add side_conversation_id to side_questions for databases
+   * created when a side chat was a bare fork process rather than a hidden
+   * session of its own.
+   */
+  private migrateSideQuestionConversationColumn(): void {
+    try {
+      const tableInfo = this.db.pragma('table_info(side_questions)') as Array<{ name: string }>;
+      const columnNames = tableInfo.map(col => col.name);
+      if (columnNames.length > 0 && !columnNames.includes('side_conversation_id')) {
+        this.db.exec('ALTER TABLE side_questions ADD COLUMN side_conversation_id TEXT');
+        this.logger.debug('Added side_conversation_id column to side_questions');
+      }
+    } catch (error) {
+      this.logger.debug('side_questions side_conversation_id migration check failed', { error });
     }
   }
 

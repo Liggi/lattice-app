@@ -25,7 +25,6 @@ import { decisionsIn } from './open-decision.js';
 import { enqueueInboxItem } from './session-inbox.js';
 import { handOverNow } from './immediate-delivery.js';
 import { interruptTurn } from './turn-interrupt.js';
-import { UserName } from '../user-profile.js';
 
 const logger = createLogger('ThreadDismissal');
 
@@ -44,19 +43,23 @@ export function dismissedLine(thread: ProjectOpenThread, stopped: readonly strin
   const workers = stopped.length === 0 ? ''
     : stopped.length === 1 ? ` Its worker ${stopped[0]} was stopped.`
     : ` Its workers ${stopped.join(', ')} were stopped.`;
-  return `${UserName()} dismissed thread [${thread.seq}] "${panelName(thread)}" from their panel. It is parked as their call.${workers}`
-    + ' Stop working on it and do not bring it back; they can restore it from Parked themselves.';
+  return `You dismissed thread [${thread.seq}] "${panelName(thread)}" from your panel. It is parked as your call.${workers}`
+    + ' Stop working on it and do not bring it back; you can restore it from Parked yourself.';
 }
 
 /** The line the coordinator reads when the user parks a thread for later. Exported for tests. */
 export function parkedLine(thread: ProjectOpenThread): string {
-  return `${UserName()} parked thread [${thread.seq}] "${panelName(thread)}" from their panel for later.`
-    + ' It is not dismissed: leave it for now, and raise it with them again when it needs them.';
+  return `You parked thread [${thread.seq}] "${panelName(thread)}" from your panel for later.`
+    + ' It is not dismissed: leave it for now, and raise it with you again when it needs you.';
 }
 
 /** The line the coordinator reads when the user brings a dismissed or parked thread back. Exported for tests. */
 export function restoredLine(thread: ProjectOpenThread): string {
-  return `${UserName()} brought thread [${thread.seq}] "${panelName(thread)}" back from Parked. It is open again;`
+  if (thread.parked?.decayed) {
+    return `You brought thread [${thread.seq}] "${panelName(thread)}" back from the backlog: it is waiting on you again,`
+      + ' as it was.';
+  }
+  return `You brought thread [${thread.seq}] "${panelName(thread)}" back from Parked. It is open again;`
     + ' any worker stopped when it was dismissed is still stopped.';
 }
 
@@ -80,7 +83,7 @@ export async function dismissThread(coordinator: string, seq: number): Promise<{
   const state = readProjectState(coordinator);
   const carrying = readWorkerStates(coordinator).filter((worker) => threadOfWorker(worker, state.open) === seq);
 
-  if (appendProjectNote(coordinator, { kind: 'park', text: `${UserName()} dismissed it from the panel`, by: 'user', ref: seq, label: panelName(thread) }) === null) {
+  if (appendProjectNote(coordinator, { kind: 'park', text: 'Dismissed from the panel', by: 'user', ref: seq, label: panelName(thread) }) === null) {
     throw new Error(`The dismissal could not be written to ${coordinator}`);
   }
 
@@ -119,7 +122,7 @@ export async function parkThread(coordinator: string, seq: number): Promise<void
   if (!manager) throw new Error('No harness session manager');
   const thread = openThread(coordinator, seq);
   if (thread.parked) throw new DismissalError(`Thread ${seq} is already parked.`, 409);
-  if (appendProjectNote(coordinator, { kind: 'park', text: `${UserName()} parked it from the panel for later`, by: 'user', ref: seq, label: panelName(thread) }) === null) {
+  if (appendProjectNote(coordinator, { kind: 'park', text: 'Parked from the panel for later', by: 'user', ref: seq, label: panelName(thread) }) === null) {
     throw new Error(`The park could not be written to ${coordinator}`);
   }
   for (const decision of decisionsIn(coordinator).values()) {
@@ -133,7 +136,7 @@ export async function parkThread(coordinator: string, seq: number): Promise<void
 export async function restoreThread(coordinator: string, seq: number): Promise<void> {
   const thread = openThread(coordinator, seq);
   if (!thread.parked) throw new DismissalError(`Thread ${seq} is not parked.`, 409);
-  if (appendProjectNote(coordinator, { kind: 'unpark', text: `${UserName()} brought it back from Parked`, by: 'user', ref: seq, label: panelName(thread) }) === null) {
+  if (appendProjectNote(coordinator, { kind: 'unpark', text: 'Brought back from Parked', by: 'user', ref: seq, label: panelName(thread) }) === null) {
     throw new Error(`The restore could not be written to ${coordinator}`);
   }
   await tellCoordinator(coordinator, restoredLine(thread));

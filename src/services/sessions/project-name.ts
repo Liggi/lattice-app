@@ -25,7 +25,7 @@
 
 import { createLogger } from '../infrastructure/logger.js';
 import { allowGeneration } from '../infrastructure/generation-gates.js';
-import { anthropicService, normalizeProjectName } from '../insights/anthropic-service.js';
+import { anthropicService, namesTheUser, normalizeProjectName } from '../insights/anthropic-service.js';
 import { SessionInfoService } from './session-info-service.js';
 import { ConversationService } from './conversation-service.js';
 
@@ -149,7 +149,7 @@ export async function generateProjectName(
  */
 async function storeCoordinatorName(coordinatorConversationId: string, raw: string): Promise<boolean> {
   const name = normalizeProjectName(raw);
-  if (!name) {
+  if (!name || namesTheUser(name)) {
     logger.debug('Coordinator project name unusable', { coordinator: coordinatorConversationId, raw });
     return false;
   }

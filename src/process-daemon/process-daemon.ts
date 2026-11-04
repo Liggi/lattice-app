@@ -676,7 +676,7 @@ export class ProcessDaemon extends EventEmitter {
     try {
       // For multimodal, don't pass message as CLI arg - we'll send via stdin
       const args = isResume && config.resumedSessionId
-        ? this.buildResumeArgs({ sessionId: config.resumedSessionId, message: config.initialPrompt, permissionMode: config.permissionMode, streamingId, hasMultimodalContent, model: config.model })
+        ? this.buildResumeArgs({ sessionId: config.resumedSessionId, message: config.initialPrompt, permissionMode: config.permissionMode, streamingId, hasMultimodalContent, model: config.model, coordinator: config.coordinator })
         : this.buildStartArgs(config);
 
       logger.info('Spawn cwd', { streamingId, configWorkingDirectory: config.workingDirectory, resolvedCwd: cwd, processCwd: process.cwd() });
@@ -889,7 +889,7 @@ export class ProcessDaemon extends EventEmitter {
 
     // Spawn the process (same as handleSpawn)
     const args = isResume && config.resumedSessionId
-      ? this.buildResumeArgs({ sessionId: config.resumedSessionId, message: config.initialPrompt, permissionMode: config.permissionMode, streamingId, hasMultimodalContent, model: config.model })
+      ? this.buildResumeArgs({ sessionId: config.resumedSessionId, message: config.initialPrompt, permissionMode: config.permissionMode, streamingId, hasMultimodalContent, model: config.model, coordinator: config.coordinator })
       : this.buildStartArgs(config);
 
     logger.info('Optimistic spawn cwd', { streamingId, configWorkingDirectory: config.workingDirectory, resolvedCwd: cwd });
@@ -1735,7 +1735,7 @@ export class ProcessDaemon extends EventEmitter {
     return args;
   }
 
-  private buildResumeArgs(config: { sessionId: string; message: string; permissionMode?: string; streamingId: string; hasMultimodalContent?: boolean; model?: string }): string[] {
+  private buildResumeArgs(config: { sessionId: string; message: string; permissionMode?: string; streamingId: string; hasMultimodalContent?: boolean; model?: string; coordinator?: boolean }): string[] {
     const args = this.buildBaseArgs();
 
     // Resume message is sent via stdin (not as CLI arg) so that Claude stays
@@ -1759,6 +1759,11 @@ export class ProcessDaemon extends EventEmitter {
     // Pass model if specified - needed for experimental features like Agent Teams
     if (config.model) {
       args.push('--model', config.model);
+    }
+
+    // Tool restrictions hold per invocation, so a resumed coordinator needs them again.
+    if (config.coordinator) {
+      args.push('--disallowedTools', COORDINATOR_DISALLOWED_TOOLS.join(','));
     }
 
     // Apply permission mode
@@ -1846,8 +1851,12 @@ export class ProcessDaemon extends EventEmitter {
       args.push('--allowedTools', config.allowedTools.join(','));
     }
 
-    if (config.disallowedTools?.length) {
-      args.push('--disallowedTools', config.disallowedTools.join(','));
+    const disallowedTools = [
+      ...(config.disallowedTools ?? []),
+      ...(config.coordinator ? COORDINATOR_DISALLOWED_TOOLS : []),
+    ];
+    if (disallowedTools.length) {
+      args.push('--disallowedTools', disallowedTools.join(','));
     }
 
     // Add system prompt with Lattice environment info and personality profile
@@ -1958,6 +1967,15 @@ ${relevantLines.join('\n')}
   }
 
 }
+
+/**
+ * A coordinator delegates through Lattice workers, never through Claude Code's
+ * own subagents (Jason, 2026-11-01: "use workers if you're a coordinator, not
+ * subagents"): a subagent's work has no card and its report never reaches the
+ * project record. Removing the tools is the rule; the preamble says why.
+ * Workflow is on the list because it runs the same subagents in bulk.
+ */
+const COORDINATOR_DISALLOWED_TOOLS = ['Agent', 'Workflow'];
 
 /**
  * Claude Code answers a turn that ends with no text by asking the model to

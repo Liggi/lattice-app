@@ -12,25 +12,9 @@ import type { PastedSpan } from '@liggi/agent-ui-harness/protocol';
 import React, { useState, useCallback, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useSearchParams, useNavigate } from 'react-router-dom';
-import { Bot, Code2, PanelLeft, Boxes, Server, Settings } from 'lucide-react';
+import { PanelLeft, Settings } from 'lucide-react';
 import { DEFAULT_OPENCODE_MODEL_ID } from '@/constants/opencode-models.js';
 
-/** Toggle icon per provider. Keep in step with the Provider union. */
-const PROVIDER_ICONS = {
-  claude: Bot,
-  codex: Code2,
-  opencode: Boxes,
-} as const;
-
-/** Display names; the Provider values themselves stay lowercase for tests and routing. */
-const PROVIDER_LABELS: Record<Provider, string> = {
-  claude: 'Claude',
-  codex: 'Codex',
-  opencode: 'OpenCode',
-};
-
-/** Providers a new session can start on. OpenCode stays wired but is not offered yet. */
-const NEW_SESSION_PROVIDERS = ['claude', 'codex'] as const;
 
 import {
   coordinatorClaudeModelFrom,
@@ -48,6 +32,9 @@ import { resolveInitialLaunchPermissionMode } from '../../utils/session-launch-p
 import { ActionQueueDialog } from '../DevNotesDialog/DevNotesDialog';
 import { LatticeLogo } from '../shared/LatticeLogo';
 import { HeaderNotesButton } from '../ConversationHeader/HeaderControls';
+import { runUndo, usePendingUndo } from '../ConversationHeader/pending-undo';
+import { UndoButton } from '../ConversationHeader/UndoButton';
+import { useToast } from '../Toast/Toast';
 import { launchQueueSession } from '../ConversationHeader/queue-session';
 import type { DevNote, StoredRecommendation } from '../../types';
 import { TooltipProvider } from '../ui/tooltip';
@@ -59,12 +46,14 @@ import { ProviderSignInStatus } from './ProviderSignInStatus';
 import { reportMilestone } from '../../utils/timeline-reporter';
 import { formatClaudeModelLabel } from '@/constants/claude-models';
 import { endpointModelOption } from '@/constants/claude-endpoint';
+import { ModelMark } from '../Composer/ModelMark';
 import {
   CODEX_MODELS,
   CODEX_EFFORTS,
   DEFAULT_CODEX_MODEL_ID,
   DEFAULT_CODEX_EFFORT,
   effortsForCodexModel,
+  formatCodexModelLabel,
 } from '@/constants/codex-models';
 
 /**
@@ -88,6 +77,9 @@ function createPendingLaunchId(): string {
 export function NewSessionView({ sidebarOpen, onToggleSidebar }: NewSessionViewProps): JSX.Element {
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
+  const { showToast } = useToast();
+  const pendingUndo = usePendingUndo();
+  const pendingArchive = pendingUndo?.action === 'archive' ? pendingUndo : null;
   const { serverConfig, coordinatorConfig, claudeEndpoints, isLoading: preferencesLoading } = usePreferencesContext();
   const {
     addOptimisticSession,
@@ -132,18 +124,23 @@ export function NewSessionView({ sidebarOpen, onToggleSidebar }: NewSessionViewP
 
   // On provider switch, both model and effort selections are provider-specific,
   // so drop them back to their respective defaults.
+  // A pick in the model picker sets its own model, so it skips this reset.
+  const keepPickedModelRef = React.useRef(false);
   useEffect(() => {
+    if (keepPickedModelRef.current) {
+      keepPickedModelRef.current = false;
+      return;
+    }
     setSelectedModel(null);
     setSelectedEffort(null);
   }, [provider, endpointModel]);
 
   // A Claude session with no configured model runs on the Claude CLI's own
   // default, which only the CLI knows, so it is shown as that.
-  const effectiveDefaultModel = endpoint
-    ? endpoint.model
-    : coordinator
+  const claudeDefaultModel = coordinator
     ? coordinatorClaudeModelFrom(coordinatorSettings) ?? CLAUDE_CLI_DEFAULT_MODEL
     : serverConfig?.defaultModel?.trim() || CLAUDE_CLI_DEFAULT_MODEL;
+  const effectiveDefaultModel = endpoint ? endpoint.model : claudeDefaultModel;
   const coordinatorCodexDefaults = coordinatorCodexDefaultsFrom(coordinatorSettings);
   const codexDefaultModel = coordinator ? coordinatorCodexDefaults.model : DEFAULT_CODEX_MODEL_ID;
   const codexDefaultEffort = coordinator ? coordinatorCodexDefaults.reasoningEffort : DEFAULT_CODEX_EFFORT;
@@ -159,48 +156,76 @@ export function NewSessionView({ sidebarOpen, onToggleSidebar }: NewSessionViewP
   }, [provider, selectedModel, selectedEffort, codexDefaultModel]);
 
   const claudeAvailableModels = React.useMemo(() => {
-    if (endpoint) return [endpointModelOption(endpoint, true)];
-    const selectable: Array<{ id: string; label: string; description?: string; isDefault: boolean; other?: boolean }> =
+    const claudeMark = <ModelMark kind="claude" />;
+    const selectable: Array<{ id: string; label: string; description?: string; isDefault: boolean; other?: boolean; icon?: React.ReactNode; group?: string }> =
       claudeModels.models.map((m) => ({
         id: m.id,
         label: m.label,
         description: m.description,
-        isDefault: m.id === effectiveDefaultModel,
+        isDefault: m.id === claudeDefaultModel,
         other: m.other,
+        icon: claudeMark,
+        group: 'Claude',
       }));
-    if (!selectable.some((m) => m.id === effectiveDefaultModel)) {
+    if (!selectable.some((m) => m.id === claudeDefaultModel)) {
       const cliDefaultLabel = claudeModels.cliDefaultModel
         ? claudeModels.models.find((m) => m.id === claudeModels.cliDefaultModel)?.label ?? claudeModels.cliDefaultModel
         : null;
       selectable.unshift({
-        id: effectiveDefaultModel,
-        label: effectiveDefaultModel === CLAUDE_CLI_DEFAULT_MODEL
+        id: claudeDefaultModel,
+        label: claudeDefaultModel === CLAUDE_CLI_DEFAULT_MODEL
           ? 'Claude Code default'
-          : formatClaudeModelLabel(effectiveDefaultModel),
-        ...(effectiveDefaultModel === CLAUDE_CLI_DEFAULT_MODEL
+          : formatClaudeModelLabel(claudeDefaultModel),
+        ...(claudeDefaultModel === CLAUDE_CLI_DEFAULT_MODEL
           ? { description: cliDefaultLabel
             ? `Runs ${cliDefaultLabel} for your account`
             : "Runs your Claude CLI's default" }
           : {}),
         isDefault: true,
+        icon: claudeMark,
+        group: 'Claude',
       });
     }
     return selectable;
-  }, [effectiveDefaultModel, endpoint, claudeModels]);
+  }, [claudeDefaultModel, claudeModels]);
 
   const codexAvailableModels = React.useMemo(() => {
-    const selectable: Array<{ id: string; label: string; description?: string; isDefault: boolean }> =
+    const openaiMark = <ModelMark kind="openai" />;
+    const selectable: Array<{ id: string; label: string; description?: string; isDefault: boolean; icon?: React.ReactNode; group?: string }> =
       CODEX_MODELS.filter((m) => m.composerSelectable).map((m) => ({
         id: m.id,
         label: m.label,
         description: m.description,
         isDefault: m.id === codexDefaultModel,
+        icon: openaiMark,
+        group: 'OpenAI',
       }));
     if (!selectable.some((m) => m.id === codexDefaultModel)) {
-      selectable.push({ id: codexDefaultModel, label: codexDefaultModel, isDefault: true });
+      selectable.push({ id: codexDefaultModel, label: formatCodexModelLabel(codexDefaultModel), isDefault: true, icon: openaiMark, group: 'OpenAI' });
     }
     return selectable;
   }, [codexDefaultModel]);
+
+  // One picker for every model a new session can start on: Claude, OpenAI and
+  // the saved endpoints, each under its own mark. A project's coordinator
+  // offers just its configured model for each provider.
+  const pickerModels = React.useMemo(() => {
+    if (coordinator) {
+      return [
+        { id: claudeDefaultModel, label: claudeDefaultModel === CLAUDE_CLI_DEFAULT_MODEL ? 'Claude Code default' : formatClaudeModelLabel(claudeDefaultModel), isDefault: true, icon: <ModelMark kind="claude" />, group: 'Claude' },
+        { id: codexDefaultModel, label: formatCodexModelLabel(codexDefaultModel), isDefault: true, icon: <ModelMark kind="openai" />, group: 'OpenAI' },
+      ];
+    }
+    const endpointMark = <ModelMark kind="endpoint" />;
+    return [
+      ...claudeAvailableModels,
+      ...codexAvailableModels,
+      ...claudeEndpoints.map((option) => ({ ...endpointModelOption(option, false), icon: endpointMark, group: 'Your endpoints' })),
+    ];
+  }, [coordinator, claudeDefaultModel, codexDefaultModel, claudeAvailableModels, codexAvailableModels, claudeEndpoints]);
+  const pickerSelectedModel = endpoint
+    ? endpoint.model
+    : provider === 'codex' ? selectedModel ?? codexDefaultModel : selectedModel ?? claudeDefaultModel;
 
   // Codex effort options follow the currently-effective codex model.
   const codexAvailableEfforts = React.useMemo(() => {
@@ -266,6 +291,23 @@ export function NewSessionView({ sidebarOpen, onToggleSidebar }: NewSessionViewP
     setSearchParams(nextSearchParams, { replace: true });
   }, [searchParams, setSearchParams]);
 
+
+  const handlePickModel = useCallback((model: string | null, optionId?: string) => {
+    const option = pickerModels.find((candidate) => candidate.id === optionId);
+    if (!option) return;
+    if (option.group === 'Your endpoints') {
+      if (provider !== 'claude') _handleProviderChange('claude');
+      setEndpointModel(option.id);
+      return;
+    }
+    const nextProvider: Provider = option.group === 'OpenAI' ? 'codex' : 'claude';
+    if (nextProvider !== provider || endpoint) {
+      keepPickedModelRef.current = true;
+      _handleProviderChange(nextProvider);
+    }
+    setSelectedModel(coordinator ? null : model);
+    setSelectedEffort(null);
+  }, [pickerModels, provider, endpoint, coordinator, _handleProviderChange]);
 
   const handleQueueClose = useCallback(() => {
     setQueueOpen(false);
@@ -491,6 +533,14 @@ export function NewSessionView({ sidebarOpen, onToggleSidebar }: NewSessionViewP
         <div className="flex-1 min-w-0" />
 
         <div className="flex items-center gap-2 flex-shrink-0">
+          {/* Archiving the last open session lands here, so its Undo does too. */}
+          {pendingArchive && (
+            <UndoButton
+              pending={pendingArchive}
+              onUndo={() => runUndo(() => showToast({ title: 'Could not undo archive', type: 'error' }))}
+              variant="icon"
+            />
+          )}
           <HeaderNotesButton count={queueCount} onClick={() => setQueueOpen(true)} />
           <button
             type="button"
@@ -509,53 +559,6 @@ export function NewSessionView({ sidebarOpen, onToggleSidebar }: NewSessionViewP
         <div className="flex-1 flex items-center justify-center">
           <div className="flex flex-col items-center gap-3">
             <div className="flex flex-col items-center gap-2">
-            <div className="flex flex-wrap items-center justify-center rounded-md border border-line bg-surface p-0.5">
-              {NEW_SESSION_PROVIDERS.map((providerOption) => {
-                const isActive = provider === providerOption && !endpoint;
-                const Icon = PROVIDER_ICONS[providerOption];
-                return (
-                  <button
-                    key={providerOption}
-                    type="button"
-                    data-testid={`provider-option-${providerOption}`}
-                    onClick={() => _handleProviderChange(providerOption)}
-                    disabled={isCreating}
-                    className={`flex items-center gap-1.5 px-2.5 py-1 rounded-sm text-xs font-medium transition-colors duration-100 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
-                      isActive
-                        ? 'bg-surface-2 text-fg'
-                        : 'text-fg-3 hover:text-fg-2'
-                    }`}
-                  >
-                    <Icon size={12} />
-                    {PROVIDER_LABELS[providerOption]}
-                  </button>
-                );
-              })}
-              {claudeEndpoints.map((option) => (
-                <button
-                  key={option.id}
-                  type="button"
-                  data-testid="provider-option-endpoint"
-                  onClick={() => { _handleProviderChange('claude'); setEndpointModel(option.model); }}
-                  disabled={isCreating}
-                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-sm text-xs font-medium transition-colors duration-100 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
-                    endpoint?.id === option.id
-                      ? 'bg-surface-2 text-fg'
-                      : 'text-fg-3 hover:text-fg-2'
-                  }`}
-                >
-                  <Server size={12} />
-                  {option.model}
-                </button>
-              ))}
-            </div>
-            {coordinator && (
-              <div className="px-4 text-center text-xs text-fg-3" data-testid="new-project-summary">
-                Coordinator on {provider === 'codex'
-                  ? CODEX_MODELS.find((m) => m.id === codexDefaultModel)?.label ?? codexDefaultModel
-                  : formatClaudeModelLabel(effectiveDefaultModel)}
-              </div>
-            )}
             {!endpoint && <ProviderSignInStatus
               status={signIn}
               provider={provider === 'codex' ? 'codex' : 'claude'}
@@ -587,23 +590,19 @@ export function NewSessionView({ sidebarOpen, onToggleSidebar }: NewSessionViewP
               renderActionsExtra={renderGoalAction}
               runtimeConfig={{
                 isInitializing: isCreating,
-                ...(coordinator
-                  ? {}
-                  : provider === 'claude'
+                availableModels: pickerModels,
+                modelMenuLayout: 'rail',
+                effortGroup: coordinator ? undefined : 'OpenAI',
+                modelMenuNote: coordinator ? undefined : claudeModels.note,
+                selectedModel: pickerSelectedModel,
+                onModelChange: handlePickModel,
+                ...(provider === 'codex' && !coordinator
                   ? {
-                      availableModels: claudeAvailableModels,
-                      modelMenuNote: endpoint ? undefined : claudeModels.note,
-                      selectedModel,
-                      onModelChange: setSelectedModel,
-                    }
-                  : {
-                      availableModels: codexAvailableModels,
-                      selectedModel,
-                      onModelChange: setSelectedModel,
                       availableEfforts: codexAvailableEfforts,
                       selectedEffort,
                       onEffortChange: setSelectedEffort,
-                    }),
+                    }
+                  : {}),
               }}
             />
           </div>

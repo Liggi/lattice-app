@@ -97,7 +97,7 @@ export interface CodexAppServerLike {
   }): Promise<{ goal: CodexThreadGoal }>;
 }
 
-type CodexClientFactory = (key: string, cwd: string) => CodexAppServerLike;
+type CodexClientFactory = (key: string, cwd: string, options?: { coordinator?: boolean }) => CodexAppServerLike;
 
 const logger = createLogger('CodexProcessAdapter');
 const DEFAULT_CODEX_MODEL = DEFAULT_CODEX_MODEL_ID;
@@ -306,6 +306,7 @@ export class CodexProcessAdapter implements ProcessAdapter {
     private readonly onSettingsApplied?: (settings: CodexAppliedSettings) => void,
     /** The service tier a conversation was created on, read on every spawn so a resume keeps it. */
     private readonly resolveServiceTier: (sessionId: string) => string | null = () => null,
+    private readonly isCoordinator: (sessionId: string) => boolean = () => false,
   ) {}
 
   hasActiveThread(threadId: string): boolean {
@@ -325,7 +326,7 @@ export class CodexProcessAdapter implements ProcessAdapter {
       ? config.resume
       : undefined;
 
-    const client = this.clientFactory(workspaceKey, cwd);
+    const client = this.clientFactory(workspaceKey, cwd, { coordinator: this.isCoordinator(sessionId) });
     const handle = new CodexProcessHandle({
       client,
       cwd,

@@ -7,6 +7,7 @@ import {
   sanitizeStoredAnnotations,
   type PendingAnnotation,
 } from '../../src/web/chat/utils/annotations-format.js';
+import { parseScreenshotQuote } from '../../src/web/chat/utils/image-note-crop.js';
 
 function annotation(overrides: Partial<PendingAnnotation> = {}): PendingAnnotation {
   return {
@@ -176,6 +177,15 @@ describe('sanitizeStoredAnnotations', () => {
     const result = sanitizeStoredAnnotations([{ id: 'a', messageId: 'm', quote: 'q', note: 'n' }]);
     expect(result).toEqual([{ id: 'a', messageId: 'm', quote: 'q', note: 'n', createdAt: 0 }]);
   });
+
+  it('keeps a note on a box drawn on a screenshot, and drops one whose box is not a fraction of the image', () => {
+    const image = { src: '/api/images?path=%2Ftmp%2Fs.png', path: '/tmp/s.png', box: { x: 0.1, y: 0.2, w: 0.3, h: 0.05 } };
+    const result = sanitizeStoredAnnotations([
+      annotation({ image }),
+      annotation({ id: 'b', image: { ...image, box: { x: 0.1, y: 0.2, w: 3, h: 0.05 } } }),
+    ]);
+    expect(result).toEqual([annotation({ image })]);
+  });
 });
 
 describe('parseAnnotatedMessage', () => {
@@ -198,5 +208,15 @@ describe('parseAnnotatedMessage', () => {
     expect(parseAnnotatedMessage('just a normal message')).toBeNull();
     expect(parseAnnotatedMessage('[Notes on your earlier output]\nfree text\n[/Notes]')).toBeNull();
     expect(parseAnnotatedMessage('[Notes on your earlier output]\n1. Re: "q"\n   Note: n')).toBeNull();
+  });
+});
+
+describe('parseScreenshotQuote', () => {
+  it('reads the caption and attached image back from a sent note on a screenshot', () => {
+    expect(parseScreenshotQuote('Screenshot: Step 4: before (Put live) (/tmp/s/step4.png); box at x 1521–2315, y 1778–1940 px, drawn on attached image 2'))
+      .toEqual({ label: 'Step 4: before (Put live)', image: 2 });
+    expect(parseScreenshotQuote('Screenshot: Step 3 (/tmp/s/step3.png); box from 10% to 40% across and 5% to 9% down; no marked copy, because the image could not be read: 404'))
+      .toEqual({ label: 'Step 3', image: null });
+    expect(parseScreenshotQuote('Screenshot: of a passage the user highlighted')).toBeNull();
   });
 });

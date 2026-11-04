@@ -59,6 +59,19 @@ describe('a message written while the card is open', () => {
     expect(isOpenDecision(decisions.get('a')!)).toBe(false);
   });
 
+  it('closes a card its agent withdrew, as withdrawn and not dismissed, keeping the reason', () => {
+    const withdrawn = (reason?: string) => ({ type: 'decision:withdrawn', data: { id: 'a', ...(reason ? { reason } : {}) } });
+    const decisions = foldDecisions([asked('a'), withdrawn('Answered in chat: keep holding'), asked('b')]);
+    expect(decisions.get('a')).toMatchObject({ withdrawn: { reason: 'Answered in chat: keep holding' }, dismissed: false, replaced: false });
+    expect(isOpenDecision(decisions.get('b')!)).toBe(true);
+    expect(foldDecisions([asked('a'), withdrawn()]).get('a')).toMatchObject({ withdrawn: { reason: null } });
+  });
+
+  it('does not withdraw a card the user already answered', () => {
+    const decisions = foldDecisions([asked('a'), answered('a', 'Decision card', 'in-1'), { type: 'decision:withdrawn', data: { id: 'a' } }]);
+    expect(decisions.get('a')).toMatchObject({ answer: 'Decision card', withdrawn: null });
+  });
+
   it('does not settle a card that was already answered with a tap', () => {
     const decisions = foldDecisions([asked('a'), answered('a', 'Decision card', 'in-1'), settled('a')]);
     expect(decisions.get('a')).toMatchObject({ answer: 'Decision card', settled: false });
@@ -87,8 +100,8 @@ describe('shownOpenDecision', () => {
     expect(shownOpenDecision(placeDecisionsAtTurnEnd(ended), foldDecisions(ended))).toMatchObject({ asked: { id: 'a' }, messageId: 'h-1' });
   });
 
-  it('is nothing once the question is answered or dismissed', () => {
-    for (const closing of [answered('a', 'Worker types', 'in-1'), { type: 'decision:dismissed', data: { id: 'a' } }]) {
+  it('is nothing once the question is answered, dismissed or withdrawn', () => {
+    for (const closing of [answered('a', 'Worker types', 'in-1'), { type: 'decision:dismissed', data: { id: 'a' } }, { type: 'decision:withdrawn', data: { id: 'a' } }]) {
       const events = [at(1, asked('a')), at(2, { type: 'turn:end', data: {} }), at(3, closing)];
       expect(shownOpenDecision(placeDecisionsAtTurnEnd(events), foldDecisions(events))).toBeNull();
     }

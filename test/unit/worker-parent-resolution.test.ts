@@ -106,6 +106,7 @@ describe('an archived worker, absent from the conversations list', () => {
     const response = await request(app).get(`/api/conv/${workerId}?limit=1`);
     expect(response.status).toBe(200);
     expect(response.body.pickedUpFrom).toBe(projectId);
+    expect(response.body.pickedUpFromCoordinator).toBe(true);
   });
 });
 
@@ -118,6 +119,20 @@ describe('resolveParentConversationId', () => {
 
   it('falls back to the details route when there is no list row at all', () => {
     expect(resolveParentConversationId(undefined, { pickedUpFrom: PARENT })).toBe(PARENT);
+  });
+
+  it('is null for a project started from an ordinary session', () => {
+    // It wore a worker's Back button, which read as landing in a worker.
+    const project = { pickedUpFrom: PARENT, coordinator: true };
+    expect(resolveParentConversationId(project, null, { coordinator: false })).toBeNull();
+    expect(resolveParentConversationId(project, { pickedUpFromCoordinator: false })).toBeNull();
+    expect(resolveParentConversationId(project, null)).toBeNull();
+  });
+
+  it('keeps the parent when it is a coordinator, from the list row or the details route', () => {
+    expect(resolveParentConversationId({ pickedUpFrom: PARENT }, null, { coordinator: true })).toBe(PARENT);
+    expect(resolveParentConversationId(undefined, { pickedUpFrom: PARENT, pickedUpFromCoordinator: true })).toBe(PARENT);
+    expect(resolveParentConversationId({ pickedUpFrom: PARENT, coordinator: true }, null, { coordinator: true })).toBe(PARENT);
   });
 
   it('is null for an ordinary session, from either source', () => {
@@ -139,7 +154,7 @@ describe('resolveIsCoordinator', () => {
     // It keeps its own workers panel, and it still knows its way back.
     const summary = { pickedUpFrom: 'conv-project', coordinator: true };
     expect(resolveIsCoordinator(summary, null, 0)).toBe(true);
-    expect(resolveParentConversationId(summary, null)).toBe('conv-project');
+    expect(resolveParentConversationId(summary, null, { coordinator: true })).toBe('conv-project');
   });
 });
 

@@ -438,7 +438,7 @@ export function placeWaitingMessages(events: SessionEvent[], inbox: InboxFold): 
   const pending: PendingInput[] = [];
   const consumed: ConsumedMessage[] = [];
   for (const p of detected.pending) {
-    const text = stripContextRestore(p.text);
+    const text = shownText(p.text);
     if (isWorkerInput(text) || inbox.hiddenInputSeqs.has(p.inputEvent.seq)) continue;
     pending.push({ ...p, text, undeliverable: null, attachments: attachmentsOf(p.inputEvent), pastes: pastesOf(p.inputEvent) });
   }
@@ -454,12 +454,19 @@ export function placeWaitingMessages(events: SessionEvent[], inbox: InboxFold): 
     // Another agent's message goes where the user's would: it is a message to
     // this session either way, and the thread has no other line for it. It
     // carries who sent it, so it is not read as theirs (see MessageItem).
+    // A side chat added to the thread sits where it was added, whether or not
+    // the session has read it yet: it waits for the next message by design,
+    // so floating above the composer would read as stuck.
+    if (item.source === 'side-question') {
+      consumed.push({ inputEvent: item.event, consumedByEvent: item.event });
+      continue;
+    }
     if (item.legacy || (item.source !== 'user' && item.source !== 'agent')) continue;
     const attribution = item.source === 'agent'
       ? { sender: item.sender, passedOn: item.passedOn }
       : undefined;
     if (item.readBySeq === null) {
-      pending.push({ inputEvent: item.event, text: item.text, undeliverable: item.undeliverable, attribution, attachments: attachmentsOf(item.event), pastes: pastesOf(item.event) });
+      pending.push({ inputEvent: item.event, text: shownText(item.text), undeliverable: item.undeliverable, attribution, attachments: attachmentsOf(item.event), pastes: pastesOf(item.event) });
       continue;
     }
     // It enters the thread where the session took it in. A message sent into
@@ -506,10 +513,20 @@ function userMessageContent(text: string | undefined, attachments: DisplayConten
   return [...attachments, ...(text ? [{ type: 'text', text } as DisplayContentBlock] : [])];
 }
 
+/**
+ * An input's text as the user wrote it. The server puts a coordinator's or
+ * worker's standing preamble in front of its first message, and server notes
+ * (a restored context, the project record) in front of others; the thread
+ * shows none of them.
+ */
+function shownText(text: string): string {
+  return stripPreamble(stripContextRestore(text));
+}
+
 /** A message the session took in mid-turn, as the user's bubble at the point it was read. */
 function consumedMessage(consumed: ConsumedMessage, providerBySeq: ReadonlyMap<number, Provider>): RenderItem | null {
   const data = consumed.inputEvent.data as { text?: string };
-  const content = userMessageContent(data.text, attachmentsOf(consumed.inputEvent));
+  const content = userMessageContent(data.text && shownText(data.text), attachmentsOf(consumed.inputEvent));
   if (content === null) return null;
   return {
     kind: 'message',
@@ -522,6 +539,7 @@ function consumedMessage(consumed: ConsumedMessage, providerBySeq: ReadonlyMap<n
       provider: providerBySeq.get(consumed.inputEvent.seq) ?? 'claude',
       attribution: attributionOf(consumed.inputEvent),
       pastes: pastesOf(consumed.inputEvent),
+      sideQuestion: (consumed.inputEvent.data as Partial<InboxQueuedData>).sideQuestion,
     },
   };
 }
@@ -542,7 +560,8 @@ function reportSummariesBySeq(events: readonly SessionEvent[]): Map<number, Work
   return summaries;
 }
 
-function eventsToRenderItems(
+/** Exported for unit testing — pure, no hook state. */
+export function eventsToRenderItems(
   events: readonly SessionEvent[],
   isStreaming: boolean,
   providerBySeq: ReadonlyMap<number, Provider>,
@@ -805,11 +824,7 @@ function eventToMessage(
     case 'input:sent': {
       const raw = event.data as { text?: string; source?: string; blocks?: Array<Record<string, unknown>> };
       if (raw.source === 'command') return null;
-      // The server puts a coordinator's or worker's standing preamble in front
-      // of its first message, and a restored preamble and worker roster in
-      // front of the next input after a compaction; the thread shows the
-      // message as it was written.
-      const data = raw.text ? { ...raw, text: stripPreamble(stripContextRestore(raw.text)) } : raw;
+      const data = raw.text ? { ...raw, text: shownText(raw.text) } : raw;
       // A worker's report or question delivered into a coordinator: the
       // worker event carries it in its own shape, so the raw input is hidden.
       if (data.text && isWorkerInput(data.text)) return null;
@@ -1023,7 +1038,8 @@ function deriveEventContext(events: readonly SessionEvent[]): {
       // Subagent messages (parentToolUseId set) can run on a different model
       // than the main loop — only top-level messages reflect the session model.
       const data = event.data as { model?: string; parentToolUseId?: string | null };
-      if (data.model && !data.parentToolUseId) servingModel = data.model;
+      // The CLI writes its own error notes as model "<synthetic>"; no model served them.
+      if (data.model && data.model !== '<synthetic>' && !data.parentToolUseId) servingModel = data.model;
     }
 
     providerBySeq.set(event.seq, provider);

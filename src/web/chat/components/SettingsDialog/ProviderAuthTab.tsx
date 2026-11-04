@@ -8,6 +8,7 @@ import { api } from '../../services/api';
 import { ClaudeLoginTerminal, type LoginAttemptState } from './ClaudeLoginTerminal';
 import { SecretKeyField } from './SecretKeyField';
 import { ChatGPTPlanCard } from './ChatGPTPlanCard';
+import { RestartSessionsCard } from './RestartSessionsCard';
 import { ClaudeEndpointsCard, type ClaudeEndpointUpdate } from './ClaudeEndpointsCard';
 import { usePreferencesContext } from '../../contexts/PreferencesContext';
 import type { AppConfig, ClaudeEndpointSetting } from '../../services/api/types';
@@ -468,6 +469,8 @@ export function ProviderAuthTab(): JSX.Element {
           </div>
         )}
       </ProviderCard>
+
+      <RestartSessionsCard />
 
       <ChatGPTPlanCard />
       <section className="border border-line rounded-lg bg-bg p-4 space-y-2">

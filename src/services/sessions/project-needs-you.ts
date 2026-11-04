@@ -26,6 +26,12 @@
  * coordinator's log, so it survives a restart (`ProjectState.answeredBefore`).
  * Only the indicator pauses: the panel keeps listing the asks (2026-10-07,
  * Jason picked "Panel stays, sidebar pauses").
+ *
+ * A thread the user has answered by name (its Your calls row, or the card
+ * about it) is done with until a new ask, the same rule the panel's row
+ * follows (`repliedAt`). The indicator used to light again after the
+ * coordinator's turn for an ask the user had just answered from the panel
+ * (2026-10-11: 66 times over 11 projects in a week).
  */
 
 import { USER_SENT_EVENT, withoutThreadRefs, type ProjectOpenThread } from '../../types/project-state.js';
@@ -42,6 +48,7 @@ import { foldedWorkerStates, workerOutputSince } from './worker-events.js';
 import { userName } from '../user-profile.js';
 import { noteStatusChanged } from './session-status-changes.js';
 import { openDecision, type OpenDecision } from './open-decision.js';
+import { repliesOf } from './held-replies.js';
 
 const logger = createLogger('ProjectNeedsYou');
 
@@ -221,10 +228,12 @@ function snapshot(coordinatorId: string): ProjectSnapshot {
   const state = readProjectState(coordinatorId);
   const focus = state.priority?.text ?? state.now;
   const workers = foldedWorkerStates(coordinatorId);
+  const replied = repliesOf(coordinatorId);
   const entry = {
     seq,
     threads: state.open.filter(thread => isNeedsYou(thread)
-      && (state.answeredBefore === null || thread.waitingSince > state.answeredBefore)),
+      && (state.answeredBefore === null || thread.waitingSince > state.answeredBefore)
+      && !((replied.get(`t:${thread.seq}`) ?? -Infinity) >= thread.waitingSince)),
     workingOn: focus ? withoutThreadRefs(focus) || null : null,
     workerTasks: Object.fromEntries(workers.map(worker => [worker.worker, worker.task])),
     reportedWaits: workers.flatMap(worker => worker.phase === 'reported' && worker.waitingOn
@@ -276,7 +285,8 @@ export function projectNeedsYou(conversationId: string): NeedsYouItem[] | null {
     if (scored.score > NEEDS_YOU_THRESHOLD) {
       items.push({
         seq: thread.seq,
-        text: thread.waitingOn?.text || thread.nextAction || thread.text,
+        // A question written for this wait is named by its label: the wait's own text can still be the question before it.
+        text: (thread.ask && thread.label) || thread.waitingOn?.text || thread.nextAction || thread.text,
         thread: thread.text,
         since: thread.waitingSince,
         score: Math.round(scored.score * 100) / 100,

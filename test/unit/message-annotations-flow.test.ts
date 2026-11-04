@@ -267,7 +267,7 @@ describe('AnnotationSelectionLayer — touch (docked)', () => {
     stubViewport(800, { offsetTop: 0, height: 800, width: 390 });
   });
 
-  it('floats the pill above the composer dock, portalled and out of the layout', async () => {
+  it('floats the pill over the composer, portalled and out of the layout', async () => {
     const textNode = mountTranscript();
     stubSelection(textNode, 'The retry loop never backs off.');
 
@@ -284,7 +284,6 @@ describe('AnnotationSelectionLayer — touch (docked)', () => {
     expect(bar.parentElement).toBe(document.body);
     expect(bar.className).toContain('fixed');
     expect(bar.style.bottom).not.toBe('');
-    expect(bar.style.top).toBe('');
   });
 
   it('puts the message\'s other actions beside the pill', async () => {
@@ -301,11 +300,11 @@ describe('AnnotationSelectionLayer — touch (docked)', () => {
     expect(screen.getByTestId('extra').textContent).toBe('msg-assistant-1');
   });
 
-  it('sits above the measured composer dock', async () => {
+  it('covers the measured composer card, clear of the transcript', async () => {
     const dock = document.createElement('div');
-    dock.setAttribute('data-composer-dock', 'true');
+    dock.setAttribute('data-composer-box', 'true');
     Object.defineProperty(dock, 'getBoundingClientRect', {
-      value: () => ({ top: 700, bottom: 800, left: 0, right: 390, width: 390, height: 100 }),
+      value: () => ({ top: 690, bottom: 790, left: 0, right: 390, width: 390, height: 100 }),
     });
     document.body.appendChild(dock);
 
@@ -315,8 +314,9 @@ describe('AnnotationSelectionLayer — touch (docked)', () => {
     render(React.createElement(AnnotationSelectionLayer, { onAdd: vi.fn() }));
     await settle();
 
-    // 800 layout - 700 dock top = 100 of dock below, + 8 gap.
-    expect(screen.getByTestId('annotation-docked-bar').style.bottom).toBe('108px');
+    const bar = screen.getByTestId('annotation-docked-bar');
+    expect([bar.style.top, bar.style.left, bar.style.width, bar.style.height]).toEqual(['690px', '0px', '390px', '100px']);
+    expect(bar.style.bottom).toBe('');
   });
 
   it('opens the note editor as a bottom sheet, not an anchored popover', async () => {
@@ -617,6 +617,7 @@ describe('AnnotationStatusBadge', () => {
     return render(React.createElement(AnnotationStatusBadge, {
       annotations,
       onClearAll: vi.fn(),
+      onRemove: vi.fn(),
       onSendNotesOnly: vi.fn(),
       ...overrides,
     }));
@@ -643,6 +644,7 @@ describe('AnnotationStatusBadge', () => {
     rerender(React.createElement(AnnotationStatusBadge, {
       annotations,
       onClearAll: vi.fn(),
+      onRemove: vi.fn(),
       onSendNotesOnly: vi.fn(),
     }));
     expect(screen.getByTestId('annotation-status-badge').getAttribute('aria-label')).toBe('3 notes pending');
@@ -672,10 +674,34 @@ describe('AnnotationStatusBadge', () => {
     expect(screen.queryByTestId('annotation-status-popover')).toBeNull();
   });
 
-  it('states the pending count in the popover', () => {
+  it('heads the popover as the notes for the next message', () => {
     renderBadge();
     fireEvent.click(screen.getByTestId('annotation-status-badge'));
-    expect(screen.getByTestId('annotation-status-popover').textContent).toContain('3 notes pending');
+    expect(screen.getByTestId('annotation-status-popover').textContent).toContain('Notes for your next message');
+  });
+
+  it('lists each note in the popover, with a thumbnail for a note on a screenshot, and removes one', () => {
+    const onRemove = vi.fn();
+    const withImage = [
+      ...annotations.slice(1, 2),
+      {
+        id: 'i1', messageId: 'm3', quote: 'Step 4', note: 'box note', createdAt: 4,
+        image: { src: '/api/images?path=%2Ftmp%2Fs.png', box: { x: 0.1, y: 0.1, w: 0.2, h: 0.2 } },
+      },
+    ];
+    renderBadge({ annotations: withImage, onRemove });
+    fireEvent.click(screen.getByTestId('annotation-status-badge'));
+
+    const items = screen.getAllByTestId('annotation-status-item');
+    expect(items).toHaveLength(2);
+    expect(items[0].textContent).toContain('short span');
+    expect(items[0].textContent).toContain('note two');
+    expect(items[0].querySelector('[data-testid="annotation-status-thumb"]')).toBeNull();
+    expect(items[1].textContent).toContain('box note');
+    expect(items[1].querySelector('[data-testid="annotation-status-thumb"]')).toBeTruthy();
+
+    fireEvent.click(screen.getAllByTestId('annotation-status-remove')[1]);
+    expect(onRemove).toHaveBeenCalledWith('i1');
   });
 
   it('clears all from the popover and closes', () => {
@@ -724,6 +750,7 @@ describe('AnnotationStatusBadge', () => {
     rerender(React.createElement(AnnotationStatusBadge, {
       annotations: [],
       onClearAll: vi.fn(),
+      onRemove: vi.fn(),
       onSendNotesOnly: vi.fn(),
     }));
 

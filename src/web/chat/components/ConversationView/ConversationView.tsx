@@ -19,7 +19,11 @@ import { InsightsPanel, type SyncState } from '../InsightsPanel';
 import { CoordinatorPanel } from '../InsightsPanel/CoordinatorPanel';
 import { PermissionBanner, PermissionWaitingLine } from '../PermissionBanner';
 import { AnnotationSelectionLayer, AnnotationSpanIcons, AnnotationStatusBadge } from '../MessageAnnotations';
+import { SideQuestions } from '../MessageAnnotations/SideQuestions';
+import { useSideQuestions } from '../../hooks/useSideQuestions';
+import type { AssistantSelectionTarget } from '../../utils/annotation-selection';
 import { useMessageAnnotations } from '../../hooks/useMessageAnnotations';
+import { ImageNotesContext, type ImageNotesApi } from '../MessageList/image-notes-context';
 import { Import } from 'lucide-react';
 import { useToast } from '../Toast/Toast';
 import { ReactionsProvider, SelectionMessageActions } from '../MessageReactions/MessageReactions';
@@ -74,6 +78,7 @@ import { setBrowserIncidentContext, clearBrowserIncidentContext } from '../../se
 import type { Provider } from '@/types/unified-messages';
 import { useClaudeModels } from '../../hooks/useClaudeModels';
 import { endpointModelOption } from '@/constants/claude-endpoint';
+import { ModelMark } from '../Composer/ModelMark';
 import {
   CODEX_EFFORTS,
   CODEX_MODELS,
@@ -124,11 +129,18 @@ function ToolkitBridge({ children }: { children: React.ReactNode }): JSX.Element
 interface ConversationViewProps {
   sidebarOpen?: boolean;
   onToggleSidebar?: () => void;
+  /** Show this conversation rather than the route's. */
+  conversationId?: string;
+  /**
+   * Shown inside another conversation's side chat (MessageAnnotations/SideQuestions):
+   * the thread and composer only, with no header, side panel, notes or side questions of its own.
+   */
+  embedded?: boolean;
 }
 
-export function ConversationView({ sidebarOpen, onToggleSidebar }: ConversationViewProps = {}): JSX.Element {
+export function ConversationView({ sidebarOpen, onToggleSidebar, conversationId: shownConversationId, embedded = false }: ConversationViewProps = {}): JSX.Element {
   const { conversationId: routeConversationId } = useParams<{ conversationId: string }>();
-  const conversationId = routeConversationId;
+  const conversationId = shownConversationId ?? routeConversationId;
   const location = useLocation();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -136,11 +148,12 @@ export function ConversationView({ sidebarOpen, onToggleSidebar }: ConversationV
 
   // Keep browser incident context in sync with current conversation
   useEffect(() => {
+    if (embedded) return;
     if (conversationId) {
       setBrowserIncidentContext({ conversationId, sessionId: conversationId });
     }
     return () => clearBrowserIncidentContext();
-  }, [conversationId]);
+  }, [conversationId, embedded]);
 
   // Message debug overlay: ?debug=messages URL param or __latticeDebug.enable('messages')
   const showMessageDebug = useMemo(() => {
@@ -260,8 +273,14 @@ export function ConversationView({ sidebarOpen, onToggleSidebar }: ConversationV
         description: m.description,
         isDefault: false,
         other: m.other,
+        icon: <ModelMark kind="claude" />,
+        group: 'Claude',
       })),
-      ...claudeEndpoints.map((endpoint) => endpointModelOption(endpoint)),
+      ...claudeEndpoints.map((endpoint) => ({
+        ...endpointModelOption(endpoint),
+        icon: <ModelMark kind="endpoint" />,
+        group: 'Your endpoints',
+      })),
     ],
     [claudeEndpoints, claudeModels],
   );
@@ -272,6 +291,8 @@ export function ConversationView({ sidebarOpen, onToggleSidebar }: ConversationV
       label: model.label,
       description: model.description,
       isDefault: false,
+      icon: <ModelMark kind="openai" />,
+      group: 'OpenAI',
     })),
     [],
   );
@@ -588,7 +609,11 @@ export function ConversationView({ sidebarOpen, onToggleSidebar }: ConversationV
   // The project this thread was picked up from, resolved the same way, so a
   // completed worker reached from a report link behaves like a live one. It
   // is both the header's way back and the test for a worker session.
-  const parentConversationId = resolveParentConversationId(conversationSummary, conversationDetails);
+  const parentConversationId = resolveParentConversationId(
+    conversationSummary,
+    conversationDetails,
+    conversations.find(c => c.conversationId === (conversationSummary?.pickedUpFrom ?? conversationDetails?.pickedUpFrom)),
+  );
   // A worker's mission and history restate the project thread it was picked up
   // from, so it gets no panel — and no toggle offering one. A worker that is
   // itself a coordinator keeps its own workers panel.
@@ -768,6 +793,18 @@ export function ConversationView({ sidebarOpen, onToggleSidebar }: ConversationV
     consumeAnnotations,
   } = useMessageAnnotations(conversationId);
   const unsentAnnotationCount = pendingAnnotations.length - sendingAnnotationCount;
+  // Notes on passages are highlighted in the transcript; notes on screenshots are drawn in the image viewer.
+  const passageAnnotations = useMemo(() => pendingAnnotations.filter((annotation) => !annotation.image), [pendingAnnotations]);
+  const imageNotes = useMemo<ImageNotesApi>(() => ({
+    notes: pendingAnnotations.filter((annotation) => annotation.image),
+    add: ({ messageId, src, path, label, box, note }) => addAnnotation({ messageId, quote: label, note, image: { src, ...(path ? { path } : {}), box } }),
+    update: updateAnnotation,
+    remove: removeAnnotation,
+  }), [pendingAnnotations, addAnnotation, updateAnnotation, removeAnnotation]);
+  const sideQuestionsApi = useSideQuestions(embedded ? undefined : conversationId);
+  const [askDraft, setAskDraft] = useState<AssistantSelectionTarget | null>(null);
+  const clearAskDraft = useCallback(() => setAskDraft(null), []);
+  const [sideChatExpanded, setSideChatExpanded] = useState(false);
 
   const {
     handleSendMessage,
@@ -801,6 +838,7 @@ export function ConversationView({ sidebarOpen, onToggleSidebar }: ConversationV
       <AnnotationStatusBadge
         annotations={pendingAnnotations}
         onClearAll={clearAnnotations}
+        onRemove={removeAnnotation}
         onSendNotesOnly={handleSendNotesOnly}
         sendDisabled={isPermissionDecisionLoading}
         sendingCount={sendingAnnotationCount}
@@ -840,6 +878,7 @@ export function ConversationView({ sidebarOpen, onToggleSidebar }: ConversationV
     isIdle,
     isPermissionDecisionLoading,
     pendingAnnotations,
+    removeAnnotation,
     sendingAnnotationCount,
   ]);
 
@@ -1211,8 +1250,8 @@ export function ConversationView({ sidebarOpen, onToggleSidebar }: ConversationV
       <DecisionsProvider sessionId={conversationId ?? undefined} decisions={harnessDecisions} onCardInSight={handleCardInSight}>
       <ExplainsProvider sessionId={conversationId ?? undefined} explains={harnessExplains}>
       <ToolkitBridge>
-      <div className="h-full w-full flex flex-col bg-background relative overflow-hidden" role="main" aria-label="Conversation view">
-      <ConversationHeader
+      <div className="h-full w-full flex flex-col bg-background relative overflow-hidden" {...(embedded ? { 'data-side-chat-view': 'true' } : { role: 'main', 'aria-label': 'Conversation view' })}>
+      {!embedded && <ConversationHeader
         sessionId={conversationId}
         isArchived={isArchived}
         isPinned={conversationSummary?.pinned || false}
@@ -1225,7 +1264,7 @@ export function ConversationView({ sidebarOpen, onToggleSidebar }: ConversationV
         onToggleInsightsPanel={hasInsightsPanel ? toggleInsightsPanel : undefined}
         crossSessionSidebarOpen={crossSessionSidebarOpen}
         onToggleCrossSessionSidebar={toggleCrossSessionSidebar}
-      />
+      />}
 
       {displayError && (
         <div
@@ -1249,6 +1288,7 @@ export function ConversationView({ sidebarOpen, onToggleSidebar }: ConversationV
         <div className="flex-1 flex flex-col min-w-0 relative">
           <>
           <Profiler id="MessageList" onRender={onPerfRender}>
+            <ImageNotesContext.Provider value={embedded ? null : imageNotes}>
             <MessageList
               sessionId={conversationId}
               messages={unifiedHydrating && combinedMessages.length === 0 ? [] : combinedMessages}
@@ -1285,6 +1325,7 @@ export function ConversationView({ sidebarOpen, onToggleSidebar }: ConversationV
               actionTrace={harnessActionTrace}
               hydrationPhase={harnessHydrationPhase}
             />
+            </ImageNotesContext.Provider>
           </Profiler>
 
           {/* Message debug overlay — activated via ?debug=messages URL param */}
@@ -1302,11 +1343,13 @@ export function ConversationView({ sidebarOpen, onToggleSidebar }: ConversationV
             annotated assistant message, so its mount point here is arbitrary —
             it only needs to render whenever the transcript does.
           */}
-          <AnnotationSpanIcons
-            annotations={pendingAnnotations}
-            onUpdate={updateAnnotation}
-            onRemove={removeAnnotation}
-          />
+          {!embedded && (
+            <AnnotationSpanIcons
+              annotations={passageAnnotations}
+              onUpdate={updateAnnotation}
+              onRemove={removeAnnotation}
+            />
+          )}
 
           </>
           {conversationSummary?.importedAt ? (
@@ -1323,11 +1366,8 @@ export function ConversationView({ sidebarOpen, onToggleSidebar }: ConversationV
             </div>
           ) : (
             <div
-              // Measured by AnnotationSelectionLayer to float the "Add note"
-              // pill just above this dock without affecting its layout.
-              data-composer-dock="true"
               className="flex-shrink-0 bg-bg z-10 w-full flex flex-col items-center pt-3"
-              style={{ paddingBottom: 'calc(var(--app-composer-dock-bottom-gap) + var(--app-safe-area-bottom))' }}
+              style={{ paddingBottom: embedded ? 8 : 'calc(var(--app-composer-dock-bottom-gap) + var(--app-safe-area-bottom))' }}
             >
               {/* Proposed next steps from Claude */}
               {proposedNextSteps
@@ -1350,8 +1390,21 @@ export function ConversationView({ sidebarOpen, onToggleSidebar }: ConversationV
                 The pending-note count lives in the composer status bar, next
                 to the model badge (renderStatusExtra below).
               */}
-              <AnnotationSelectionLayer onAdd={addAnnotation} renderDockedActions={(messageId) => <SelectionMessageActions messageId={messageId} />} />
-              <div className="w-full max-w-3xl px-4">
+              {/* Side questions fork the session; Claude only until a Codex fork can be checked here. */}
+              {!embedded && (
+                <>
+                  <AnnotationSelectionLayer onAdd={addAnnotation} onAsk={activeProvider === 'claude' ? setAskDraft : undefined} renderDockedActions={(messageId) => <SelectionMessageActions messageId={messageId} />} />
+                  <SideQuestions
+                    api={sideQuestionsApi}
+                    draft={askDraft}
+                    onDraftHandled={clearAskDraft}
+                    expanded={sideChatExpanded}
+                    onExpandedChange={setSideChatExpanded}
+                  />
+                </>
+              )}
+              {/* Measured by AnnotationSelectionLayer, whose touch selection bar covers the composer. */}
+              <div data-composer-box="true" className="w-full max-w-3xl px-4">
                 <Composer
                   key={composerMount}
                   ref={composerRef}
@@ -1363,7 +1416,7 @@ export function ConversationView({ sidebarOpen, onToggleSidebar }: ConversationV
                     // it runs are queued and drained on completion, so a couple
                     // of minutes of compaction is not a couple of minutes of
                     // being unable to type.
-                    placeholder: 'Reply',
+                    placeholder: embedded ? 'Ask a follow-up' : 'Reply',
                     // Pending notes fill the outgoing message on their own, so
                     // the composer may submit empty while any are queued and
                     // not already on a send that has not resolved.
@@ -1408,6 +1461,7 @@ export function ConversationView({ sidebarOpen, onToggleSidebar }: ConversationV
                         ? switchableCodexModels
                         : switchableClaudeModels,
                       modelMenuNote: activeProvider === 'codex' ? undefined : claudeModels.note,
+                      modelMenuLayout: 'rail',
                       selectedModel: pendingModel,
                       onModelChange: setPendingModel,
                     } : {}),
@@ -1424,7 +1478,7 @@ export function ConversationView({ sidebarOpen, onToggleSidebar }: ConversationV
         </div>
 
         <Profiler id="InsightsPanel" onRender={onPerfRender}>
-          {isCoordinator ? (
+          {embedded ? null : isCoordinator ? (
           <CoordinatorPanel
             isOpen={insightsPanelOpen}
             onClose={closeInsightsPanel}

@@ -28,3 +28,28 @@ export function ComposerAttachmentsHarness(): React.JSX.Element {
     </div>
   );
 }
+
+/**
+ * Two sessions, one composer at a time, remounted on each switch as Lattice's
+ * conversation view is.
+ */
+export function ComposerSessionSwitchHarness(): React.JSX.Element {
+  const [sessionId, setSessionId] = useState('session-a');
+  const [sent, setSent] = useState<string[] | null>(null);
+
+  return (
+    <div className="dark bg-zinc-950 p-3" style={{ width: 360 }}>
+      <button onClick={() => setSessionId('session-a')}>Open A</button>
+      <button onClick={() => setSessionId('session-b')}>Open B</button>
+      <Composer
+        key={sessionId}
+        core={{
+          sessionId,
+          onSubmit: (_message, options) =>
+            setSent((options?.attachments ?? []).map((a: AttachmentBlock) => a.fileName)),
+        }}
+      />
+      <output data-testid="sent">{sent === null ? '' : JSON.stringify(sent)}</output>
+    </div>
+  );
+}

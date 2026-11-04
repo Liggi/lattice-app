@@ -2,7 +2,7 @@ import { existsSync } from 'fs';
 import { delimiter, join } from 'path';
 import { findUserClaudeExecutable } from '../process/claude-cli.js';
 import { ConfigService } from '../infrastructure/config-service.js';
-import { claudeEndpoints } from '../../constants/claude-endpoint.js';
+import { claudeEndpoints, modelReadsImages } from '../../constants/claude-endpoint.js';
 
 export type AgentProvider = 'claude' | 'codex';
 
@@ -24,5 +24,14 @@ export function claudeEndpointModels(): string[] {
     return claudeEndpoints(ConfigService.getInstance().getConfig()).map((endpoint) => endpoint.model);
   } catch {
     return [];
+  }
+}
+
+/** Whether a session on `model` can be shown an image, from the saved endpoints; Claude's own models can. */
+export function sessionReadsImages(model: string | null | undefined): boolean {
+  try {
+    return modelReadsImages(ConfigService.getInstance().getConfig(), model);
+  } catch {
+    return true;
   }
 }

@@ -10,6 +10,9 @@ import type { PendingAnnotation } from '../../utils/annotations-format';
 export const ANNOTATION_HIGHLIGHT_NAME = 'lattice-annotation';
 /** The span under the pointer or being edited, painted a step stronger. */
 export const ANNOTATION_ACTIVE_HIGHLIGHT_NAME = 'lattice-annotation-active';
+/** Passages with a side chat, and the one open or hovered; styled like notes in global.css. */
+export const SIDE_QUESTION_HIGHLIGHT_NAME = 'lattice-side-question';
+export const SIDE_QUESTION_ACTIVE_HIGHLIGHT_NAME = 'lattice-side-question-active';
 
 export interface AnnotationSpanPlacement {
   annotationId: string;
@@ -74,13 +77,16 @@ interface ResolvedEntry {
  * count of what is pending.
  */
 export function useAnnotationHighlights(
-  annotations: PendingAnnotation[],
+  annotations: Array<Pick<PendingAnnotation, 'id' | 'messageId' | 'quote' | 'quoteStart'>>,
   resolveHost: AnnotationHostResolver = resolveAssistantHost,
+  highlightName: string = ANNOTATION_HIGHLIGHT_NAME,
 ): AnnotationSpanPlacement[] {
   const [placements, setPlacements] = useState<AnnotationSpanPlacement[]>([]);
 
   const resolveHostRef = useRef(resolveHost);
   resolveHostRef.current = resolveHost;
+  const highlightNameRef = useRef(highlightName);
+  highlightNameRef.current = highlightName;
 
   const annotationsRef = useRef(annotations);
   annotationsRef.current = annotations;
@@ -151,9 +157,9 @@ export function useAnnotationHighlights(
     if (supportsHighlightApi()) {
       try {
         if (ranges.length === 0) {
-          CSS.highlights.delete(ANNOTATION_HIGHLIGHT_NAME);
+          CSS.highlights.delete(highlightNameRef.current);
         } else {
-          CSS.highlights.set(ANNOTATION_HIGHLIGHT_NAME, new Highlight(...ranges));
+          CSS.highlights.set(highlightNameRef.current, new Highlight(...ranges));
         }
       } catch {
         // Highlighting is decorative — never let it break the surrounding UI.
@@ -229,7 +235,7 @@ export function useAnnotationHighlights(
       cache.clear();
       if (supportsHighlightApi()) {
         try {
-          CSS.highlights.delete(ANNOTATION_HIGHLIGHT_NAME);
+          CSS.highlights.delete(highlightNameRef.current);
         } catch {
           // Nothing to clean up.
         }

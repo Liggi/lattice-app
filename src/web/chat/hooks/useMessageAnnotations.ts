@@ -3,6 +3,7 @@ import { storage } from '../utils/storage';
 import {
   annotationsStorageKey,
   sanitizeStoredAnnotations,
+  type ImageNoteTarget,
   type PendingAnnotation,
 } from '../utils/annotations-format';
 
@@ -12,6 +13,8 @@ export interface AddAnnotationInput {
   note: string;
   /** Where the quote started in the message; see PendingAnnotation.quoteStart. */
   quoteStart?: number | null;
+  /** Set for a note on a box drawn on a screenshot. */
+  image?: ImageNoteTarget;
 }
 
 export interface MessageAnnotationsApi {
@@ -117,6 +120,7 @@ export function useMessageAnnotations(conversationId: string | undefined): Messa
         note,
         ...(typeof quoteStart === 'number' && quoteStart >= 0 ? { quoteStart } : {}),
         createdAt: Date.now(),
+        ...(input.image ? { image: input.image } : {}),
       },
     ]);
   }, [commit]);

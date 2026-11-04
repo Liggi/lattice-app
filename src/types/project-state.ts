@@ -148,6 +148,8 @@ export interface ProjectNotedData {
   ask?: string;
   /** For `rank`: open thread ids in the user's order of priority, most important first. */
   order?: number[];
+  /** For `park`: the server parked it because the user's ask went unanswered (`ask-decay-watch.ts`). */
+  decayed?: boolean;
   /** For `open` and `update`: where the evidence for this thread is, added to what it already has. */
   evidence?: string[];
   /** For `open`: the thread this one was moved from, in another project (`session move-thread`). */
@@ -234,15 +236,18 @@ export interface ProjectOpenThread {
   updatedAt: number;
   /**
    * When the current owner and wait were set: the note that last changed
-   * either. Notes that only move the summary or next action leave it, so it
-   * is how long the thread has waited on whoever it waits on now.
+   * either, or wrote a new ask. Notes that only move the summary or next
+   * action leave it, so it is how long the thread has waited on whoever it
+   * waits on now.
    */
   waitingSince: number;
   /**
    * Set while the thread is parked: kept, not being worked, and out of the
    * user's remaining-work list and the stale list until it is unparked.
+   * `decayed` when the server parked it because the user left its ask
+   * unanswered; a new ask brings such a thread back on its own.
    */
-  parked?: { at: number; reason: string; by: 'coordinator' | 'user' };
+  parked?: { at: number; reason: string; by: 'coordinator' | 'user'; decayed?: true };
   /** Set on a closed thread. */
   closedAt?: number;
   resolution?: string;
@@ -374,8 +379,9 @@ function normalizeWait(wait: unknown): ThreadWait | null {
   };
 }
 
-/** Apply the structured half of an `open` or `update` note to a thread. */
-function applyThreadFields(thread: ProjectOpenThread, data: Partial<ProjectNotedData>, at: number): void {
+/** Apply the structured half of an `open` or `update` note to a thread. True when it wrote a new ask. */
+function applyThreadFields(thread: ProjectOpenThread, data: Partial<ProjectNotedData>, at: number): boolean {
+  let asked = false;
   const waitBefore = JSON.stringify([thread.owner, thread.waitingOn]);
   if (data.owner !== undefined) {
     const owner = normalizeOwner(data.owner);
@@ -389,7 +395,12 @@ function applyThreadFields(thread: ProjectOpenThread, data: Partial<ProjectNoted
     thread.waitingSince = at;
     delete thread.ask;
   }
-  if (typeof data.ask === 'string' && data.ask.trim()) thread.ask = data.ask.trim();
+  if (typeof data.ask === 'string' && data.ask.trim() && data.ask.trim() !== thread.ask) {
+    // A new question is a new wait, even when the coordinator leaves the wait's own text as it was.
+    thread.ask = data.ask.trim();
+    thread.waitingSince = at;
+    asked = true;
+  }
   if (Array.isArray(data.workers)) {
     for (const worker of data.workers) {
       if (typeof worker === 'string' && worker && !thread.workers.includes(worker)) thread.workers.push(worker);
@@ -402,6 +413,7 @@ function applyThreadFields(thread: ProjectOpenThread, data: Partial<ProjectNoted
       }
     }
   }
+  return asked;
 }
 
 
@@ -616,7 +628,8 @@ export function foldProjectState(events: readonly ProjectEventLike[]): ProjectSt
         if (typeof data.ref !== 'number') break;
         const thread = threads.get(data.ref);
         if (!thread || thread.closedAt !== undefined) break;
-        applyThreadFields(thread, data, event.timestamp);
+        // Asking again is how a coordinator puts an ask that decayed back in front of the user.
+        if (applyThreadFields(thread, data, event.timestamp) && thread.parked?.decayed) delete thread.parked;
         // An update's text is where the work has got to. It used to be
         // discarded, so the only durable account of a thread was its next
         // action and whatever a reader could infer from that.
@@ -671,10 +684,17 @@ export function foldProjectState(events: readonly ProjectEventLike[]): ProjectSt
         if (!thread || thread.closedAt !== undefined) break;
         thread.updatedAt = event.timestamp;
         if (data.kind === 'unpark') {
+          // Back as a fresh wait: an ask restored from the backlog gets its full time again.
+          if (thread.parked) thread.waitingSince = event.timestamp;
           delete thread.parked;
           break;
         }
-        thread.parked = { at: event.timestamp, reason: data.text, by: data.by === 'user' ? 'user' : 'coordinator' };
+        thread.parked = {
+          at: event.timestamp,
+          reason: data.text,
+          by: data.by === 'user' ? 'user' : 'coordinator',
+          ...(data.decayed ? { decayed: true as const } : {}),
+        };
         // Parked work is not the work the project is on.
         if (state.priority?.thread === thread.seq) state.priority = null;
         break;
@@ -947,7 +967,8 @@ export function renderProjectState(state: ProjectState, options: RenderProjectSt
   if (parked.length > 0) {
     lines.push('Parked (`--unpark <id>` brings one back):');
     for (const thread of parked) {
-      const whose = thread.parked!.by === 'user' ? ` (${user}'s call: do not resurface it)` : '';
+      const whose = thread.parked!.by === 'user' ? ` (${user}'s call: do not resurface it)`
+        : thread.parked!.decayed ? ' (a new --ask brings it back, only if the work is blocked on it)' : '';
       lines.push(`- [${thread.seq}] ${thread.text} — ${thread.parked!.reason}${whose}`);
     }
   }
@@ -999,6 +1020,29 @@ export function renderProjectState(state: ProjectState, options: RenderProjectSt
     }
   }
   return lines.join('\n');
+}
+
+/**
+ * What a thread waits on, in words the panel can show. A dependency on
+ * another thread is recorded by its id (`--waiting-on dependency:8112`), so it
+ * reads as that thread's name; any other wait that is only a thread id reads
+ * the same way, and one naming no thread this project has reads "another
+ * thread" (2026-10-17, thread 41740: four CK3 workers read "Waiting on 8112").
+ */
+export function waitWords(wait: ThreadWait, threads: readonly ProjectOpenThread[]): string {
+  const ref = waitedThread(wait);
+  if (ref !== null) {
+    const thread = threads.find((candidate) => candidate.seq === ref);
+    return thread ? withoutThreadRefs(thread.name ?? thread.label ?? thread.text) : 'another thread';
+  }
+  return withoutThreadRefs(wait.text) || 'another thread';
+}
+
+/** The thread a wait names: a dependency's thread, or a wait that is only a thread id ("8112", "[8112]"). */
+export function waitedThread(wait: ThreadWait): number | null {
+  if (wait.thread !== undefined) return wait.thread;
+  const bare = /^(?:thread\s*)?[#[]?(\d+)\]?$/i.exec(wait.text.trim());
+  return bare ? Number(bare[1]) : null;
 }
 
 /**

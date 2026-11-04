@@ -150,7 +150,7 @@ export function unarmedWaitLine(phrase: string, reason: string): string {
     `Your last report says you are waiting on ${phrase}, but nothing is set up to wake you: ${reason}. ` +
     'Nothing will reach you on its own. Check on it now; if it has not happened yet, arm a background command, ' +
     'Monitor or ScheduleWakeup that ends when it does, then end your turn with the same `Waiting on:` line. ' +
-    `If what you are really waiting on is front or ${userName()}, say that in the line instead.`
+    'If what you are really waiting on is front, including a decision front is getting from the user, say that in the line instead.'
   );
 }
 

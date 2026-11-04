@@ -107,6 +107,18 @@ describe('reapIdleSessions', () => {
     expect(stopped).toEqual([]);
   });
 
+  it('with idleAfterMs 0 (Settings restart) ends every idle session and counts the busy ones it kept', async () => {
+    const { deps, stopped } = makeDeps({
+      'conv-fresh-idle': idleEvents(RECENT),
+      'conv-streaming': streamingEvents(RECENT),
+      'conv-team': idleEvents(RECENT),
+    });
+    const alive = { ...deps!, idleAfterMs: 0, manager: { ...deps!.manager!, inspect: () => ({ processAlive: true }) } };
+    const result = await reapIdleSessions(makeSessionInfoService({ 'conv-team': 'alpha' }), NOW, alive);
+    expect(stopped).toEqual(['conv-fresh-idle']);
+    expect(result.kept).toBe(2);
+  });
+
   it('ignores non-conv session ids', async () => {
     const { deps, stopped } = makeDeps({ 'legacy-session': idleEvents(OLD) });
     const result = await reapIdleSessions(makeSessionInfoService(), NOW, deps);

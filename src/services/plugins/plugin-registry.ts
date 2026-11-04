@@ -5,7 +5,8 @@
  *
  * A plugin's server entry is imported at startup and its default export is
  * called with a host: a router mounted at `/api/plugins/<id>`, a data folder,
- * agent commands, new sessions and confirm cards. Its web entry is served to
+ * agent commands, skills that tell agents about them, new sessions and
+ * confirm cards. Its web entry is served to
  * the web app, which imports it at runtime (`web/chat/plugins`).
  *
  * A plugin runs with all of Lattice's access, so nothing is loaded that the
@@ -27,6 +28,7 @@ import { CONFIG_DIR } from '@/utils/constants.js';
 import { parseJson } from '@/utils/json.js';
 import { createLogger } from '@/services/infrastructure/logger.js';
 import { latticeCli } from '@/services/sessions/pickup-prompts.js';
+import { SHIPPED_SKILL_NAMES, type PluginSkill } from '@/services/infrastructure/agent-skills.js';
 import { askPluginConfirm } from './plugin-confirm.js';
 import { createPluginSession } from './plugin-sessions.js';
 
@@ -57,6 +59,7 @@ interface LoadedPlugin {
   router: Router;
   commands: Map<string, CommandHandler>;
   confirmHandlers: Map<string, ConfirmHandler>;
+  skills: PluginSkill[];
   stoppers: Array<() => void | Promise<void>>;
 }
 
@@ -100,6 +103,18 @@ function isInside(dir: string, file: string): boolean {
   return relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative);
 }
 
+/** A skill's name is the agents' to see, so it may not take one Lattice or another plugin already gave. */
+function checkSkill(skill: PluginSkill, plugin: LoadedPlugin): PluginSkill {
+  const { name, description, body } = skill;
+  if (typeof name !== 'string' || !ID_PATTERN.test(name)) throw new Error(`Its skill name "${String(name)}" must be lowercase letters, digits and dashes.`);
+  if (typeof description !== 'string' || !description.trim() || typeof body !== 'string' || !body.trim()) throw new Error(`Its skill "${name}" needs a description and a body.`);
+  const taken = SHIPPED_SKILL_NAMES.has(name)
+    || plugin.skills.some((s) => s.name === name)
+    || [...plugins.values()].some((p) => p.skills.some((s) => s.name === name));
+  if (taken) throw new Error(`A skill called "${name}" already exists.`);
+  return { name, description, body };
+}
+
 function makeHost(plugin: LoadedPlugin, id: string): LatticePluginHost {
   const log = createLogger(`plugin:${id}`);
   return {
@@ -115,6 +130,7 @@ function makeHost(plugin: LoadedPlugin, id: string): LatticePluginHost {
     onStop: (fn) => { plugin.stoppers.push(fn); },
     command: (name, handler) => { plugin.commands.set(name, handler); },
     get cli() { return latticeCli(); },
+    skill: (skill) => { plugin.skills.push(checkSkill(skill, plugin)); },
     sessions: { create: (opts) => createPluginSession(opts) },
     confirm: {
       ask: (conversationId, card, action) => askPluginConfirm(id, conversationId, card, action),
@@ -131,6 +147,7 @@ async function loadOne(name: string): Promise<LoadedPlugin> {
     router: Router(),
     commands: new Map(),
     confirmHandlers: new Map(),
+    skills: [],
     stoppers: [],
   };
   try {
@@ -179,6 +196,11 @@ export function pluginAsset(id: string, kind: 'web' | 'css'): string | null {
   const plugin = plugins.get(id);
   const entry = plugin?.manifest?.[kind];
   return plugin && entry ? path.resolve(plugin.dir, entry) : null;
+}
+
+/** The skills loaded plugins give sessions, in load order. */
+export function pluginSkills(): PluginSkill[] {
+  return [...plugins.values()].flatMap((plugin) => plugin.skills);
 }
 
 export function pluginConfirmHandler(id: string, name: string): ConfirmHandler | undefined {

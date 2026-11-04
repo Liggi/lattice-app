@@ -75,10 +75,10 @@ export function getHarnessSessionManager(): SessionManager | null {
 }
 
 export function setupHarness(deps: HarnessSetupDeps): HarnessRuntime {
-  const claudeAdapter = new DaemonProcessAdapter(
-    deps.processManagerClient,
-    (conversationId) => ConversationService.getInstance().getConversation(conversationId)?.coordinator === true,
+  const isCoordinator = (conversationId: string) => (
+    ConversationService.getInstance().getConversation(conversationId)?.coordinator === true
   );
+  const claudeAdapter = new DaemonProcessAdapter(deps.processManagerClient, isCoordinator);
   const codexRequestCoordinator = deps.pendingQuestionService
     ? new CodexRequestCoordinator(deps.pendingQuestionService)
     : undefined;
@@ -116,7 +116,7 @@ export function setupHarness(deps: HarnessSetupDeps): HarnessRuntime {
     }
   }, (sessionId) => (
     sessionId.startsWith('conv-') ? ConversationService.getInstance().getServiceTier(sessionId) : null
-  ));
+  ), isCoordinator);
   const opencodeAdapter = new OpencodeProcessAdapter();
   const adapter = new MultiplexingProcessAdapter(
     claudeAdapter,

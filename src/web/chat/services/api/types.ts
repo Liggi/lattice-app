@@ -27,9 +27,15 @@ export interface ClaudeEndpointSetting extends SecretKeyConfig {
   id: string;
   baseUrl: string;
   model: string;
+  /** Absent means the picker makes a name from the model id. */
+  name?: string;
   contextWindow?: number;
   /** Absent means 'anthropic'. */
   protocol?: 'anthropic' | 'openai';
+  /** Absent means the key goes as `Authorization: Bearer`. */
+  authScheme?: 'bearer' | 'x-api-key';
+  /** Absent means the model cannot read images. */
+  readsImages?: boolean;
 }
 
 export interface AppConfig {

@@ -93,16 +93,39 @@ describe('which finished workers are archived', () => {
     // latestEventSeq null: it has not reported on the new work yet.
     expect(archiveReason(waiting(null, { worker: w, thread: 11, movedOn: true }), facts({ latestEventSeq: null }), project({ open: [thread(11, [])], closed: [thread(10, [w], true)] }))).toBeNull();
   });
-  it('archives a worker whose latest report was dealt with, parked thread or not', () => {
+  it('archives a worker with no thread whose latest report was dealt with', () => {
+    expect(archiveReason(waiting(null, { worker: w }), facts(), project({}))).toBe('report-dealt-with');
+  });
+  it('archives a dealt-with worker on an open thread it does not own, parked or not', () => {
     expect(archiveReason(waiting(null, { worker: w }), facts(), project({ open: [thread(10, [w])] }))).toBe('report-dealt-with');
+    const parked = { ...thread(10, [w]), waitingOn: { kind: 'dependency' as const, text: 'the run after midnight' } };
+    expect(archiveReason(waiting(null, { worker: w }), facts(), project({ open: [parked] }))).toBe('report-dealt-with');
+    const userOwned = { ...thread(10, [w]), owner: { kind: 'user' as const } };
+    expect(archiveReason(waiting(null, { worker: w }), facts(), project({ open: [userOwned] }))).toBe('report-dealt-with');
+  });
+  it('keeps the worker an open thread names as owner or waits on, even dealt with', () => {
+    const owned = { ...thread(10, [w, 'conv-other0000']), owner: { kind: 'worker' as const, worker: w } };
+    expect(archiveReason(waiting(null, { worker: w }), facts(), project({ open: [owned] }))).toBeNull();
+    expect(archiveReason(waiting(null, { worker: 'conv-other0000' }), facts(), project({ open: [owned] }))).toBe('report-dealt-with');
+    // Owner of another open thread than the one it carries (CK3's 9819, owned by 8080's installer).
+    const elsewhere = { ...thread(11, []), owner: { kind: 'worker' as const, worker: w } };
+    expect(archiveReason(waiting(null, { worker: w }), facts(), project({ open: [thread(10, [w]), elsewhere] }))).toBeNull();
+    const waitsOn = { ...thread(10, [w]), waitingOn: { kind: 'worker' as const, text: 'the install', worker: w } };
+    expect(archiveReason(waiting(null, { worker: w }), facts(), project({ open: [waitsOn] }))).toBeNull();
+  });
+  it('keeps a worker on an open thread whose report declared a wait', () => {
+    expect(archiveReason(waiting('front to reschedule a PC turn', { worker: w }), facts(), project({ open: [thread(10, [w])] }))).toBeNull();
+  });
+  it('archives a worker once its last open thread is closed', () => {
+    expect(archiveReason(waiting(null, { worker: w }), facts(), project({ closed: [thread(10, [w], true)] }))).toBe('threads-closed');
   });
   it('keeps a worker whose report is still owed a disposition', () => {
     const owed = { seq: 50, at: 50, kind: 'report' as const, worker: w, thread: 10, firstLine: 'x', since: 50 };
-    expect(archiveReason(waiting(null, { worker: w }), facts(), project({ open: [thread(10, [w])], attention: [owed] }))).toBeNull();
-    expect(archiveReason(waiting(null, { worker: w }), facts(), project({ open: [thread(10, [w])], historical: [owed] }))).toBeNull();
+    expect(archiveReason(waiting(null, { worker: w }), facts(), project({ attention: [owed] }))).toBeNull();
+    expect(archiveReason(waiting(null, { worker: w }), facts(), project({ historical: [owed] }))).toBeNull();
   });
   it('keeps a worker that is waiting, running, asking, or already archived', () => {
-    const open = project({ open: [thread(10, [w])] });
+    const open = project({});
     expect(archiveReason(waiting('CI', { worker: w }), facts(), open)).toBeNull();
     expect(archiveReason(waiting(null, { worker: w }), facts({ live: true }), open)).toBeNull();
     expect(archiveReason(waiting(null, { worker: w, phase: 'asked' }), facts(), open)).toBeNull();

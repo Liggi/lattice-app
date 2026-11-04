@@ -1,5 +1,6 @@
 /**
- * Skills Lattice ships to every Claude and Codex session it starts.
+ * Skills Lattice ships to every Claude and Codex session it starts, and the
+ * ones its plugins add (`host.skill`).
  *
  * The server writes them into its config dir on every start, with the agent
  * CLI's path filled in, and each session loads them from there: Claude through
@@ -83,12 +84,22 @@ One short paragraph from zero: what the work is, where it actually stands now af
 
 const SHIPPED: readonly ShippedSkill[] = [RESUME];
 
+/** Names a plugin's skill may not take. */
+export const SHIPPED_SKILL_NAMES: ReadonlySet<string> = new Set(SHIPPED.map((skill) => skill.name));
+
+/** A skill a plugin gives sessions (`host.skill`), its body already naming the CLI. */
+export interface PluginSkill {
+  name: string;
+  description: string;
+  body: string;
+}
+
 function skillFile(name: string, description: string, body: string): string {
   return `---\nname: ${name}\ndescription: ${JSON.stringify(description)}\n---\n\n${body}`;
 }
 
-/** Rewrite the shipped skills under `root`, naming `cli` as the Lattice command. */
-export function writeAgentSkills(cli: string, root: string = AGENT_SKILLS_DIR): void {
+/** Rewrite the shipped skills, and the plugins' after them, under `root`, naming `cli` as the Lattice command. */
+export function writeAgentSkills(cli: string, root: string = AGENT_SKILLS_DIR, pluginSkills: readonly PluginSkill[] = []): void {
   const temp = `${root}.${process.pid}.tmp`;
   fs.rmSync(temp, { recursive: true, force: true });
   const claude = claudePluginDir(temp);
@@ -98,13 +109,13 @@ export function writeAgentSkills(cli: string, root: string = AGENT_SKILLS_DIR): 
     path.join(claude, '.claude-plugin', 'plugin.json'),
     JSON.stringify({ name: 'lattice', description: 'Skills Lattice ships to its sessions.' }, null, 2) + '\n',
   );
-  for (const skill of SHIPPED) {
-    const body = skill.body(cli);
-    fs.mkdirSync(path.join(claude, 'skills', skill.name), { recursive: true });
-    fs.writeFileSync(path.join(claude, 'skills', skill.name, 'SKILL.md'), skillFile(skill.name, skill.description, body));
-    const codexName = `lattice-${skill.name}`;
+  const skills = [...SHIPPED.map((skill) => ({ ...skill, body: skill.body(cli) })), ...pluginSkills];
+  for (const { name, description, body } of skills) {
+    fs.mkdirSync(path.join(claude, 'skills', name), { recursive: true });
+    fs.writeFileSync(path.join(claude, 'skills', name, 'SKILL.md'), skillFile(name, description, body));
+    const codexName = `lattice-${name}`;
     fs.mkdirSync(path.join(codex, codexName), { recursive: true });
-    fs.writeFileSync(path.join(codex, codexName, 'SKILL.md'), skillFile(codexName, skill.description, body));
+    fs.writeFileSync(path.join(codex, codexName, 'SKILL.md'), skillFile(codexName, description, body));
   }
   fs.rmSync(root, { recursive: true, force: true });
   fs.renameSync(temp, root);

@@ -140,6 +140,7 @@ export function WorkerRow({
   pointed,
   pointing,
   jobs,
+  hold,
 }: {
   worker: WorkerCardState;
   coordinatorRunning: boolean;
@@ -149,9 +150,11 @@ export function WorkerRow({
   /** Some reference is under the pointer, so only the row it names is lit. */
   pointing: boolean;
   jobs?: WorkerJobs;
+  /** What the open thread it carries is held on; shown in place of Reported. */
+  hold?: string;
 }): JSX.Element {
   const { state, needsYou, waiting } = workerStateLine(worker, coordinatorRunning);
-  const waitingOn = waiting ? workerWaitingOn(worker) : null;
+  const waitingOn = waiting ? workerWaitingOn(worker) : state === 'Reported' ? hold ?? null : null;
   // The cube and the activity phrase both claim work is happening now, so
   // they follow the runtime rather than the assignment phase.
   const working = workerPendingState(worker) === 'working' || ((worker.phase === 'working' || workerResumedAfterReport(worker))

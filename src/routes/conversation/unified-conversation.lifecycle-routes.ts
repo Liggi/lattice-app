@@ -32,7 +32,7 @@ import {
   resolveCodexReasoningEffort,
 } from '@/services/sessions/codex-effort.js';
 import { buildCoordinatorPreamble, buildSessionPreamble, buildWorkerPreamble, latticeCli } from '@/services/sessions/pickup-prompts.js';
-import { claudeEndpointModels, installedProviders } from '@/services/sessions/installed-providers.js';
+import { claudeEndpointModels, installedProviders, sessionReadsImages } from '@/services/sessions/installed-providers.js';
 import { appendWorkerEvent } from '@/services/sessions/worker-events.js';
 import { readProjectState } from '@/services/sessions/project-state.js';
 import { buildProjectOrientation } from '@/services/sessions/project-orientation.js';
@@ -184,6 +184,17 @@ export function registerUnifiedConversationLifecycleRoutes(
     if (body.pickedUpFrom && !parentConversation) {
       throw new LatticeError('CONVERSATION_NOT_FOUND', `Conversation ${body.pickedUpFrom} not found`, 404);
     }
+    // A project stands on its own. With a parent it was stored as that
+    // session's worker and started on the worker brief, so its replies went to
+    // the parent as reports and its page wore a worker's Back button (the
+    // Label-quality pilot, 2026-10-12).
+    if (body.coordinator && parentConversation) {
+      throw new LatticeError(
+        'INVALID_REQUEST',
+        'a coordinator starts a project, which reports to nobody: leave out pickedUpFrom (--from) and put what the project needs to know in its prompt',
+        400,
+      );
+    }
     // Dispatching onto a thread is what links this worker's later reports and
     // questions to a piece of the project, so the thread has to be one that
     // is actually open on the parent rather than a number the caller guessed.
@@ -213,10 +224,11 @@ export function registerUnifiedConversationLifecycleRoutes(
 
     const normalizedWorkingDirectory = normalizeWorkingDirectory(body.workingDirectory);
     const { message, permissionMode: requestedMode, workspace } = body;
-    const mismatch = modelProviderMismatch(body.provider, body.model);
+    const endpointModels = claudeEndpointModels();
+    const mismatch = modelProviderMismatch(body.provider, body.model, endpointModels);
     if (mismatch) throw new LatticeError('INVALID_REQUEST', mismatch, 400);
     const provider: Provider = body.provider
-      ?? providerForModel(body.model)
+      ?? providerForModel(body.model, endpointModels)
       ?? (body.coordinator ? await coordinatorProvider() : body.provider);
     // A coordinator the caller did not pin runs on the coordinator defaults
     // rather than the general Codex ones (coordinator-defaults.ts). Resolved
@@ -324,6 +336,7 @@ export function registerUnifiedConversationLifecycleRoutes(
       try {
         // The harness gets the preamble plus the caller's text; the record
         // above keeps only the caller's text as initial_prompt.
+        const readsImages = sessionReadsImages(model);
         const prompt = parentConversation
           ? buildWorkerPreamble({
               conversationId,
@@ -333,10 +346,11 @@ export function registerUnifiedConversationLifecycleRoutes(
               workingDirectory,
               cli: latticeCli(),
               thread: threadAssignment ? { seq: threadAssignment.seq, text: threadAssignment.text } : null,
+              readsImages,
             }) + message
           : body.coordinator
-            ? buildCoordinatorPreamble({ conversationId, workingDirectory, cli: latticeCli(), installedProviders: installedProviders(), claudeEndpointModels: claudeEndpointModels() }) + message
-            : buildSessionPreamble(latticeCli(), conversationId) + (message ?? '');
+            ? buildCoordinatorPreamble({ conversationId, workingDirectory, cli: latticeCli(), installedProviders: installedProviders(), claudeEndpointModels: claudeEndpointModels(), readsImages }) + message
+            : buildSessionPreamble(latticeCli(), conversationId, readsImages) + (message ?? '');
 
         // Prime conversation metadata
         await sessionInfoService.updateSessionInfo(conversationId, {
@@ -530,7 +544,7 @@ export function registerUnifiedConversationLifecycleRoutes(
       throw new LatticeError('NO_SEGMENTS', `Conversation ${conversationId} has no segments`, 500);
     }
     // Moving a conversation to another provider is a switch, not a resume.
-    const resumeMismatch = modelProviderMismatch(latestSegment.provider, model);
+    const resumeMismatch = modelProviderMismatch(latestSegment.provider, model, claudeEndpointModels());
     if (resumeMismatch) throw new LatticeError('INVALID_REQUEST', `${resumeMismatch} To move it, switch provider.`, 400);
 
     // A text file too large to send inline goes as its saved path

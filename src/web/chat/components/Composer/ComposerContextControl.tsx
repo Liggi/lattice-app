@@ -99,6 +99,8 @@ export function ComposerContextControl({
   if (!usage) return null;
 
   const tokens = usage ? contextTokens(usage) : null;
+  // A server that reports no usage says 0; showing it would claim an empty context.
+  if (!tokens && !isCompacting && !error) return null;
   const tokenTone = isCompacting
     ? 'text-amber-400'
     : error
@@ -132,12 +134,12 @@ export function ComposerContextControl({
         style={{ touchAction: 'manipulation', WebkitTapHighlightColor: 'transparent' }}
       >
         <Gauge size={12} className="shrink-0" />
+        {/* On a phone the model name needs the room; the count is in the popover. */}
         <span
-          className="whitespace-nowrap tabular-nums"
+          className="hidden whitespace-nowrap tabular-nums sm:inline"
           data-tokens={tokens ?? undefined}
         >
-          {formatTokenCount(tokens ?? 0)}
-          <span className="hidden sm:inline"> tokens</span>
+          {formatTokenCount(tokens ?? 0)} tokens
         </span>
       </button>
 

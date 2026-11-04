@@ -1,5 +1,6 @@
 /* oxlint-disable react-doctor/no-cascading-set-state, react-doctor/no-giant-component, react-doctor/prefer-useReducer, react-doctor/no-render-in-render, react-doctor/no-effect-event-handler, react-doctor/no-array-index-as-key */
-import React, { useMemo, useState, useCallback, useRef } from 'react';
+import { NoteMarkdown } from '../LearningMap/article/ArticleMarkdown';
+import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import { SkillHeading } from './SkillHeading';
 import { Code, Lightbulb, AlertTriangle, Copy, Check, FileText, Image, Loader2, ExternalLink, FlaskConical, LayoutDashboard, MessageCircle, Wrench, Brain } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
@@ -18,6 +19,8 @@ import { preserveThinkingBreaks } from '../../utils/thinking-text';
 import { AddReactionButton, AgentReactionChips, ReactionChips, firstLine, useRegisterMessageActions, type ReactionTarget } from '../MessageReactions/MessageReactions';
 import { copyText } from '../../utils/copy-text';
 import { parseAnnotatedMessage } from '../../utils/annotations-format';
+import { parseScreenshotQuote } from '../../utils/image-note-crop';
+import { GalleryBlock } from './GalleryBlock';
 import { hasVisibleText } from '../../utils/blank-text';
 import { AnnotatedUserMessage } from './AnnotatedUserMessage';
 import { UserText } from './UserText';
@@ -66,13 +69,22 @@ export function UserMessageBody({ text, pastes, media }: { text: string; pastes?
   const trimmedPastes = pastes?.map((span) => ({ fromEnd: span.fromEnd - trimmedFromEnd, length: span.length }));
   // Notes on the agent's reply render as passage + note; they are never collapsed.
   const annotated = parseAnnotatedMessage(content);
+  // A note on a screenshot shows its marked copy beside it, so that image leaves the strip above.
+  const images = (media ?? []).filter((node) => React.isValidElement(node) && String(node.key).startsWith('img-'));
+  const placed = new Set(
+    (annotated?.annotations ?? [])
+      .map((annotation) => parseScreenshotQuote(annotation.quote.trim())?.image)
+      .filter((n): n is number => typeof n === 'number' && n <= images.length)
+      .map((n) => images[n - 1]),
+  );
+  const strip = (media ?? []).filter((node) => !placed.has(node));
   return (
     <>
-      {media && media.length > 0 && (
-        <div className={`flex flex-wrap gap-2${content ? ' mb-2' : ''}`}>{media}</div>
+      {strip.length > 0 && (
+        <div className={`flex flex-wrap gap-2${content ? ' mb-2' : ''}`}>{strip}</div>
       )}
       {annotated ? (
-        <AnnotatedUserMessage parsed={annotated} />
+        <AnnotatedUserMessage parsed={annotated} images={images} />
       ) : content ? (
         <UserText text={content} pastes={trimmedPastes} />
       ) : null}
@@ -247,6 +259,54 @@ interface MarkdownComponentProps {
 }
 
 /**
+ * True from a mouse press on a message's words until no selection is left in
+ * it. The hover toolbar is taken out of layout meanwhile: while its box is
+ * there, Chrome ends a drag that runs just below the last line in the next
+ * block instead, and a selection across two blocks cannot take a note.
+ */
+function useSelectingInMessage(rowRef: React.RefObject<HTMLElement>): boolean {
+  const [selecting, setSelecting] = useState(false);
+  useEffect(() => {
+    const row = rowRef.current;
+    const message = row?.closest('[data-testid="assistant-message"]');
+    if (!row || !message) return;
+    let dragging = false;
+    let active = false;
+    const finish = () => {
+      active = false;
+      setSelecting(false);
+    };
+    const holdsSelection = () => {
+      const selection = window.getSelection();
+      return Boolean(selection && !selection.isCollapsed && message.contains(selection.anchorNode));
+    };
+    const onMouseDown = (event: Event) => {
+      if ((event as MouseEvent).button !== 0 || row.contains(event.target as Node)) return;
+      dragging = true;
+      active = true;
+      setSelecting(true);
+    };
+    const onMouseUp = () => {
+      if (!dragging) return;
+      dragging = false;
+      if (!holdsSelection()) finish();
+    };
+    const onSelectionChange = () => {
+      if (active && !dragging && !holdsSelection()) finish();
+    };
+    message.addEventListener('mousedown', onMouseDown);
+    document.addEventListener('mouseup', onMouseUp);
+    document.addEventListener('selectionchange', onSelectionChange);
+    return () => {
+      message.removeEventListener('mousedown', onMouseDown);
+      document.removeEventListener('mouseup', onMouseUp);
+      document.removeEventListener('selectionchange', onSelectionChange);
+    };
+  }, [rowRef]);
+  return selecting;
+}
+
+/**
  * The row under an agent message: its reactions, and React and Copy. On
  * desktop the two buttons float in a small bar over the message's
  * bottom-right corner when the message is hovered, as Slack's do; the bar
@@ -259,6 +319,8 @@ interface MarkdownComponentProps {
  */
 function MessageActions({ messageId, text, reaction }: { messageId: string; text: string; reaction?: ReactionTarget }): JSX.Element {
   const [copied, setCopied] = useState(false);
+  const rowRef = useRef<HTMLDivElement>(null);
+  const selecting = useSelectingInMessage(rowRef);
   // On touch the buttons live in the bar a text selection brings up instead.
   useRegisterMessageActions(messageId, text, reaction);
   const handleCopy = (e: React.MouseEvent) => {
@@ -268,10 +330,10 @@ function MessageActions({ messageId, text, reaction }: { messageId: string; text
     setTimeout(() => setCopied(false), 2000);
   };
   return (
-    <div className="relative -ml-1.5 flex flex-wrap items-center gap-0.5 sm:min-h-7 sm:pr-20 pointer-coarse:min-h-0" data-testid="message-actions">
+    <div ref={rowRef} className="relative -ml-1.5 flex flex-wrap items-center gap-0.5 sm:min-h-7 sm:pr-20 pointer-coarse:min-h-0" data-testid="message-actions">
       {reaction && <ReactionChips target={reaction} className="-mt-1 ml-1.5 self-start" />}
       <div
-        className="hidden items-center gap-0.5 transition-opacity sm:flex pointer-coarse:hidden sm:absolute sm:-right-1 sm:-top-[9px] sm:z-10 sm:rounded-sm sm:border sm:border-line-2 sm:bg-surface sm:p-px sm:shadow-sm sm:opacity-0 sm:group-hover/message:opacity-100 sm:focus-within:opacity-100 sm:has-[[data-state=open]]:opacity-100"
+        className={`hidden items-center gap-0.5 transition-opacity ${selecting ? '' : 'sm:flex'} pointer-coarse:hidden sm:absolute sm:-right-1 sm:-top-[9px] sm:z-10 sm:rounded-sm sm:border sm:border-line-2 sm:bg-surface sm:p-px sm:shadow-sm sm:opacity-0 sm:group-hover/message:opacity-100 sm:focus-within:opacity-100 sm:has-[[data-state=open]]:opacity-100`}
         data-testid="message-toolbar"
       >
         {reaction && <AddReactionButton target={reaction} />}
@@ -492,6 +554,7 @@ export const markdownComponents: Record<string, React.ComponentType<MarkdownComp
     const first = kids.length === 1 && React.isValidElement<{ className?: string; children?: React.ReactNode }>(kids[0]) ? kids[0] : null;
     const language = /language-(\w+)/.exec(first?.props.className || '')?.[1];
     if (language === 'diagram') return <div className="not-prose my-3">{children}</div>;
+    if (first?.props.className?.includes('language-lattice-gallery')) return <>{children}</>;
     const text = first ? String(first.props.children ?? '').replace(/\n$/, '') : '';
     const long = Boolean(language) && text.trimEnd().split('\n').length > MAX_COLLAPSED_LINES;
     const copy = first && <CodeCopyButton text={text} className={long ? 'right-9' : 'right-2'} />;
@@ -511,6 +574,9 @@ export const markdownComponents: Record<string, React.ComponentType<MarkdownComp
 
     if (!inline && language === 'diagram') {
       return <DiagramBlock source={String(children)} />;
+    }
+    if (!inline && className?.includes('language-lattice-gallery')) {
+      return <GalleryBlock source={String(children)} imageUrl={localImageUrl} />;
     }
 
     // Block code with a language fence → syntax highlighting
@@ -637,6 +703,29 @@ export function MessageItem({
     }
 
     const mediaNodes = attachmentMedia(mediaBlocks);
+
+    // A side chat the user added: the passage, then each of their questions
+    // as they wrote it with the answer shortened. The inset bleeds left so its
+    // text shares the bubble's text edge.
+    if (message.sideQuestion) {
+      return (
+        <div className="flex justify-end w-full my-1" data-testid="side-question-summary">
+          <div className="max-w-[85%] min-w-[100px]">
+            <div className="rounded-lg bg-surface w-full">
+              <div className="flex flex-col gap-2 px-3.5 py-2.5 text-sm leading-[1.55] text-fg">
+                <div className="-mx-2 rounded-md bg-bg px-2 py-1.5 text-[13px] leading-[1.5] text-fg-2 line-clamp-3">{message.sideQuestion.passage}</div>
+                {message.sideQuestion.exchanges.map((exchange, index) => (
+                  <div key={index} className="flex flex-col gap-0.5">
+                    <div className="font-medium text-fg">{exchange.question}</div>
+                    <div className="text-fg-2 [&_.prose]:text-sm [&_.prose]:text-fg-2 [&_code]:text-[12px]"><NoteMarkdown content={exchange.answer} /></div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
 
     // Another session sent this. It gets its own entry rather than the user's
     // card, so coordination is inspectable without reading as their own words.

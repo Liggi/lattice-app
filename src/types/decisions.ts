@@ -16,6 +16,9 @@
  *                                                    question without answering
  *                                                    it, or the project thread
  *                                                    it was about
+ *   `decision:withdrawn { id, reason? }`          the agent took its own
+ *                                                    question down: it was
+ *                                                    settled some other way
  *   `decision:action-ran { id }`                     a plugin's card: the action
  *                                                    its chosen option runs has
  *                                                    run, and cannot run again
@@ -39,6 +42,8 @@ export const DECISION_ASKED_EVENT = 'decision:asked';
 export const DECISION_ANSWERED_EVENT = 'decision:answered';
 export const DECISION_SETTLED_EVENT = 'decision:settled';
 export const DECISION_DISMISSED_EVENT = 'decision:dismissed';
+/** The agent that asked took its question down (`lattice ask --withdraw`); nothing goes back to it. */
+export const DECISION_WITHDRAWN_EVENT = 'decision:withdrawn';
 /** A plugin's confirm action ran after its option was chosen; it does not run again. */
 export const DECISION_ACTION_RAN_EVENT = 'decision:action-ran';
 
@@ -91,6 +96,12 @@ export interface DecisionAnsweredData {
   inboxId: string;
 }
 
+export interface DecisionWithdrawnData {
+  id: string;
+  /** How the question was settled, in the agent's words. */
+  reason?: string;
+}
+
 export interface DecisionState {
   asked: DecisionAskedData;
   /** The latest answer, if any. */
@@ -105,6 +116,8 @@ export interface DecisionState {
   latest: boolean;
   /** The user dismissed it, or the project thread it was about, so it is no longer asked. */
   dismissed: boolean;
+  /** The agent took it down, with how it was settled when it said: no longer asked, and not the user's doing. */
+  withdrawn: { reason: string | null } | null;
   /** A plugin's card whose action has run: its answer can no longer change. */
   actionRan: boolean;
   /**
@@ -128,9 +141,9 @@ export interface ThreadDecisions {
   withdrawnAnswers: ReadonlySet<string>;
 }
 
-/** Unanswered and still asked: the thread's latest question, with no answer, not replaced, settled or dismissed. */
+/** Unanswered and still asked: the thread's latest question, with no answer, not replaced, settled, dismissed or withdrawn. */
 export function isAwaitingDecision(decision: DecisionState): boolean {
-  return decision.latest && decision.answer === null && !decision.replaced && !decision.settled && !decision.dismissed;
+  return decision.latest && decision.answer === null && !decision.replaced && !decision.settled && !decision.dismissed && !decision.withdrawn;
 }
 
 /** Still waiting on the user: awaiting an answer, and none is on its way from the panel. */
@@ -153,7 +166,7 @@ export function foldDecisions(events: readonly DecisionEventLike[]): Map<string,
         if (!data?.id) break;
         if (latest && isAwaitingDecision(latest)) latest.replaced = true;
         if (latest) latest.latest = false;
-        latest = { asked: data, answer: null, read: false, replaced: false, settled: false, latest: true, dismissed: false, actionRan: false, held: null };
+        latest = { asked: data, answer: null, read: false, replaced: false, settled: false, latest: true, dismissed: false, withdrawn: null, actionRan: false, held: null };
         decisions.set(data.id, latest);
         break;
       }
@@ -175,6 +188,12 @@ export function foldDecisions(events: readonly DecisionEventLike[]): Map<string,
       case DECISION_DISMISSED_EVENT: {
         const decision = decisions.get((event.data as { id?: string })?.id ?? '');
         if (decision && isAwaitingDecision(decision)) decision.dismissed = true;
+        break;
+      }
+      case DECISION_WITHDRAWN_EVENT: {
+        const data = event.data as DecisionWithdrawnData | undefined;
+        const decision = decisions.get(data?.id ?? '');
+        if (decision && isAwaitingDecision(decision)) decision.withdrawn = { reason: data?.reason ?? null };
         break;
       }
       case DECISION_ACTION_RAN_EVENT: {

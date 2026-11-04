@@ -250,9 +250,12 @@ pre code {
     caret-color: transparent !important;
 }
 
+/* Every element inside an editable box too: a rich editor's caret takes the
+   colour of the line it sits in, not of the box (the CodeMirror message box). */
 input,
 textarea,
-[contenteditable="true"] {
+[contenteditable="true"],
+[contenteditable="true"] * {
     caret-color: var(--foreground) !important;
 }
 

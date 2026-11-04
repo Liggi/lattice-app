@@ -2,6 +2,7 @@ import type { PastedSpan } from '@liggi/agent-ui-harness/protocol';
 import { useCallback, type MutableRefObject } from 'react';
 import { api } from '../../services/api';
 import { formatAnnotatedMessage, type PendingAnnotation } from '../../utils/annotations-format';
+import { attachImageNotes } from '../../utils/image-note-crop';
 import type { ChatMessage, ContentBlockParam } from '../../types';
 import type { Provider } from '@/types/unified-messages';
 
@@ -142,9 +143,16 @@ export function useConversationSendHandlers(params: {
       void api.unifiedUpdateConversation(conversationId, { pausedReason: null });
     }
 
-    const outgoingMessage = formatAnnotatedMessage(pendingAnnotations, message);
-
     try {
+      // Notes on screenshots go out as a marked copy of each, attached after the user's own images.
+      const userImages = attachments?.filter((block) => block.type === 'image').length ?? 0;
+      // Only notes on screenshots need the wait; the rest go out as before, with no extra tick.
+      const withImages = pendingAnnotations.some((annotation) => annotation.image)
+        ? await attachImageNotes(pendingAnnotations, userImages)
+        : { notes: pendingAnnotations, images: [] };
+      const outgoingMessage = formatAnnotatedMessage(withImages.notes, message);
+      if (withImages.images.length > 0) attachments = [...(attachments ?? []), ...withImages.images];
+
       session.addOptimisticUserMessage(outgoingMessage);
       if (conversationId) {
         setSessionOptimisticOngoing(conversationId, provider);

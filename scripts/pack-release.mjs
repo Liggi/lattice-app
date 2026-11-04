@@ -34,7 +34,7 @@ for (const built of ['dist/cli.js', 'dist/web/index.html', 'packages/harness/dis
 
 const stage = mkdtempSync(join(tmpdir(), 'lattice-app-pack-'));
 try {
-  for (const entry of ['dist', 'data/banners', 'scripts/postinstall.js', 'README.md', 'LICENSE']) {
+  for (const entry of ['dist', 'data/banners', 'data/fonts', 'scripts/postinstall.js', 'README.md', 'LICENSE']) {
     cpSync(join(root, entry), join(stage, entry), { recursive: true });
   }
   const vendored = join(stage, 'node_modules', HARNESS);

@@ -20,7 +20,7 @@
 
 import { isOpenDecision, type ShownDecision } from './decisions.js';
 import type { HeldReply } from './held-replies.js';
-import { withoutThreadRefs, type ProjectOpenThread } from './project-state.js';
+import { waitWords, withoutThreadRefs, type ProjectOpenThread } from './project-state.js';
 import type { PlayItem } from './state-of-play.js';
 import type { DecisionOptionData } from './decisions.js';
 
@@ -80,9 +80,9 @@ function briefOf(thread: ProjectOpenThread): CallBrief | null {
 }
 
 /** The thread's ask when no card stands for it: its label, else what the decision waits on, else its next step. */
-function threadAsk(thread: ProjectOpenThread): string | null {
+function threadAsk(thread: ProjectOpenThread, open: readonly ProjectOpenThread[]): string | null {
   const ask = thread.label
-    ?? (thread.waitingOn?.kind === 'decision' ? `Waiting on ${thread.waitingOn.text}` : null)
+    ?? (thread.waitingOn?.kind === 'decision' ? `Waiting on ${waitWords(thread.waitingOn, open)}` : null)
     ?? thread.nextAction;
   return ask ? withoutThreadRefs(ask) : null;
 }
@@ -164,7 +164,7 @@ export function deriveCalls(input: {
     add({
       key: `t:${thread.seq}`,
       name: withoutThreadRefs(thread.name ?? thread.text),
-      ask: withCard ? withCard.asked.question : threadAsk(thread),
+      ask: withCard ? withCard.asked.question : threadAsk(thread, open),
       since,
       thread,
       workers: item.workers.length,

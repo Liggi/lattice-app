@@ -194,6 +194,7 @@ export function registerUnifiedConversationControlRoutes(
     threadId: string;
     cwd: string;
     workspace: string;
+    coordinator: boolean;
   } {
     const conversation = conversationService.getConversation(conversationId);
     if (!conversation) {
@@ -215,6 +216,7 @@ export function registerUnifiedConversationControlRoutes(
       threadId,
       cwd: conversation.workingDirectory,
       workspace: conversation.workspace || conversation.workingDirectory,
+      coordinator: conversation.coordinator === true,
     };
   }
 
@@ -255,7 +257,7 @@ export function registerUnifiedConversationControlRoutes(
       }
       throw error;
     }
-    const client = getCodexAppServerClient(resolved.workspace, resolved.cwd);
+    const client = getCodexAppServerClient(resolved.workspace, resolved.cwd, { coordinator: resolved.coordinator });
     const result = await client.getGoal(resolved.threadId);
     res.json(result);
   }));
@@ -290,7 +292,7 @@ export function registerUnifiedConversationControlRoutes(
     }
 
     const resolved = resolveCodexThread(conversationId);
-    const client = getCodexAppServerClient(resolved.workspace, resolved.cwd);
+    const client = getCodexAppServerClient(resolved.workspace, resolved.cwd, { coordinator: resolved.coordinator });
     const result = await client.setGoal({
       threadId: resolved.threadId,
       ...(objective ? { objective } : {}),
@@ -304,7 +306,7 @@ export function registerUnifiedConversationControlRoutes(
   router.post('/:conversationId/goal/pause', asyncHandler(async (req: RequestWithRequestId, res) => {
     const { conversationId } = req.params;
     const resolved = resolveCodexThread(conversationId);
-    const client = getCodexAppServerClient(resolved.workspace, resolved.cwd);
+    const client = getCodexAppServerClient(resolved.workspace, resolved.cwd, { coordinator: resolved.coordinator });
     const result = await client.setGoal({ threadId: resolved.threadId, status: 'paused' });
     appendGoalEvent(conversationId, 'goal:updated', { goal: result.goal });
     res.json(result);
@@ -313,7 +315,7 @@ export function registerUnifiedConversationControlRoutes(
   router.post('/:conversationId/goal/resume', asyncHandler(async (req: RequestWithRequestId, res) => {
     const { conversationId } = req.params;
     const resolved = resolveCodexThread(conversationId);
-    const client = getCodexAppServerClient(resolved.workspace, resolved.cwd);
+    const client = getCodexAppServerClient(resolved.workspace, resolved.cwd, { coordinator: resolved.coordinator });
     const result = await client.setGoal({ threadId: resolved.threadId, status: 'active' });
     appendGoalEvent(conversationId, 'goal:updated', { goal: result.goal });
     res.json(result);
@@ -322,7 +324,7 @@ export function registerUnifiedConversationControlRoutes(
   router.delete('/:conversationId/goal', asyncHandler(async (req: RequestWithRequestId, res) => {
     const { conversationId } = req.params;
     const resolved = resolveCodexThread(conversationId);
-    const client = getCodexAppServerClient(resolved.workspace, resolved.cwd);
+    const client = getCodexAppServerClient(resolved.workspace, resolved.cwd, { coordinator: resolved.coordinator });
     const result = await client.clearGoal(resolved.threadId);
     appendGoalEvent(conversationId, 'goal:cleared', { threadId: resolved.threadId });
     res.json(result);

@@ -14,7 +14,8 @@
  * - Workers: every live worker as its own row, named by its task, under
  *   Running unless a job it reported stands for it.
  *
- * Parking or dismissing a row says so in place, with Undo, for a few seconds.
+ * Parking or dismissing a row says so in place, with Undo, for a few seconds;
+ * after that it is in the backlog row under the list, with Restore.
  * Dismissing a thread parks it as the user's call and stops its workers
  * (`thread-dismissal.ts`); parking keeps it for later and its workers carry on.
  */
@@ -23,7 +24,8 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { WorkerRow } from './WorkersSection';
 import { NarrowPanel } from './NarrowPanel';
 import type { WaitTextContext } from './WaitText';
-import { CallRow, GoneRow, holdReply, threadAction, undoReply, type CallActions } from './YourCalls';
+import { BacklogGroup, CallRow, GoneRow, holdReply, threadAction, undoReply, type CallActions } from './YourCalls';
+import { withoutThreadRefs } from '@/types/project-state';
 import { deriveStateOfPlay } from '@/types/state-of-play';
 import { deriveCalls, type Call } from '@/types/your-calls';
 import type { ProjectState } from '@/types/project-state';
@@ -147,11 +149,26 @@ export function StateOfPlaySection({
     ));
   }
 
+  // Newest parked first; a row parked here a moment ago stays in place with its Undo instead.
+  const backlog = play.parked
+    .filter((item) => !gone.some((entry) => entry.seq === item.thread.seq))
+    .sort((a, b) => (b.thread.parked?.at ?? 0) - (a.thread.parked?.at ?? 0))
+    .map((item) => ({
+      seq: item.thread.seq,
+      name: withoutThreadRefs(item.thread.name ?? item.thread.text),
+      ask: item.thread.label ? withoutThreadRefs(item.thread.label) : null,
+    }));
+  const restoreParked = async (seq: number) => {
+    if (coordinatorId) await threadAction(coordinatorId, seq, 'restore');
+  };
+
   return (
     <NarrowPanel
       coordinatorId={coordinatorId}
       attention={rows}
+      backlog={backlog.length > 0 ? <BacklogGroup items={backlog} onRestore={restoreParked} /> : null}
       workers={play.workers}
+      carrying={play.carrying}
       coordinatorRunning={coordinatorRunning}
       onOpenWorker={onOpenWorker}
       renderWorker={(worker, jobs) => (
@@ -159,6 +176,7 @@ export function StateOfPlaySection({
           key={worker.worker}
           worker={worker}
           jobs={jobs}
+          hold={play.holds.get(worker.worker)}
           coordinatorRunning={coordinatorRunning}
           onOpen={onOpenWorker}
           waitContext={waitContext}

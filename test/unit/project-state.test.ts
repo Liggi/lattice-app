@@ -131,6 +131,16 @@ describe('threads', () => {
     expect(foldProjectState([opened, handed, progress, back]).open[0].ask).toBeUndefined();
   });
 
+  it('dates the wait from a new ask written without changing the wait, and not from the same ask written again', () => {
+    const opened = note('open', 'visits', { owner: { kind: 'user' }, waitingOn: { kind: 'decision', text: 'which scene' }, ask: 'Which scene?' });
+    const again = note('update', 'shown', { ref: opened.seq, ask: 'Which scene?' });
+    expect(foldProjectState([opened, again]).open[0].waitingSince).toBe(opened.timestamp);
+    const next = note('update', 'answered', { ref: opened.seq, ask: 'Which gets built first?' });
+    const [thread] = foldProjectState([opened, again, next]).open;
+    expect(thread.waitingSince).toBe(next.timestamp);
+    expect(thread.ask).toBe('Which gets built first?');
+  });
+
   it('leaves a thread written before ownership was recorded without an owner, rather than guessing one from its words', () => {
     const [thread] = foldProjectState([note('open', 'front checks whether the live fixes cover the mobile case')]).open;
     expect(thread.owner).toBeNull();
@@ -391,6 +401,28 @@ describe('parking and staleness', () => {
     expect(back.open[0].parked).toBeUndefined();
     expect(back.open[0].waitingOn?.text).toBe('Alex reopening it');
     expect(renderProjectState(back)).toContain('Open threads:\n- [1] measure search quality');
+  });
+
+  it('brings back a decayed ask only on a new ask, and restarts its wait when unparked', () => {
+    const thread = note('open', 'place names', { owner: { kind: 'user' }, waitingOn: { kind: 'decision', text: 'rebuild or skip' }, ask: 'Rebuild them?' });
+    const decayed = note('park', 'No answer for 3 hours', { ref: thread.seq, decayed: true });
+    const state = foldProjectState([thread, decayed]);
+    expect(state.open[0].parked?.decayed).toBe(true);
+    expect(renderProjectState(state)).toContain('(a new --ask brings it back, only if the work is blocked on it)');
+
+    // A note that moves only the summary leaves it in the backlog; a new ask brings it back.
+    expect(foldProjectState([thread, decayed, note('update', 'still deciding', { ref: thread.seq })]).open[0].parked?.decayed).toBe(true);
+    const again = note('update', 'blocked on it', { ref: thread.seq, ask: 'Rebuild them? The playset waits on it.' });
+    const back = foldProjectState([thread, decayed, again]);
+    expect(back.open[0].parked).toBeUndefined();
+    expect(back.open[0].waitingSince).toBe(again.timestamp);
+
+    // A park the coordinator chose does not come back on an ask.
+    const chosen = note('park', 'after the game', { ref: thread.seq });
+    expect(foldProjectState([thread, chosen, note('update', 'x', { ref: thread.seq, ask: 'Now?' })]).open[0].parked).toBeDefined();
+
+    const restored = note('unpark', 'brought back', { ref: thread.seq, by: 'user' });
+    expect(foldProjectState([thread, decayed, restored]).open[0].waitingSince).toBe(restored.timestamp);
   });
 
   it('ages threads and the priority only when given a clock', () => {

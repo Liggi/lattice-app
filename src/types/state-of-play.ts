@@ -14,7 +14,16 @@
  *                on (2026-09-28, Jason picked a list of its own over folding
  *                workers into the threads: a worker sent on to new work while
  *                its thread waited on him showed nowhere). A thread a live
- *                worker carries is not listed again; the worker stands for it.
+ *                worker carries is not listed again; the worker stands for it,
+ *                and what the thread is held on travels with the worker
+ *                (`holds`), so a worker that has reported still shows the
+ *                wait (2026-10-12, thread 41380: the frustration pilot,
+ *                waiting overnight on a model-call allowance, showed nowhere).
+ *                A worker stays listed while any open thread it carries is
+ *                (`carrying`), as the auto-archive keeps it, including one
+ *                waiting on the user, so its row is still the way into it
+ *                (2026-10-13: four reported workers whose threads waited on
+ *                Jason's decision showed nowhere, and he had no way in).
  *   In progress  nobody on it, and it waits on something outside the project
  *                (a worker, a dependency, a resource, someone else as owner).
  *   Next         the rest: open, not the user's, nobody on it, not waiting.
@@ -26,7 +35,7 @@
  * Parked threads are listed apart, and their order is the order they opened.
  */
 
-import type { ProjectOpenThread, ProjectState } from './project-state.js';
+import { waitWords, type ProjectOpenThread, type ProjectState } from './project-state.js';
 import type { WorkerCardState } from './worker-events.js';
 
 export interface PlayItem {
@@ -45,6 +54,10 @@ export interface StateOfPlay {
   needsYou: PlayItem[];
   /** Live workers, in dispatch order. */
   workers: WorkerCardState[];
+  /** What the open thread a live worker carries is held on, by worker: "you" when it is the user's move. */
+  holds: Map<string, string>;
+  /** Live workers carrying an open thread, which keep their row after they report. */
+  carrying: Set<string>;
   inProgress: PlayItem[];
   next: PlayItem[];
   parked: PlayItem[];
@@ -80,14 +93,26 @@ export function threadOfWorker(worker: Pick<WorkerCardState, 'worker' | 'thread'
 }
 
 /** What a thread that is not the user's move is held on, if anything. */
-function heldOn(thread: ProjectOpenThread): string | null {
-  if (thread.waitingOn) return thread.waitingOn.text;
+function heldOn(thread: ProjectOpenThread, threads: readonly ProjectOpenThread[]): string | null {
+  if (thread.waitingOn) return waitWords(thread.waitingOn, threads);
   if (thread.owner?.kind === 'external') return thread.owner.who;
   return null;
 }
 
+/** Whether the worker carries the thread, by the rule the auto-archive keeps it by (`worker-auto-archive.ts`). */
+function carries(thread: ProjectOpenThread, worker: Pick<WorkerCardState, 'worker' | 'thread' | 'movedOn'>): boolean {
+  return thread.seq === worker.thread || (!worker.movedOn && (thread.workers.includes(worker.worker)
+    || (thread.owner?.kind === 'worker' && thread.owner.worker === worker.worker)));
+}
+
+/** Whether the thread waits on this worker itself, which is the worker's move rather than a hold. */
+function waitsOn(thread: ProjectOpenThread, worker: string): boolean {
+  return thread.waitingOn?.kind === 'worker' && thread.waitingOn.worker === worker;
+}
+
 export function deriveStateOfPlay(project: ProjectState, workers: readonly WorkerCardState[]): StateOfPlay {
   const open = project.open.filter((thread) => !thread.parked);
+  const everyThread = [...project.open, ...project.closed];
   const parkedSeqs = new Set(project.open.filter((thread) => thread.parked).map((thread) => thread.seq));
 
   const onThread = new Map<number, WorkerCardState[]>();
@@ -108,7 +133,9 @@ export function deriveStateOfPlay(project: ProjectState, workers: readonly Worke
   };
   const inOrder = [...open].sort((a, b) => position(a.seq) - position(b.seq) || a.seq - b.seq);
 
-  const play: StateOfPlay = { needsYou: [], workers: live, inProgress: [], next: [], parked: [] };
+  const play: StateOfPlay = { needsYou: [], workers: live, holds: new Map(),
+    carrying: new Set(live.filter((worker) => open.some((thread) => carries(thread, worker))).map((worker) => worker.worker)),
+    inProgress: [], next: [], parked: [] };
   for (const thread of inOrder) {
     const needsYou = isNeedsYou(thread);
     const item: PlayItem = {
@@ -116,10 +143,16 @@ export function deriveStateOfPlay(project: ProjectState, workers: readonly Worke
       thread,
       label: thread.label ?? thread.text,
       workers: onThread.get(thread.seq) ?? [],
-      heldOn: needsYou ? null : heldOn(thread),
+      heldOn: needsYou ? null : heldOn(thread, everyThread),
     };
-    if (needsYou) play.needsYou.push(item);
-    else if (item.workers.length > 0) continue;
+    if (needsYou) {
+      play.needsYou.push(item);
+      for (const worker of item.workers) play.holds.set(worker.worker, 'you');
+    } else if (item.workers.length > 0) {
+      for (const worker of item.workers) {
+        if (item.heldOn && !waitsOn(thread, worker.worker)) play.holds.set(worker.worker, item.heldOn);
+      }
+    }
     else if (item.heldOn) play.inProgress.push(item);
     else play.next.push(item);
   }

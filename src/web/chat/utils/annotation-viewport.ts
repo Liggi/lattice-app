@@ -51,26 +51,36 @@ export function shouldDockAnnotationUi(pointerCoarse: boolean, viewportWidth: nu
   return pointerCoarse || viewportWidth < 640;
 }
 
+/** Where the touch selection bar goes: exactly over the composer, or floating centred above the keyboard. */
+export type DockedBarPlacement =
+  | { over: true; top: number; left: number; width: number; height: number }
+  | { over: false; bottom: number };
+
 /**
- * `bottom` for the floating "Add note" pill on touch: clear of the composer
- * dock, and clear of the software keyboard if one happens to be open.
+ * Placement for the touch selection bar. It covers the composer card exactly,
+ * so it never covers the transcript's last lines, which is where the bottom of
+ * a message being selected sits; typing is not possible mid-selection, so
+ * hiding the composer costs nothing. With a software keyboard open, or no
+ * composer to measure, it floats centred just above the keyboard instead.
  *
- * `dockTop` is the composer dock's top edge in viewport coordinates. The
- * distance from there down to the bottom of the viewport already includes the
- * dock's own padding and safe-area inset, so no separate safe-area term is
- * needed. When the dock cannot be measured, the keyboard inset alone is used.
+ * `composer` is the composer card's box in viewport coordinates.
  */
-export function computeDockedPillBottom(
-  layoutHeight: number,
-  dockTop: number | null,
+export function computeDockedBarPlacement(
+  composer: { top: number; bottom: number; left: number; right: number } | null,
   keyboardInset: number,
   gap = 8,
-): number {
-  const aboveDock = dockTop === null || !Number.isFinite(dockTop)
-    ? 0
-    : Math.max(0, layoutHeight - dockTop);
+): DockedBarPlacement {
   const safeInset = Number.isFinite(keyboardInset) ? Math.max(0, keyboardInset) : 0;
-  const base = Math.max(aboveDock, safeInset);
-  if (!Number.isFinite(base)) return gap;
-  return Math.round(base + gap);
+  const measured = composer !== null
+    && [composer.top, composer.bottom, composer.left, composer.right].every(Number.isFinite)
+    && composer.bottom > composer.top
+    && composer.right > composer.left;
+  if (!measured || safeInset > 0) return { over: false, bottom: Math.round(safeInset + gap) };
+  return {
+    over: true,
+    top: Math.round(composer.top),
+    left: Math.round(composer.left),
+    width: Math.round(composer.right - composer.left),
+    height: Math.round(composer.bottom - composer.top),
+  };
 }

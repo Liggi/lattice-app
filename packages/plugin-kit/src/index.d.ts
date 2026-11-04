@@ -44,6 +44,16 @@ export interface LatticePluginCommandInput {
   text: string;
 }
 
+/** A skill Lattice gives the agents in its sessions, so they know when and how to use a plugin's commands. */
+export interface LatticePluginSkill {
+  /** Lowercase letters, digits and dashes; agents see it as `lattice:<name>` in Claude, `lattice-<name>` in Codex. */
+  name: string;
+  /** When an agent should use it, as a skill's description says it. */
+  description: string;
+  /** The instructions, in markdown. Name commands as `${host.cli} plugin <id> <name>`. */
+  body: string;
+}
+
 export interface LatticeConfirmOption {
   label: string;
   /** What choosing it sets in motion, in one line. */
@@ -82,6 +92,14 @@ export interface LatticePluginHost {
    * Agents' shells do not have `lattice` on PATH.
    */
   readonly cli: string;
+  /**
+   * Gives every Claude and Codex session Lattice starts a skill, beside the
+   * ones Lattice ships. Call it from `activate`: skills are written once the
+   * server has loaded its plugins, and a session reads them when it starts.
+   * Keep anything that changes while Lattice runs out of the body, and have
+   * the agent ask a command for it instead.
+   */
+  skill(skill: LatticePluginSkill): void;
   sessions: {
     /**
      * Starts a new conversation whose first message is `message`, on the

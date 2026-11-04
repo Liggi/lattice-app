@@ -479,6 +479,9 @@ export class ConfigService {
           throw new LatticeError('INVALID_CONFIG', `Each endpoint needs a ${field}`, 400);
         }
       }
+      if (endpoint.name !== undefined && typeof endpoint.name !== 'string') {
+        throw new LatticeError('INVALID_CONFIG', 'An endpoint name must be a string', 400);
+      }
       if (endpoint.apiKey !== undefined && typeof endpoint.apiKey !== 'string') {
         throw new LatticeError('INVALID_CONFIG', 'An endpoint key must be a string', 400);
       }
@@ -489,6 +492,12 @@ export class ConfigService {
       }
       if (endpoint.protocol !== undefined && endpoint.protocol !== 'anthropic' && endpoint.protocol !== 'openai') {
         throw new LatticeError('INVALID_CONFIG', 'An endpoint speaks the anthropic or openai API', 400);
+      }
+      if (endpoint.authScheme !== undefined && endpoint.authScheme !== 'bearer' && endpoint.authScheme !== 'x-api-key') {
+        throw new LatticeError('INVALID_CONFIG', 'An endpoint sends its key as bearer or x-api-key', 400);
+      }
+      if (endpoint.readsImages !== undefined && typeof endpoint.readsImages !== 'boolean') {
+        throw new LatticeError('INVALID_CONFIG', 'Whether an endpoint reads images is true or false', 400);
       }
       // An OpenAI-compatible endpoint never appears in the session picker, so its model needs no unique name.
       if (endpoint.protocol === 'openai') continue;

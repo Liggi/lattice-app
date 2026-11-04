@@ -49,7 +49,7 @@ import {
   type ImmediateDeliveryResult,
 } from '../services/sessions/immediate-delivery.js';
 import { agentReact, reactToMessage } from '../services/sessions/message-reactions.js';
-import { answerDecision, askDecision, DecisionError, dismissDecision, settleOpenDecision } from '../services/sessions/decisions.js';
+import { answerDecision, askDecision, DecisionError, dismissDecision, settleOpenDecision, withdrawDecision } from '../services/sessions/decisions.js';
 import { askExplain, checkExplain, disputeIdea, ExplainError, explainTimeline, finishExplain, noteHintOpened, type ExplainRubric } from '../services/sessions/explain-back.js';
 import { isFromLatticePage } from '../middleware/trusted-origin.js';
 import { isSingleEmoji } from '../types/message-reactions.js';
@@ -803,7 +803,7 @@ export function createHarnessRoutes(sessionManager: SessionManager, resolvers: H
 
       if (!inboxIds && (userInboxId !== undefined
         || (provider === 'codex' && delivery === 'after-turn')
-        || hasUnreadInboxItems(sessionId))) {
+        || hasUnreadInboxItems(sessionId, { includeRideAlong: true }))) {
         const inboxId = userInboxId ?? enqueueInboxItem({
           sessionId,
           source: 'user',
@@ -1018,6 +1018,27 @@ export function createHarnessRoutes(sessionManager: SessionManager, resolvers: H
     try {
       const asked = askDecision(sessionId, body.question, options.map((o) => ({ label: o.label as string, consequence: o.consequence as string, recommended: o.recommended === true })), body.thread as number | undefined);
       res.json(asked);
+    } catch (err) {
+      if (!(err instanceof DecisionError)) throw err;
+      res.status(err.status).json({ error: err.message });
+    }
+  }));
+
+  // The agent taking down its own open question, settled some other way
+  // (`lattice ask --withdraw`). Unlike a dismissal, nothing goes back to it.
+  router.post('/:sessionId/decisions/withdraw', asyncHandler(async (req, res) => {
+    const { sessionId } = req.params;
+    const body = (req.body ?? {}) as { thread?: unknown; reason?: unknown };
+    if (body.thread !== undefined && !Number.isInteger(body.thread)) {
+      res.status(400).json({ error: 'thread is the id of the project thread the question is about' });
+      return;
+    }
+    if (body.reason !== undefined && typeof body.reason !== 'string') {
+      res.status(400).json({ error: 'reason is one line saying how the question was settled' });
+      return;
+    }
+    try {
+      res.json(withdrawDecision(sessionId, { thread: body.thread as number | undefined, reason: body.reason as string | undefined }));
     } catch (err) {
       if (!(err instanceof DecisionError)) throw err;
       res.status(err.status).json({ error: err.message });

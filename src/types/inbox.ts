@@ -57,10 +57,16 @@ import { INPUT_DELIVERED_EVENT, type InputDeliveredData } from './immediate-deli
  * `dismissal`: the user dismissed one of a coordinator's threads from the
  * panel, or brought one back (see `thread-dismissal.ts`), as one attributed
  * line; the thread shows it from the park note, not from this item.
+ * `side-question`: what the user chose to add to the thread from a side chat
+ * about a passage (side-questions.ts). Context, not a request: it never
+ * starts a turn of its own and goes with whatever the session reads next.
  * Logs from before 2026-09-26 may also hold `quick-answer` items from a
  * removed feature; the thread skips them like any source it does not show.
  */
-export type InboxSource = 'user' | 'agent' | 'worker-report' | 'worker-question' | 'coordination-review' | 'reaction' | 'worker-stopped' | 'worker-permission' | 'decision' | 'explain' | 'dismissal';
+export type InboxSource = 'user' | 'agent' | 'worker-report' | 'worker-question' | 'coordination-review' | 'reaction' | 'worker-stopped' | 'worker-permission' | 'decision' | 'explain' | 'dismissal' | 'side-question';
+
+/** Sources that wait for the next delivery rather than starting a turn. */
+export const RIDE_ALONG_SOURCES: readonly InboxSource[] = ['side-question'];
 
 export const INBOX_QUEUED_EVENT = 'input:queued';
 export const INBOX_READ_EVENT = 'input:read';
@@ -87,6 +93,13 @@ export interface InboxQueuedData {
   sourceSeq?: number;
   /** The sender asked for it to wait for the running turn to end (`send --after-turn`). */
   afterTurn?: boolean;
+  /** For `side-question`: what the thread shows, the passage and each question with its short answer. */
+  sideQuestion?: SideQuestionSummary;
+}
+
+export interface SideQuestionSummary {
+  passage: string;
+  exchanges: Array<{ question: string; answer: string }>;
 }
 
 export interface InboxReadData {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  computeDockedPillBottom,
+  computeDockedBarPlacement,
   computeKeyboardInset,
   shouldDockAnnotationUi,
 } from '../../src/web/chat/utils/annotation-viewport.js';
@@ -44,35 +44,25 @@ describe('computeKeyboardInset', () => {
   });
 });
 
-describe('computeDockedPillBottom', () => {
-  it('clears the composer dock', () => {
-    // Dock top at 700 in an 800px viewport → 100px of dock below it, + 8 gap.
-    expect(computeDockedPillBottom(800, 700, 0)).toBe(108);
+describe('computeDockedBarPlacement', () => {
+  const card = { top: 700, bottom: 790, left: 16, right: 374 };
+
+  it('covers the composer card exactly', () => {
+    expect(computeDockedBarPlacement(card, 0)).toEqual({ over: true, top: 700, left: 16, width: 358, height: 90 });
   });
 
-  it('falls back to the keyboard inset when the dock cannot be measured', () => {
-    expect(computeDockedPillBottom(800, null, 300)).toBe(308);
-    expect(computeDockedPillBottom(800, null, 0)).toBe(8);
+  it('floats above an open keyboard instead', () => {
+    expect(computeDockedBarPlacement(card, 300)).toEqual({ over: false, bottom: 308 });
   });
 
-  it('takes whichever of the dock and the keyboard is higher', () => {
-    // Keyboard taller than the dock offset.
-    expect(computeDockedPillBottom(800, 700, 300)).toBe(308);
-    // Dock offset taller than the keyboard.
-    expect(computeDockedPillBottom(800, 500, 100)).toBe(308);
+  it('floats above the bottom edge when the composer cannot be measured', () => {
+    expect(computeDockedBarPlacement(null, 0)).toEqual({ over: false, bottom: 8 });
+    expect(computeDockedBarPlacement({ ...card, top: Number.NaN }, 0)).toEqual({ over: false, bottom: 8 });
+    expect(computeDockedBarPlacement({ ...card, bottom: 700 }, 0)).toEqual({ over: false, bottom: 8 });
   });
 
-  it('ignores a dock measured below the viewport bottom', () => {
-    expect(computeDockedPillBottom(800, 900, 0)).toBe(8);
-  });
-
-  it('ignores non-finite inputs rather than producing NaN styles', () => {
-    expect(computeDockedPillBottom(800, Number.NaN, 0)).toBe(8);
-    expect(computeDockedPillBottom(800, 700, Number.NaN)).toBe(108);
-  });
-
-  it('honours a custom gap', () => {
-    expect(computeDockedPillBottom(800, 700, 0, 20)).toBe(120);
+  it('ignores a non-finite keyboard inset rather than producing NaN styles', () => {
+    expect(computeDockedBarPlacement(card, Number.NaN)).toEqual({ over: true, top: 700, left: 16, width: 358, height: 90 });
   });
 });
 

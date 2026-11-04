@@ -53,7 +53,7 @@ export const ANNOTATION_ICON_BUTTON =
   + 'transition-colors duration-100 cursor-pointer select-none';
 
 /**
- * The phone's selection toolbar: one solid panel docked above the composer,
+ * The phone's selection toolbar: one solid panel covering the composer,
  * a step above the page so it stands off the cards it floats over.
  */
 export const ANNOTATION_TOOLBAR =

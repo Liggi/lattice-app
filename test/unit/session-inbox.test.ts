@@ -20,7 +20,7 @@ import { CONFIG_DIR_NAME } from '../../src/utils/constants.js';
 import { ConversationService } from '../../src/services/sessions/conversation-service.js';
 import { createHarnessRoutes } from '../../src/harness/routes.js';
 import { foldInbox } from '../../src/types/inbox.js';
-import { placeWaitingMessages } from '../../src/web/chat/hooks/useHarnessSession.js';
+import { eventsToRenderItems, placeWaitingMessages } from '../../src/web/chat/hooks/useHarnessSession.js';
 import { __resetTurnAdmissionForTests, admitTurn } from '../../src/services/sessions/turn-admission.js';
 
 const inspect = vi.fn<() => { processAlive: boolean; status: string; resumeId: string | null; runId?: string } | null>(() => null);
@@ -292,6 +292,35 @@ describe('foldInbox', () => {
     const placed = placeWaitingMessages(events, foldInbox(events));
     expect(placed.pending).toEqual([]);
     expect(placed.consumed.map((c) => [c.inputEvent.seq, c.consumedByEvent.seq])).toEqual([[queued.seq, read.seq]]);
+  });
+
+  it('shows a message read mid-turn or still waiting without the server note in front of it', () => {
+    const note = '[From the server: The project record has moved since you last saw it.]\n\nOutcome: …\n\n[End of server note]\n';
+    const userBubbles = (events: SessionEvent[]) => {
+      const fold = foldInbox(events);
+      const { pending, consumed } = placeWaitingMessages(events, fold);
+      const { renderItems } = eventsToRenderItems(events, false, new Map(), pending, consumed, fold.hiddenInputSeqs);
+      const shown = renderItems.flatMap((r) => (r.kind === 'message' && r.message.type === 'user' ? [r.message.content] : []));
+      return { pending: pending.map((p) => p.text), shown };
+    };
+
+    // A Claude message on stdin mid-turn, placed where the turn next thinks.
+    const stdin = [
+      ev('run:start', {}),
+      ev('content', { blocks: [{ type: 'tool_use', id: 't', name: 'Bash', input: {} }] }),
+      ev('input:sent', { text: `${note}look in the knowledge base` }),
+    ];
+    expect(userBubbles(stdin).pending).toEqual(['look in the knowledge base']);
+    stdin.push(ev('content', { blocks: [{ type: 'thinking', thinking: 'ok' }] }));
+    expect(userBubbles(stdin).shown).toEqual(['look in the knowledge base']);
+
+    // An inbox item, while it waits and once the session has read it.
+    const queued = ev('input:queued', { id: 'n', source: 'user', text: `${note}use PEACH` });
+    const inbox = [queued];
+    expect(userBubbles(inbox).pending).toEqual(['use PEACH']);
+    const carried = ev('input:sent', { text: `${note}use PEACH` });
+    inbox.push(carried, ev('input:read', { ids: ['n'], sentSeq: carried.seq }));
+    expect(userBubbles(inbox).shown).toEqual(['use PEACH']);
   });
 
   it('hides the carrying input of a delivery recorded before it named one', () => {

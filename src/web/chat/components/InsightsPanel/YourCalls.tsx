@@ -12,10 +12,14 @@
  * Park and Dismiss are on hover on a desktop (icons in place of the age) and
  * on a swipe left on a phone (the text wraps to make room); both end in the
  * panel's parked/dismissed row with Undo.
+ *
+ * Parked threads, including asks left unanswered for three hours
+ * (`ask-decay-watch.ts`), fold under one quiet backlog row at the end of the
+ * list, as the sidebar folds its Sleeping sessions; each can be restored.
  */
 
 import React, { useEffect, useRef, useState } from 'react';
-import { BookOpen, CheckCircle2, ChevronLeft, Clock3, Pencil, Undo2, X } from 'lucide-react';
+import { Archive, BookOpen, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, Clock3, Pencil, Undo2, X } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { remarkSlackBullets } from '../../utils/slack-bullets';
@@ -243,7 +247,7 @@ function OpenableRow({ call, now, open, onToggle, actions }: {
         <div className="fixed inset-0 z-[60] flex flex-col bg-bg md:hidden" style={{ paddingTop: 'env(safe-area-inset-top)', paddingBottom: 'env(safe-area-inset-bottom)' }}>
           <div className="flex shrink-0 items-center border-b border-line px-2 py-2">
             <button type="button" onClick={onToggle} className="flex items-center gap-1 rounded-md px-2 py-1.5 text-[13px] font-medium text-fg-2 hover:text-fg">
-              <ChevronLeft size={18} aria-hidden /> Your calls
+              <ChevronLeft size={18} aria-hidden /> Waiting on you
             </button>
           </div>
           <div className="flex-1 overflow-y-auto">
@@ -511,6 +515,66 @@ export function GoneRow({ name, word, error, onUndo }: { name: string; word: str
           </button>
         </>
       )}
+    </div>
+  );
+}
+
+/** One parked thread in the backlog: its name, its last ask under it, and Restore. */
+export interface BacklogItem {
+  seq: number;
+  name: string;
+  ask: string | null;
+}
+
+/** The project's parked threads, folded under one quiet row; Restore puts one back on the list, fresh. */
+export function BacklogGroup({ items, onRestore }: { items: BacklogItem[]; onRestore: (seq: number) => Promise<void> }): JSX.Element {
+  const [open, setOpen] = useState(false);
+  const [restoring, setRestoring] = useState<number | null>(null);
+  const [error, setError] = useState<{ seq: number; message: string } | null>(null);
+  const Chevron = open ? ChevronDown : ChevronRight;
+  const restore = async (seq: number) => {
+    setRestoring(seq);
+    setError(null);
+    try {
+      await onRestore(seq);
+    } catch (err) {
+      setError({ seq, message: err instanceof Error ? err.message : String(err) });
+    } finally {
+      setRestoring(null);
+    }
+  };
+  return (
+    <div data-testid="calls-backlog" className={`flex flex-col gap-1 rounded-sm not-first:mt-1 ${open ? 'bg-surface-2/50 pb-1' : ''}`}>
+      <button
+        type="button"
+        onClick={() => setOpen((was) => !was)}
+        aria-expanded={open}
+        className={`flex w-full items-center gap-2.5 rounded-sm px-2 py-1 text-left text-[12px] hover:text-fg-2 ${open ? 'text-fg-2' : 'text-fg-3/70 hover:bg-surface-2'}`}
+      >
+        <span className="flex w-7 shrink-0 justify-center"><Archive size={13} strokeWidth={1.75} /></span>
+        <span>{items.length} in backlog</span>
+        <Chevron size={11} className="-ml-1.5 opacity-60" />
+      </button>
+      {open && items.map((item) => (
+        <div key={item.seq} data-testid="backlog-item" className="flex items-start gap-2.5 px-2 py-1.5 text-[12.5px]">
+          <span className="w-7 shrink-0" />
+          <span className="min-w-0 flex-1 break-words">
+            <span className="block text-fg-2">{item.name}</span>
+            {error?.seq === item.seq
+              ? <span className="block text-rose-400">Could not restore it: {error.message}</span>
+              : item.ask && <span className="block text-fg-3">{item.ask}</span>}
+          </span>
+          <button
+            type="button"
+            data-testid="backlog-restore"
+            disabled={restoring !== null}
+            onClick={() => void restore(item.seq)}
+            className="flex shrink-0 items-center gap-1 font-medium text-fg-3 transition-colors hover:text-accent disabled:opacity-50"
+          >
+            <Undo2 size={12} aria-hidden /> {restoring === item.seq ? 'Restoring' : 'Restore'}
+          </button>
+        </div>
+      ))}
     </div>
   );
 }

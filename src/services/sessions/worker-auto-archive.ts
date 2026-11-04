@@ -4,9 +4,8 @@
  *
  * Coordinators archive workers by hand (`session archive`), and sending an
  * archived worker more work un-archives it so its card is back while it runs.
- * Nothing archived it again after that, and workers kept visible while their
- * thread waited on the user were never archived at all: one project was
- * found with 8 finished workers still on its panel.
+ * Nothing archived it again after that: one project was found with 8
+ * finished workers still on its panel.
  *
  * A worker is archived here when it is not running, holds nothing that will
  * wake it and has nothing queued, its latest report or question is not still
@@ -14,8 +13,14 @@
  *
  * - every thread it was carrying is closed, or
  * - it last reported, its coordinator has dealt with that report (an
- *   `--addresses` on a note, or closing the thread), and the report was not
- *   a `Waiting on:` one.
+ *   `--addresses` on a note, or closing the thread), the report was not a
+ *   `Waiting on:` one, and no open thread names it as owner or as what the
+ *   thread waits on.
+ *
+ * The owner stays because the thread's next step is its own. Other workers on
+ * an open thread go once dealt with: CK3's Event review, which keeps taking
+ * new jobs and never closes, listed six workers of which five were finished
+ * (2026-10-17). A worker that still has a step of its own says `Waiting on:`.
  *
  * Archiving is reversible and loses nothing: the next `session send` to the
  * worker brings its card back (`reopenArchivedWorker`).
@@ -68,8 +73,10 @@ export function archiveReason(state: WorkerState, facts: WorkerFacts, project: P
   const threads = [...project.open, ...project.closed].filter((thread) => thread.seq === state.thread
     || (!state.movedOn && (thread.workers.includes(state.worker)
       || (thread.owner?.kind === 'worker' && thread.owner.worker === state.worker))));
-  const openThreads = threads.filter((thread) => thread.closedAt === undefined);
-  if (threads.length > 0 && openThreads.length === 0) return 'threads-closed';
+  if (threads.length > 0 && threads.every((thread) => thread.closedAt !== undefined)) return 'threads-closed';
+  const named = project.open.some((thread) => (thread.owner?.kind === 'worker' && thread.owner.worker === state.worker)
+    || (thread.waitingOn?.kind === 'worker' && thread.waitingOn.worker === state.worker));
+  if (named) return null;
   if (state.phase === 'reported' && facts.latestEventSeq !== null && !state.waitingOn) return 'report-dealt-with';
   return null;
 }

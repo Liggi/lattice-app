@@ -12,6 +12,7 @@ import { ChangelogPage } from './components/Changelog/ChangelogPage';
 import { CollapsedGroupLab } from './components/CollapsedGroupCard/CollapsedGroupLab';
 import { QueuedMessagesLab } from './components/ConversationView/QueuedMessagesLab';
 import { AnnotatedMessageLab } from './components/MessageList/AnnotatedMessageLab';
+import { GalleryLab } from './components/MessageList/GalleryLab';
 import { MapIndexPage } from './components/LearningMap/MapIndexPage';
 import { MapCanvasPage } from './components/LearningMap/MapCanvasPage';
 import { FeedbackInboxPage } from './components/Feedback/FeedbackInboxPage';
@@ -26,6 +27,8 @@ import { ToastProvider } from './components/Toast/Toast';
 import { TooltipProvider } from './components/ui/tooltip';
 import { AttentionFaviconController } from './hooks/useAttentionFavicon';
 import { useSessionTabNavigation } from './hooks/useSessionTabNavigation';
+import { useSidebarLists } from './hooks/useSidebarLists';
+import { sidebarOrderedIds } from './utils/sidebar-ordering';
 import { useSessionsSidebarState } from './hooks/useSessionsSidebarState';
 import './styles/global.css';
 
@@ -116,10 +119,13 @@ function ConversationViewWrapper(): JSX.Element {
   );
 }
 
-// Redirect from / to the first session, or show empty state with sidebar
+// Redirect from / to the sidebar's top row, or show empty state with sidebar.
+// The top row, not the newest conversation: coordinators dispatch workers all
+// the time, so the newest was usually a worker the sidebar does not even list.
 function HomeRedirect(): JSX.Element {
   const navigate = useNavigate();
   const { conversations, loading } = useConversations();
+  const sidebarLists = useSidebarLists();
 
   useSessionTabNavigation(undefined);
 
@@ -128,18 +134,12 @@ function HomeRedirect(): JSX.Element {
   useEffect(() => {
     if (loading) return;
 
-    const activeSessions = conversations
-      .filter(c => (
-        !c.archived
-        && c.status !== 'pending'
-        && c.conversationId.startsWith('conv-')
-      ))
-      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-
-    if (activeSessions.length > 0) {
-      void navigate(`/c/${activeSessions[0].conversationId}`, { replace: true });
+    const pending = new Set(conversations.filter(c => c.status === 'pending').map(c => c.conversationId));
+    const first = sidebarOrderedIds(sidebarLists).find(id => id.startsWith('conv-') && !pending.has(id));
+    if (first) {
+      void navigate(`/c/${first}`, { replace: true });
     }
-  }, [conversations, loading, navigate]);
+  }, [conversations, sidebarLists, loading, navigate]);
 
   if (loading) {
     return (
@@ -281,6 +281,9 @@ function ChatApp(): JSX.Element {
                       } />
                       <Route path="/lab/annotated-message" element={
                         <AnnotatedMessageLab />
+                      } />
+                      <Route path="/lab/gallery" element={
+                        <GalleryLab />
                       } />
                       {/* Learning map */}
                       <Route path="/map" element={

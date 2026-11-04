@@ -381,7 +381,8 @@ export class ConversationService {
       `),
 
       // Most recently archived first; rows archived before archived_at existed
-      // follow, by last activity.
+      // follow, by last activity. A session created hidden (a fixture, a side
+      // chat) was never in the user's list, so it is not in the archive either.
       listArchivedConversations: this.db.prepare(`
         SELECT c.*, s.archived_at, (
           SELECT MAX(e.timestamp) FROM harness_events e
@@ -389,7 +390,7 @@ export class ConversationService {
         ) AS last_event_ms
         FROM conversations c
         JOIN sessions s ON s.session_id = c.conversation_id
-        WHERE s.archived = 1
+        WHERE s.archived = 1 AND COALESCE(s.created_hidden, 0) = 0
         ORDER BY s.archived_at IS NULL, s.archived_at DESC,
                  COALESCE(last_event_ms, CAST(strftime('%s', c.updated_at) AS INTEGER) * 1000) DESC
         LIMIT ? OFFSET ?
@@ -398,7 +399,7 @@ export class ConversationService {
       countArchivedConversations: this.db.prepare(`
         SELECT COUNT(*) as count FROM conversations c
         JOIN sessions s ON s.session_id = c.conversation_id
-        WHERE s.archived = 1
+        WHERE s.archived = 1 AND COALESCE(s.created_hidden, 0) = 0
       `),
 
       countNonArchivedConversations: this.db.prepare(`

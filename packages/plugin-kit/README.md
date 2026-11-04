@@ -51,6 +51,12 @@ session named `title`. Write a command into an agent's instructions as
 `${host.cli} plugin my-plugin draft`: agents' shells do not have `lattice` on
 PATH.
 
+Agents in other sessions learn about a command from a skill:
+`host.skill({ name, description, body })` in `activate` gives every Claude
+and Codex session Lattice starts a skill (`lattice:<name>` in Claude), written
+when the server starts. Keep anything that changes while Lattice runs out of
+the body, and have the agent ask a command for it.
+
 ## Web
 
 ```tsx

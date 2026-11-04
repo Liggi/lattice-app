@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect, useSyncExternalStore } from 'react';
 import type { LargeTextFileUpload } from '../components/Composer/types.js';
 
 // ── Supported file types ──
@@ -150,12 +150,45 @@ function fileToText(file: File): Promise<string> {
   });
 }
 
+// ── Pending attachments, by draft ──
+// Held outside the component so a composer that unmounts (the host switching
+// sessions) finds its attachments again when it mounts with the same key, and
+// a file still being read when it unmounts lands in the right draft.
+
+const EMPTY: Attachment[] = [];
+const pendingByDraft = new Map<string, Attachment[]>();
+const pendingListeners = new Set<() => void>();
+
+function updatePending(key: string, update: (prev: Attachment[]) => Attachment[]): void {
+  const next = update(pendingByDraft.get(key) ?? EMPTY);
+  if (next.length > 0) pendingByDraft.set(key, next);
+  else pendingByDraft.delete(key);
+  pendingListeners.forEach((listener) => listener());
+}
+
+function subscribePending(listener: () => void): () => void {
+  pendingListeners.add(listener);
+  return () => pendingListeners.delete(listener);
+}
+
 // ── Hook ──
 
 const megabytes = (bytes: number) => `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
 
-export function useAttachments(largeTextFiles?: LargeTextFileUpload): UseAttachmentsReturn {
-  const [attachments, setAttachments] = useState<Attachment[]>([]);
+/**
+ * `draftKey` names the draft the attachments belong to; attachments added
+ * under a key are still there when a composer next uses it. Without one they
+ * last as long as the component.
+ */
+export function useAttachments(largeTextFiles?: LargeTextFileUpload, draftKey?: string): UseAttachmentsReturn {
+  const [ownKey] = useState(generateId);
+  const key = draftKey ?? ownKey;
+  useEffect(() => (draftKey ? undefined : () => updatePending(ownKey, () => EMPTY)), [draftKey, ownKey]);
+  const attachments = useSyncExternalStore(subscribePending, () => pendingByDraft.get(key) ?? EMPTY);
+  const setAttachments = useCallback(
+    (update: (prev: Attachment[]) => Attachment[]) => updatePending(key, update),
+    [key],
+  );
   const [error, setError] = useState<string | null>(null);
 
   const addFiles = useCallback(
@@ -250,18 +283,18 @@ export function useAttachments(largeTextFiles?: LargeTextFileUpload): UseAttachm
           });
       }
     },
-    [attachments.length, largeTextFiles],
+    [attachments.length, largeTextFiles, setAttachments],
   );
 
   const removeAttachment = useCallback((id: string) => {
     setAttachments((prev) => prev.filter((a) => a.id !== id));
     setError(null);
-  }, []);
+  }, [setAttachments]);
 
   const clearAll = useCallback(() => {
-    setAttachments([]);
+    setAttachments(() => EMPTY);
     setError(null);
-  }, []);
+  }, [setAttachments]);
 
   const getContentBlocks = useCallback((): AttachmentBlock[] => {
     return attachments

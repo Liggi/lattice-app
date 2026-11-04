@@ -39,6 +39,9 @@ fi
 rm -rf "$STAGING" "$OLD"
 
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] Web build started"
+# The client imports the toolkit's dist, not its source; a dist left behind by
+# a toolkit commit ships the old components (29 Oct: the model picker).
+pnpm --filter @liggi/agent-ui-toolkit run build
 # Vite's root is src/web, so outDir is relative to it.
 NODE_ENV=production pnpm exec vite build --outDir "../../$STAGING" --emptyOutDir
 

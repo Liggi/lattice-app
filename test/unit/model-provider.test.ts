@@ -16,6 +16,12 @@ describe('providerForModel', () => {
 
   it('sends an opencode provider/model id to opencode, whatever model it names', () => {
     expect(providerForModel('openrouter/anthropic/claude-opus-5-5')).toBe('opencode');
+    expect(providerForModel('moonshotai/kimi-k3.1-pro', ['qwen3-coder'])).toBe('opencode');
+  });
+
+  it("sends a saved Anthropic endpoint's model to Claude, slash and all", () => {
+    expect(providerForModel('moonshotai/kimi-k3.1-pro', ['moonshotai/kimi-k3.1-pro'])).toBe('claude');
+    expect(providerForModel(' moonshotai/kimi-k3.1-pro[1m] ', ['moonshotai/kimi-k3.1-pro'])).toBe('claude');
   });
 
   it('leaves an id that does not say, or no model, to the caller', () => {
@@ -37,5 +43,11 @@ describe('modelProviderMismatch', () => {
     expect(modelProviderMismatch('claude', 'claude-sonnet-5-5')).toBeNull();
     expect(modelProviderMismatch(undefined, 'claude-sonnet-5-5')).toBeNull();
     expect(modelProviderMismatch('codex', 'mystery-model')).toBeNull();
+  });
+
+  it("accepts a provider/model id on Claude when a saved endpoint serves it, and only then", () => {
+    expect(modelProviderMismatch('claude', 'moonshotai/kimi-k3.1-pro', ['moonshotai/kimi-k3.1-pro'])).toBeNull();
+    expect(modelProviderMismatch('claude', 'moonshotai/kimi-k3.1-pro')).toMatch(/is a opencode model, but the provider is claude/);
+    expect(modelProviderMismatch('codex', 'moonshotai/kimi-k3.1-pro', ['moonshotai/kimi-k3.1-pro'])).toMatch(/is a claude model, but the provider is codex/);
   });
 });

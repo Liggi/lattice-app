@@ -15,6 +15,7 @@ import { getCostTracker } from '../infrastructure/cost-tracker.js';
 import type { LLMOperationType } from './insight-types.js';
 import { parseJson } from '../../utils/json.js';
 import { unsupportedDetails } from './human-input.js';
+import { userName } from '../user-profile.js';
 import {
   SESSION_CATEGORIES,
   SESSION_CATEGORY_DEFINITIONS,
@@ -170,6 +171,18 @@ export function normalizeProjectName(raw: string): string | null {
   if (VERB_LED_NAME.test(cleaned)) return null;
 
   return cleaned;
+}
+
+/**
+ * Whether a project name is about the person rather than the work: their name
+ * (possessive or not), or "my"/"your". It is read in a list of that person's
+ * own projects, where their name distinguishes nothing.
+ */
+export function namesTheUser(name: string): boolean {
+  if (/\b(my|your)\b/i.test(name)) return true;
+  return userName().split(/\s+/)
+    .filter((part) => part.length > 1 && part.toLowerCase() !== 'the' && part.toLowerCase() !== 'user')
+    .some((part) => new RegExp(`\\b${part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:['’]s)?\\b`, 'i').test(name));
 }
 
 /**
@@ -1158,6 +1171,7 @@ Respond with ONLY the summary text, nothing else. No quotes, no explanation.`;
     if (name.length > PROJECT_NAME_MAX_CHARS) problems.push(`it is ${name.length} characters and has to fit in ${PROJECT_NAME_MAX_CHARS}`);
     const unsupported = unsupportedDetails(name, outcome);
     if (unsupported.length > 0) problems.push(`it names ${unsupported.map((d) => `"${d}"`).join(', ')}, which the outcome does not contain`);
+    if (namesTheUser(name)) problems.push('it names the person who owns the project; a project name describes only the work');
     if (problems.length === 0) return name;
     this.logger.info('Project name sent back to the model', { sessionId, name, problems });
 
@@ -1173,7 +1187,7 @@ Respond with ONLY the summary text, nothing else. No quotes, no explanation.`;
           {
             role: 'user',
             content: `The name "${name}" does not work: ${problems.join('; ')}. ` +
-              `Write it again so it fits in ${PROJECT_NAME_MAX_CHARS} characters and names only things written in the outcome. ` +
+              `Write it again so it fits in ${PROJECT_NAME_MAX_CHARS} characters, names only things written in the outcome, and leaves out any person's name. ` +
               'Respond with ONLY the name, nothing else.',
           },
         ],
@@ -1190,6 +1204,10 @@ Respond with ONLY the summary text, nothing else. No quotes, no explanation.`;
     const stillUnsupported = unsupportedDetails(retry, outcome);
     if (stillUnsupported.length > 0) {
       this.logger.info('Project name dropped: names details the outcome does not contain', { sessionId, name: retry, details: stillUnsupported });
+      return null;
+    }
+    if (namesTheUser(retry)) {
+      this.logger.info('Project name dropped: names the user', { sessionId, name: retry });
       return null;
     }
     return retry;
@@ -1227,6 +1245,7 @@ Write the project's name, as it will appear in a sidebar list next to their othe
 - A noun phrase. No leading verb, no "Improve/Build/Fix/Turn ... into".
 - Use the full ${PROJECT_NAME_MAX_CHARS} characters if the name needs them. A name is only too long if it passes ${PROJECT_NAME_MAX_CHARS}; it is shown whole and never cut, so a longer one does not fit. It is too short the moment it drops a word that distinguishes this project from a neighbouring one.
 - Every name, product and version in it must appear in the outcome exactly as written there.
+- Never a person's name, a possessive of one, or "my"/"your", even when the outcome opens with one. "Stellaris planets mod", not "Sam's Stellaris".
 - Keep the outcome's concrete nouns — product, system and domain names are what make a project recognisable in a list. Drop the verbs and the qualifiers.
 - Never end on a bare generic noun ("and app", "and work", "system stuff"). If a word is worth keeping, keep the word that identifies it.
 - It has to stay right for months, while the tasks underneath it change. Nothing about the current step belongs in it.

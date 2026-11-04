@@ -6,8 +6,12 @@
  * (2026-10-07): the 340-wide fence filled half the desktop column, and frames
  * with a title that states the point and large type read better. The fence
  * renderer stays so older messages still draw.
+ *
+ * A session whose model cannot read images is never told to open the PNGs:
+ * one on a custom endpoint did (2026-10-23), and every later turn failed
+ * because the transcript now held an image its model rejects.
  */
-export function frameGuidance(cli: string): string[] {
+export function frameGuidance(cli: string, readsImages = true): string[] {
   return [
     'Pictures',
     '- Draw a picture only when position carries meaning: parts of a system and what flows between them, a chart whose',
@@ -41,9 +45,27 @@ export function frameGuidance(cli: string): string[] {
     '    <text x="234" y="540" font-size="36" fill="#FFD54F">repeated on every call</text>',
     '  </svg>',
     '  ```',
+    ...(readsImages ? lookStep(cli) : sourceCheckStep(cli)),
+  ];
+}
+
+function lookStep(cli: string): string[] {
+  return [
     `- Look before you send, every time. \`${cli} frame\` prints the frame and a second image of how small it sits inline`,
     '  on a phone, plus any problems it can see in the source. Open both and look as a reader would: text running past',
     '  a box or the frame edge, labels colliding, arrows missing their box, anything cramped or busier than it needs to',
     '  be, anything unreadable on the phone image. Fix what you see, render again, and embed once it reads well.',
+  ];
+}
+
+function sourceCheckStep(cli: string): string[] {
+  return [
+    '- Check before you send, every time, from the SVG source. The model this session runs on cannot read images, so',
+    `  never open the PNGs \`${cli} frame\` prints, with Read or any other tool: once an image is in the conversation,`,
+    `  every later turn fails. \`${cli} frame\` also lists the problems it can find in the source (the wrong size, text`,
+    '  too small for a phone); fix each one. Then check the source yourself: work out where each line of text ends from',
+    '  its x, its anchor and its font size, and make sure it stays 30px inside its box and inside the 1920x1080 frame;',
+    '  that no two labels overlap; and that each arrow ends at the edge of the box it points to. Fix what is off,',
+    '  render again, and embed the PNG by its path once both checks pass.',
   ];
 }

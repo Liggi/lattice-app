@@ -1,3 +1,4 @@
+import type { SideQuestionSummary } from '@/types/inbox';
 import type { FeedbackProposedData } from '@/types/feedback';
 import type { DecisionAskedData } from '@/types/decisions';
 import type { ExplainAskedData } from '@/types/explain';
@@ -141,6 +142,8 @@ export interface ConversationChatMessage {
   errorTitle?: string;
   /** Present when another agent sent this message; absent on the user's own. */
   attribution?: MessageAttribution;
+  /** A side chat the user added to the thread: drawn as the passage with each question and short answer. */
+  sideQuestion?: SideQuestionSummary;
   /** On a user message: the stretches of its text the user pasted, counted back from the end. */
   pastes?: PastedSpan[];
   /** Set when systemSubtype is 'worker': a coordinator's record of a worker it dispatched. */

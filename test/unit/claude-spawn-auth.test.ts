@@ -45,6 +45,19 @@ describe('claudeSpawnEnv', () => {
     expect(env(config, 'm').ANTHROPIC_AUTH_TOKEN).toBe('local-secret');
   });
 
+  it('sends the key as x-api-key instead of a bearer token when the endpoint says so', () => {
+    const endpoint = { id: 'k', baseUrl: 'https://api.kimi.ai/coding/', model: 'moonshotai/kimi-k3.1-pro', apiKey: 'kimi-secret' };
+    const xApiKey = env({ claudeEndpoints: [{ ...endpoint, authScheme: 'x-api-key' }] }, endpoint.model);
+    expect(xApiKey.ANTHROPIC_API_KEY).toBe('kimi-secret');
+    expect('ANTHROPIC_AUTH_TOKEN' in xApiKey && xApiKey.ANTHROPIC_AUTH_TOKEN === undefined).toBe(true);
+    expect(xApiKey.ANTHROPIC_MODEL).toBe(endpoint.model);
+    for (const bearer of [endpoint, { ...endpoint, authScheme: 'bearer' }]) {
+      const bearerEnv = env({ claudeEndpoints: [bearer] }, endpoint.model);
+      expect(bearerEnv.ANTHROPIC_AUTH_TOKEN).toBe('kimi-secret');
+      expect('ANTHROPIC_API_KEY' in bearerEnv && bearerEnv.ANTHROPIC_API_KEY === undefined).toBe(true);
+    }
+  });
+
   it("gives only that endpoint's sessions its context window", () => {
     const config = { claudeEndpoints: [
       { id: 'a', baseUrl: 'http://h', model: 'small', contextWindow: 32768 },

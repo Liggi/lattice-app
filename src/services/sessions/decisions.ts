@@ -21,12 +21,14 @@ import {
   DECISION_MIN_OPTIONS,
   DECISION_DISMISSED_EVENT,
   DECISION_SETTLED_EVENT,
+  DECISION_WITHDRAWN_EVENT,
   isAwaitingDecision,
   isOpenDecision,
   type DecisionActionData,
   type DecisionAnsweredData,
   type DecisionAskedData,
   type DecisionOptionData,
+  type DecisionWithdrawnData,
 } from '../../types/decisions.js';
 import { ConversationService } from './conversation-service.js';
 import { readWorkerStates } from './worker-events.js';
@@ -224,6 +226,34 @@ export async function dismissDecision(threadId: string, decisionId: string): Pro
   noteStatusChanged(threadId);
   const inboxId = enqueueInboxItem({ sessionId: threadId, source: 'decision', text: `${UserName()} dismissed your question "${decision.asked.question}" without answering.` });
   await handOverNow(threadId, inboxId);
+}
+
+/**
+ * The agent that asked takes its own question down, because it was settled
+ * some other way (`lattice ask --withdraw`). The card closes as withdrawn,
+ * which is not the user dismissing it, so nothing goes back to the agent; the
+ * project thread it was about stays open. Only the thread's own card can be
+ * withdrawn, and only while it still waits on the user: once they have
+ * answered, or an answer or dismissal is on its way from the panel, it is theirs.
+ */
+export function withdrawDecision(threadId: string, options: { thread?: number; reason?: string } = {}): { id: string; question: string } {
+  const manager = getHarnessSessionManager();
+  if (!manager) throw new Error('No harness session manager');
+  if (!ConversationService.getInstance().getConversation(threadId)) throw new DecisionError(`No conversation ${threadId}`, 404);
+  const latest = [...decisionsIn(threadId).values()].find((decision) => decision.latest);
+  if (!latest || !isAwaitingDecision(latest)) throw new DecisionError('This thread has no open question to withdraw.', 404);
+  if (options.thread !== undefined && latest.asked.thread !== options.thread) {
+    throw new DecisionError(`The open question is not about thread ${options.thread}: "${latest.asked.question}".`, 409);
+  }
+  if (latest.held) throw new DecisionError(`${UserName()} has already answered "${latest.asked.question}" from the panel; their answer is on its way to you.`, 409);
+  if (latest.asked.holdsTurn) throw new DecisionError('This question holds your turn open until it is answered, so it cannot be withdrawn.', 409);
+  const reason = options.reason?.trim();
+  const data: DecisionWithdrawnData = { id: latest.asked.id, ...(reason ? { reason } : {}) };
+  if (!appendCustomHarnessEvent(manager, threadId, DECISION_WITHDRAWN_EVENT, data)) {
+    throw new Error(`The withdrawal could not be written to ${threadId}`);
+  }
+  noteStatusChanged(threadId);
+  return { id: latest.asked.id, question: latest.asked.question };
 }
 
 /**

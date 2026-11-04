@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { Composer } from '../../components/Composer';
 
+// The model menu opens upward, so each harness pins the composer to the bottom
+// of the page as the app does; at the top the menu would open off-screen.
 const models = [
   { id: 'opus', label: 'Opus', description: 'Most capable', isDefault: true },
   { id: 'sonnet', label: 'Sonnet', description: 'Balanced' },
@@ -13,7 +15,7 @@ export function InteractiveModelHarness() {
   const [submittedModel, setSubmittedModel] = useState<string>('none');
 
   return (
-    <div className="dark bg-zinc-950 p-6">
+    <div className="dark bg-zinc-950 p-6" style={{ position: 'fixed', bottom: 0, left: 0, right: 0 }}>
       <Composer
         core={{
           onSubmit: (_message, options) => {
@@ -52,7 +54,7 @@ export function EffortModelHarness() {
   const [submittedEffort, setSubmittedEffort] = useState<string>('none');
 
   return (
-    <div className="dark bg-zinc-950 p-6">
+    <div className="dark bg-zinc-950 p-6" style={{ position: 'fixed', bottom: 0, left: 0, right: 0 }}>
       <Composer
         core={{
           onSubmit: (_message, options) => {
@@ -87,7 +89,7 @@ export function EffortModelHarness() {
 
 export function ReadOnlyModelHarness() {
   return (
-    <div className="dark bg-zinc-950 p-6">
+    <div className="dark bg-zinc-950 p-6" style={{ position: 'fixed', bottom: 0, left: 0, right: 0 }}>
       <Composer
         core={{ onSubmit: () => {} }}
         runtimeConfig={{

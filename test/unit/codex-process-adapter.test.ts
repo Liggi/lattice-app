@@ -278,6 +278,25 @@ describe('CodexProcessAdapter', () => {
     handle.signal('SIGTERM');
   });
 
+  it('puts a coordinator on its own app-server and a worker on the shared one', async () => {
+    const client = new FakeCodexClient();
+    const factoryCalls: Array<{ coordinator?: boolean }> = [];
+    const adapter = new CodexProcessAdapter(
+      () => {},
+      (_key, _cwd, options) => { factoryCalls.push(options ?? {}); return client; },
+      undefined,
+      undefined,
+      undefined,
+      (sessionId) => sessionId === 'conv-front',
+    );
+    for (const sessionId of ['conv-front', 'conv-worker']) {
+      const handle = await adapter.spawn({ prompt: '', cwd: '/tmp/codex-test', extra: { provider: 'codex', sessionId } });
+      handle.signal('SIGTERM');
+    }
+
+    expect(factoryCalls).toEqual([{ coordinator: true }, { coordinator: false }]);
+  });
+
   // The shapes below are taken from real `mcpToolCall` items in ~/.lattice/session-info.db:
   // `arguments` is a JSON string, and `result` is the MCP envelope
   // `{ _meta, content, structuredContent }`.

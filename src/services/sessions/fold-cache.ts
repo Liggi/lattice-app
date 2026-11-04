@@ -11,7 +11,14 @@
 import { getEvents, getEventsVersion } from '../../session-history/repository.js';
 import type { RawEvent } from '../../session-history/types.js';
 
-const MAX_ENTRIES = 64;
+/**
+ * Above the working set: the minute watches fold every coordinator active this
+ * week, three or four folds each. At 64, 36 coordinators cycled through the
+ * cache missing every time, and each pass re-read every log from disk: 7-21s
+ * event-loop blocks every minute on 3045 (2026-10-16). Those 72 folds
+ * came to 3.6MB.
+ */
+const MAX_ENTRIES = 512;
 /** Parsed logs held for re-folding; a coordinator's can be a few MB, so fewer than the folds. */
 const MAX_LOGS = 16;
 

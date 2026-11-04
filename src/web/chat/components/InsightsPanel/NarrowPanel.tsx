@@ -42,7 +42,11 @@ interface NarrowPanelProps {
   coordinatorId?: string;
   /** Needs you rows, already drawn. */
   attention: React.ReactNode[];
+  /** The project's parked threads, folded under one row at the end of Your calls; null when none are. */
+  backlog?: React.ReactNode;
   workers: WorkerCardState[];
+  /** Workers carrying an open thread, which keep their row after they report (`deriveStateOfPlay`). */
+  carrying?: ReadonlySet<string>;
   coordinatorRunning: boolean;
   /** A worker's row, with the jobs it reports drawn inside it when it has any. */
   renderWorker: (worker: WorkerCardState, jobs?: WorkerJobs) => React.ReactNode;
@@ -55,19 +59,23 @@ export interface WorkerJobs {
   stalled: boolean;
 }
 
-export function NarrowPanel({ coordinatorId, attention, workers, coordinatorRunning, renderWorker, onOpenWorker }: NarrowPanelProps): JSX.Element {
+export function NarrowPanel({ coordinatorId, attention, backlog = null, workers, carrying = NO_WORKERS, coordinatorRunning, renderWorker, onOpenWorker }: NarrowPanelProps): JSX.Element {
   const jobs = useJobs(coordinatorId, workers);
   const shipping = usePolled<ProjectShipping>(coordinatorId && `/api/conv/${encodeURIComponent(coordinatorId)}/shipping`, 30_000);
   const now = useNow(30_000);
 
   const { live, ended } = splitJobs(jobs);
-  const running = runningRows(workers, live, coordinatorRunning, now);
+  const running = runningRows(workers, carrying, live, coordinatorRunning, now);
   const items = shipping?.items ? orderShipping(shipping.items) : null;
 
   return (
     <div data-testid="narrow-panel" className="flex flex-col gap-8">
-      {attention.length > 0 && (
-        <Section title="Your calls" testId="play-needs-you">{attention}</Section>
+      {(attention.length > 0 || backlog) && (
+        <Section title="Waiting on you" testId="play-needs-you">
+          {attention.length === 0 && <Empty>Nothing waiting on you</Empty>}
+          {attention}
+          {backlog}
+        </Section>
       )}
       <Section title="Running" testId="panel-running">
         {running.length === 0 && ended.length === 0 && <Empty>Nothing running</Empty>}
@@ -114,6 +122,8 @@ function splitJobs(jobs: JobProgress[]): { live: JobProgress[]; ended: JobProgre
   };
 }
 
+const NO_WORKERS: ReadonlySet<string> = new Set();
+
 type RunningRow =
   | { kind: 'worker'; worker: WorkerCardState; jobs: JobProgress[]; rank: number }
   | { kind: 'job'; job: JobProgress; rank: number };
@@ -122,16 +132,17 @@ type RunningRow =
  * Running's rows in the order the eye should take them: stuck first, then
  * moving jobs, then workers with no job, in dispatch order within each. A
  * worker that has reported still has a row while a job of its is unfinished,
- * since that job is stuck without it. A job reported by a session that is no
+ * since that job is stuck without it, and while any thread it carries is open,
+ * waiting on the user or not, since its row is the way into it. A job reported by a session that is no
  * worker here (the coordinator's own) is a row of its own.
  */
-function runningRows(workers: WorkerCardState[], live: JobProgress[], coordinatorRunning: boolean, now: number): RunningRow[] {
+function runningRows(workers: WorkerCardState[], carrying: ReadonlySet<string>, live: JobProgress[], coordinatorRunning: boolean, now: number): RunningRow[] {
   const rank = (own: JobProgress[]) => (own.some((job) => needsLook(job, now)) ? 0 : own.length > 0 ? 1 : 2);
   const rows: RunningRow[] = [];
   for (const worker of workers) {
     const own = live.filter((job) => job.session === worker.worker);
     const { state } = workerStateLine(worker, coordinatorRunning);
-    if (state === 'Archived' || (state === 'Reported' && own.length === 0)) continue;
+    if (state === 'Archived' || (state === 'Reported' && own.length === 0 && !carrying.has(worker.worker))) continue;
     rows.push({ kind: 'worker', worker, jobs: own, rank: rank(own) });
   }
   for (const job of live) {
@@ -487,6 +498,7 @@ function ShipIcon({ stage }: { stage: ShipStage }) {
 }
 
 function ShipRow({ item, now }: { item: ShipItem; now: number }) {
+  if (item.branches) return <BranchGroupRow item={item} branches={item.branches} now={now} />;
   const body = (
     <>
       <Column><ShipIcon stage={item.stage} /></Column>
@@ -503,6 +515,41 @@ function ShipRow({ item, now }: { item: ShipItem; now: number }) {
     <a data-testid="panel-ship" href={item.href} target="_blank" rel="noreferrer" style={PLAIN_LINK} className={`${ROW} hover:bg-surface-2`}>{body}</a>
   ) : (
     <div data-testid="panel-ship" className={ROW}>{body}</div>
+  );
+}
+
+/**
+ * A thread's unmerged branches as one row under its name, opening in place to
+ * list each branch by name with its last commit's date, in a tinted band as
+ * the panel's other open rows are. The branch name is shown rather than the
+ * commit subject, which some repos fill with a whole report.
+ */
+function BranchGroupRow({ item, branches, now }: { item: ShipItem; branches: NonNullable<ShipItem['branches']>; now: number }) {
+  const [open, setOpen] = useState(false);
+  const Chevron = open ? ChevronDown : ChevronRight;
+  return (
+    <div data-testid="panel-ship" className={`flex flex-col rounded-sm ${open ? 'bg-surface-2/60' : ''}`}>
+      <button type="button" onClick={() => setOpen((was) => !was)} aria-expanded={open} className={`${ROW} w-full text-left ${open ? '' : 'hover:bg-surface-2'}`}>
+        <Column><ShipIcon stage={item.stage} /></Column>
+        <span className="flex min-w-0 flex-1 flex-col">
+          <span className="text-[13px] leading-[1.45] text-fg-2 break-words text-pretty">{shortTitle(item.title)}</span>
+          <span className="mt-1 flex items-baseline justify-between gap-3 text-[12px]">
+            <span className="flex items-center gap-1 text-fg-3">{item.stageLabel}<Chevron size={11} className="opacity-60" /></span>
+            {item.at && <span className="shrink-0 tabular-nums text-fg-3/60">{when(item.at, now)}</span>}
+          </span>
+        </span>
+      </button>
+      {open && (
+        <div data-testid="panel-ship-branches" className="flex flex-col gap-1 pb-2 pl-[46px] pr-2">
+          {branches.map((branch) => (
+            <span key={branch.name} title={branch.subject} className="flex items-baseline justify-between gap-3 text-[12px]">
+              <span className="min-w-0 break-all text-fg-2">{branch.name}</span>
+              <span className="shrink-0 tabular-nums text-fg-3/60">{when(branch.at, now)}</span>
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 

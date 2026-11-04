@@ -14,7 +14,7 @@ import type { EventStorageAdapter } from '@liggi/agent-ui-harness/server';
 import type { LostTask, SessionEvent } from '@liggi/agent-ui-harness/protocol';
 import { createLogger } from '../services/infrastructure/logger.js';
 import { parseJson } from '../utils/json.js';
-import { DECISION_ANSWERED_EVENT, DECISION_ASKED_EVENT, DECISION_DISMISSED_EVENT, DECISION_SETTLED_EVENT } from '../types/decisions.js';
+import { DECISION_ANSWERED_EVENT, DECISION_ASKED_EVENT, DECISION_DISMISSED_EVENT, DECISION_SETTLED_EVENT, DECISION_WITHDRAWN_EVENT } from '../types/decisions.js';
 
 const logger = createLogger('SqliteEventStorage');
 
@@ -100,8 +100,8 @@ export const STATUS_BEARING_EVENT_TYPES = [
   'input:incorporated',
 ] as const;
 
-/** What says whether a question card is still open: asked, answered, settled by a message, dismissed. */
-const DECISION_EVENT_TYPES = [DECISION_ASKED_EVENT, DECISION_ANSWERED_EVENT, DECISION_SETTLED_EVENT, DECISION_DISMISSED_EVENT] as const;
+/** What says whether a question card is still open: asked, answered, settled by a message, dismissed, withdrawn. */
+const DECISION_EVENT_TYPES = [DECISION_ASKED_EVENT, DECISION_ANSWERED_EVENT, DECISION_SETTLED_EVENT, DECISION_DISMISSED_EVENT, DECISION_WITHDRAWN_EVENT] as const;
 
 export class SqliteEventStorageAdapter implements EventStorageAdapter {
   private stmtWrite: Database.Statement;

@@ -39,7 +39,7 @@ import { CONFIG_DIR } from '@/utils/constants.js';
 import path from 'node:path';
 import { isUsersMove } from '@/types/state-of-play.js';
 import { backfillProjectName } from '@/services/sessions/project-name.js';
-import { normalizeProjectName } from '@/services/insights/anthropic-service.js';
+import { namesTheUser, normalizeProjectName } from '@/services/insights/anthropic-service.js';
 import { moveThread, moveWorker, ProjectMoveError } from '@/services/sessions/project-move.js';
 import { dismissThread, DismissalError, parkThread, restoreThread } from '@/services/sessions/thread-dismissal.js';
 import { holdReply, HeldReplyError, repliesOf, undoReply } from '@/services/sessions/held-replies.js';
@@ -782,6 +782,10 @@ export function registerUnifiedConversationQueryRoutes(
       res.status(400).json({ error: 'a project name is a short noun phrase for the thing being owned, not the work being done to it: "Lattice workspace improvements", not "Simplify the sidebar"' });
       return;
     }
+    if (kind === 'outcome' && typeof body.name === 'string' && namesTheUser(body.name)) {
+      res.status(400).json({ error: 'a project name describes the work, never the person: no user\'s name, possessive or "my"/"your" ("Stellaris planets mod", not "Sam\'s Stellaris")' });
+      return;
+    }
 
     const state = readProjectState(conversationId);
 
@@ -1055,13 +1059,13 @@ export function registerUnifiedConversationQueryRoutes(
         res.status(400).json({
           error: `this note makes ${thread ? `thread [${thread.seq}]` : 'the thread'} the user's, waiting on a decision, so it needs --ask: `
             + 'what you are asking them, in plain words, with the context they need and each question in full. '
-            + 'No ids, paths or commit hashes. It is what their Your calls row shows when they open it.',
+            + 'No ids, paths or commit hashes. It is what their row in Waiting on you shows when they open it.',
         });
         return;
       }
       const tooLong = ask ? askTooLong(ask) : null;
       if (tooLong) {
-        res.status(400).json({ error: `${tooLong} Their Your calls row shows the ask in full, so it has to be read at a glance.` });
+        res.status(400).json({ error: `${tooLong} Their row in Waiting on you shows the ask in full, so it has to be read at a glance.` });
         return;
       }
       if (ask && !isUsersMove({ owner: ownerAfter })) {
@@ -1342,6 +1346,9 @@ export function registerUnifiedConversationQueryRoutes(
       branchPointMessageId,
       coordinator: conversation.coordinator,
       pickedUpFrom: conversation.pickedUpFrom,
+      pickedUpFromCoordinator: Boolean(
+        conversation.pickedUpFrom && conversationService.getConversation(conversation.pickedUpFrom)?.coordinator,
+      ),
     };
 
     mark('response_build');

@@ -127,10 +127,16 @@ export interface ClaudeEndpointConfig {
   baseUrl: string;
   /** The model the server serves. Picking it runs a session on this server; unique across endpoints. */
   model: string;
-  /** Sent as a bearer token. Optional: many local servers take none. */
+  /** What the model picker calls it; absent means a name made from the model id. */
+  name?: string;
+  /** Sent as a bearer token unless `authScheme` says otherwise. Optional: many local servers take none. */
   apiKey?: string;
+  /** 'x-api-key' sends the key in that header, as Anthropic's API and Kimi Code expect; absent or 'bearer' sends `Authorization: Bearer`. */
+  authScheme?: 'bearer' | 'x-api-key';
   /** Tokens the served model holds, passed as CLAUDE_CODE_MAX_CONTEXT_TOKENS so auto-compact runs in time. */
   contextWindow?: number;
+  /** Whether the served model accepts images; absent means it does not, and its sessions are told never to open one. */
+  readsImages?: boolean;
   /**
    * The API the server speaks. 'anthropic' (the default) can run sessions and
    * background calls; 'openai' (Chat Completions: Ollama, LM Studio,

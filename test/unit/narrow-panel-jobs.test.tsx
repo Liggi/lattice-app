@@ -9,9 +9,11 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import { TooltipProvider } from '../../src/web/chat/components/ui/tooltip.js';
 import type { JobProgress } from '../../src/services/sessions/job-progress.js';
+import { foldProjectState, PROJECT_NOTED_EVENT, type ProjectNotedData } from '../../src/types/project-state.js';
+import type { WorkerCardState } from '../../src/types/worker-events.js';
 
 let frame: ((event: unknown) => void) | null = null;
 vi.mock('../../src/web/chat/contexts/ActivityStreamContext.js', () => ({
@@ -20,6 +22,7 @@ vi.mock('../../src/web/chat/contexts/ActivityStreamContext.js', () => ({
 }));
 
 const { NarrowPanel } = await import('../../src/web/chat/components/InsightsPanel/NarrowPanel.js');
+const { StateOfPlaySection } = await import('../../src/web/chat/components/InsightsPanel/StateOfPlaySection.js');
 
 const MIN = 60_000;
 const now = Date.now();
@@ -82,5 +85,59 @@ describe('Running, counted from the work', () => {
     act(() => frame?.({ type: 'jobs-changed', sessionId: 'conv-elsewhere' }));
     act(() => frame?.({ type: 'jobs-changed', sessionId: 'conv-coord' }));
     await waitFor(() => expect(fetches).toBe(2));
+  });
+});
+
+describe('Running, for a worker whose thread waits', () => {
+  const notes: Array<Partial<ProjectNotedData>> = [
+    { kind: 'open', text: 'Frustration pilot', owner: { kind: 'worker', worker: 'conv-pilot' }, workers: ['conv-pilot'], waitingOn: { kind: 'resource', text: 'the daily model-call allowance to reset at midnight UTC' } }, // 1
+    { kind: 'open', text: 'Finished study', owner: { kind: 'worker', worker: 'conv-closed' }, workers: ['conv-closed'] }, // 2
+    { kind: 'close', text: 'done', ref: 2 }, // 3
+    { kind: 'open', text: 'Panel rule', owner: { kind: 'user' }, workers: ['conv-yours'], waitingOn: { kind: 'decision', text: 'which rule the panel follows' } }, // 4
+    { kind: 'open', text: 'Review', owner: { kind: 'coordinator' }, workers: ['conv-review'] }, // 5
+  ];
+  const project = foldProjectState(notes.map((data, index) => ({
+    seq: index + 1, type: PROJECT_NOTED_EVENT, timestamp: index + 1, data: { text: '', by: 'coordinator', ...data },
+  })));
+  const reported = (id: string, thread: number | null): WorkerCardState => ({
+    worker: id, provider: 'claude', model: null, task: `task of ${id}`, thread, startedAt: 0, phase: 'reported', question: null, since: 0,
+    waitingOn: null, contextTokens: null, archived: false, reportReached: true, runtime: 'exited', activity: null,
+  });
+
+  it('keeps a reported worker while its open thread is held, with the hold as its wait, and drops one whose thread closed or that has none', async () => {
+    render(
+      <TooltipProvider>
+        <StateOfPlaySection
+          project={project}
+          workers={[reported('conv-pilot', 1), reported('conv-closed', 2), reported('conv-loose', null)]}
+          coordinatorId="conv-coord"
+          coordinatorRunning={false}
+        />
+      </TooltipProvider>,
+    );
+    const rows = within(screen.getByTestId('panel-running')).getAllByTestId('worker-card');
+    expect(rows.map((row) => row.getAttribute('data-worker'))).toEqual(['conv-pilot']);
+    expect(within(rows[0]).getByTestId('worker-state').textContent).toBe('Waiting on the daily model-call allowance to reset at midnight UTC');
+  });
+
+  it('keeps a reported worker whose open thread waits on you, saying so, and one whose open thread waits on nothing, and opens either on a tap', async () => {
+    const opened: string[] = [];
+    render(
+      <TooltipProvider>
+        <StateOfPlaySection
+          project={project}
+          workers={[reported('conv-yours', 4), reported('conv-review', 5), reported('conv-closed', 2)]}
+          coordinatorId="conv-coord"
+          coordinatorRunning={false}
+          onOpenWorker={(id) => opened.push(id)}
+        />
+      </TooltipProvider>,
+    );
+    const rows = within(screen.getByTestId('panel-running')).getAllByTestId('worker-card');
+    expect(rows.map((row) => row.getAttribute('data-worker'))).toEqual(['conv-yours', 'conv-review']);
+    expect(within(rows[0]).getByTestId('worker-state').textContent).toBe('Waiting on you');
+    expect(within(rows[1]).getByTestId('worker-state').textContent).toBe('Reported');
+    act(() => within(rows[0]).getAllByRole('button')[0].click());
+    expect(opened).toEqual(['conv-yours']);
   });
 });

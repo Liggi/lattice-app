@@ -63,6 +63,8 @@ export interface ShipItem {
   /** When it reached that stage, epoch ms, where known. */
   at?: number;
   href?: string;
+  /** A thread's unmerged branches when it has more than one, newest first. */
+  branches?: Array<{ name: string; subject: string; at: number }>;
 }
 
 export interface ProjectShipping {
@@ -519,18 +521,22 @@ async function defaultBranch(repo: string): Promise<string> {
 
 /**
  * Local branches an open thread names that are not merged into the default
- * branch, with a commit in the last week. Each is titled with the name of the
- * thread that names it, which is written for the user; a branch name such as
- * `slice1-hold` is the agent's filing (2026-10-11, thread 38425).
+ * branch, with a commit in the last week, one item per thread. Each is titled
+ * with the name of the thread that names it, which is written for the user; a
+ * branch name such as `slice1-hold` is the agent's filing (2026-10-11, thread
+ * 38425). A thread naming several branches is one item listing them, and a
+ * branch already inside another listed one is left out, as it merges with it
+ * (2026-10-17, thread 41740: CK3's Event review named five branches, three
+ * stacked under bga-autostart, and showed as five identical rows).
  */
 async function unmergedBranches(repo: string, openThreads: ProjectState['open'], now: number): Promise<ShipItem[]> {
   if (!fs.existsSync(path.join(repo, '.git'))) return [];
   const main = await defaultBranch(repo);
-  const out = await run('git', ['-C', repo, 'branch', '--no-merged', main, '--format=%(refname:short)\t%(committerdate:unix)\t%(contents:subject)']);
+  const out = await run('git', ['-C', repo, 'branch', '--no-merged', main, '--format=%(refname:short)\t%(objectname)\t%(committerdate:unix)\t%(contents:subject)']);
   const threads = openThreads.map((thread) => ({ thread, json: JSON.stringify(thread) }));
-  const items: ShipItem[] = [];
+  const named: Array<{ branch: string; sha: string; at: number; subject: string; thread: ProjectState['open'][number] }> = [];
   for (const line of out.split('\n').filter(Boolean)) {
-    const [branch, at, subject] = line.split('\t');
+    const [branch, sha, at, subject = ''] = line.split('\t');
     if (branch === main || now - Number(at) * 1000 > KEEP_OPEN_MS) continue;
     const names = new RegExp(`(^|[^\\w/-])${escape(branch)}([^\\w/-]|$)`);
     const thread = threads.find(({ json }) => names.test(json))?.thread;
@@ -538,9 +544,29 @@ async function unmergedBranches(repo: string, openThreads: ProjectState['open'],
     // A branch with no history in common with the default one (a squashed
     // release branch) is not work waiting to merge.
     if (!await run('git', ['-C', repo, 'merge-base', main, branch]).then(() => true, () => false)) continue;
-    items.push({ key: `${repo}@${branch}`, title: (thread.name ?? firstLine(thread.text) ?? subject?.trim()) || branchTitle(branch), stage: 'branch', stageLabel: 'Branch, not merged', at: Number(at) * 1000 });
+    named.push({ branch, sha, at: Number(at) * 1000, subject: subject.trim(), thread });
   }
-  return items;
+  const inside = await Promise.all(named.map((one, index) => Promise.all(named.map(async (other, at) => {
+    if (at === index) return false;
+    // Two branches at one commit: the first listed stands for both.
+    if (other.sha === one.sha) return at < index;
+    return run('git', ['-C', repo, 'merge-base', '--is-ancestor', one.sha, other.sha]).then(() => true, () => false);
+  })).then((found) => found.some(Boolean))));
+  const byThread = new Map<ProjectState['open'][number], typeof named>();
+  named.filter((_, index) => !inside[index]).forEach((one) => byThread.set(one.thread, [...byThread.get(one.thread) ?? [], one]));
+  return [...byThread.values()].map((branches) => {
+    branches.sort((a, b) => b.at - a.at);
+    const [newest] = branches;
+    const { thread } = newest;
+    return {
+      key: `${repo}@${newest.branch}`,
+      title: (thread.name ?? firstLine(thread.text) ?? newest.subject) || branchTitle(newest.branch),
+      stage: 'branch',
+      stageLabel: branches.length === 1 ? 'Branch, not merged' : `${branches.length} branches, not merged`,
+      at: newest.at,
+      ...(branches.length > 1 && { branches: branches.map(({ branch, subject, at }) => ({ name: branch, subject, at })) }),
+    };
+  });
 }
 
 /** The published version of the repo's package, and what has landed since. */

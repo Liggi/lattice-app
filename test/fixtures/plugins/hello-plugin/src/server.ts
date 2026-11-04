@@ -45,5 +45,11 @@ export default function activate(host: LatticePluginHost): void {
     return 'The hello plugin saved the note.';
   });
 
+  host.skill({
+    name: 'hello-notes',
+    description: 'Use when the user asks to save a note.',
+    body: `Run \`${host.cli} plugin hello note --session <your conversation id>\` with the note on standard input.`,
+  });
+
   host.log.info('hello plugin ready');
 }

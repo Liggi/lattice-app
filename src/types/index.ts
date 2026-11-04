@@ -361,6 +361,12 @@ export interface ConversationDetailsResponse {
    */
   pickedUpFrom?: string | null;
   /**
+   * Whether `pickedUpFrom` names a coordinator. Only then is this a worker: a
+   * project can be started from an ordinary session, and the client cannot
+   * look up that session's flag once it is archived.
+   */
+  pickedUpFromCoordinator?: boolean;
+  /**
    * Codex reasoning effort the latest segment is recorded as running at.
    * Absent when nothing was ever recorded, which is not the same as a default:
    * the composer shows its own default entry in that case.

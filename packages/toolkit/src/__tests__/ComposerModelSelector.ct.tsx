@@ -95,7 +95,7 @@ test.describe('Composer model selector', () => {
     // The menu escapes the composer card's `overflow-hidden`, so it must not be
     // clipped to zero height: its rendered height matches its full scroll height.
     const dims = await menu.evaluate((el) => ({
-      height: (el as HTMLElement).getBoundingClientRect().height,
+      height: (el as HTMLElement).clientHeight,
       scrollHeight: (el as HTMLElement).scrollHeight,
     }));
     expect(dims.height).toBeGreaterThan(0);

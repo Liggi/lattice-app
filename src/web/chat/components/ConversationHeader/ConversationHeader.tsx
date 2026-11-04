@@ -14,8 +14,8 @@ import { archivedSidebarQueryKey } from '../../hooks/useArchivedSidebarSessions'
 import { removeConversationFromListCache, type ConversationListCacheData } from '../../utils/conversation-list-cache';
 import { useToast } from '../Toast/Toast';
 import { FeedbackDialog } from '../Feedback/FeedbackDialog';
-
-const UNDO_ARCHIVE_TOAST_MS = 8000;
+import { offerUndo, runUndo, usePendingUndo } from './pending-undo';
+import { UndoButton } from './UndoButton';
 
 interface ConversationHeaderProps {
   sessionId?: string;
@@ -56,7 +56,8 @@ export function ConversationHeader({
   const [settingsOpen, setSettingsOpen] = useState(planSignInWaiting);
   // An agent's proposals appear as cards in the chat, not here.
   const [feedbackOpen, setFeedbackOpen] = useState(false);
-  const { showToast, dismissToast } = useToast();
+  const { showToast } = useToast();
+  const pendingUndo = usePendingUndo();
 
   const refreshLists = () => Promise.all([
     invalidateConversations(),
@@ -64,28 +65,13 @@ export function ConversationHeader({
   ]);
 
   // Archiving leaves the session, so changing your mind straight away should
-  // not mean hunting for it in the Archived list.
+  // not mean hunting for it in the Archived list. Undo follows to the session
+  // archiving lands on, in the Archive button's place.
   const offerUndoArchive = (conversationId: string) => {
-    const toastId = showToast({
-      title: 'Archived',
-      type: 'success',
-      duration: UNDO_ARCHIVE_TOAST_MS,
-      action: {
-        label: 'Undo',
-        onClick: () => {
-          dismissToast(toastId);
-          void (async () => {
-            try {
-              await api.unifiedUpdateConversation(conversationId, { archived: false });
-              await refreshLists();
-              void navigate(`/c/${conversationId}`);
-            } catch (err) {
-              console.error('[Archive] Failed to undo archive:', err);
-              showToast({ title: 'Could not undo archive', type: 'error' });
-            }
-          })();
-        },
-      },
+    offerUndo('archive', conversationId, async () => {
+      await api.unifiedUpdateConversation(conversationId, { archived: false });
+      await refreshLists();
+      void navigate(`/c/${conversationId}`);
     });
   };
 
@@ -133,22 +119,7 @@ export function ConversationHeader({
   const handleSleep = async () => {
     try {
       await setSlept(!isSlept);
-      if (isSlept) return;
-      const toastId = showToast({
-        title: 'Asleep',
-        type: 'success',
-        duration: UNDO_ARCHIVE_TOAST_MS,
-        action: {
-          label: 'Undo',
-          onClick: () => {
-            dismissToast(toastId);
-            setSlept(false).catch((err: unknown) => {
-              console.error('[Sleep] Failed to undo sleep:', err);
-              showToast({ title: 'Could not undo sleep', type: 'error' });
-            });
-          },
-        },
-      });
+      if (!isSlept && sessionId) offerUndo('sleep', sessionId, () => setSlept(false));
     } catch (err) {
       console.error('[Sleep] Failed to change sleep:', err);
       showToast({ title: isSlept ? 'Could not wake it' : 'Could not put it to sleep', type: 'error' });
@@ -158,6 +129,13 @@ export function ConversationHeader({
   // resolves it, so an archived worker — not in the conversations list —
   // keeps the same way back as a live one.
   const projectId = parentConversationId;
+  // Archive's Undo shows wherever you land; Sleep's only on the session slept.
+  const undoArchive = pendingUndo?.action === 'archive' ? pendingUndo : null;
+  const undoSleep = pendingUndo?.action === 'sleep' && pendingUndo.conversationId === sessionId ? pendingUndo : null;
+  const undoHere = undoArchive ?? undoSleep;
+  const undoNow = () => runUndo((action) => {
+    showToast({ title: action === 'archive' ? 'Could not undo archive' : 'Could not undo sleep', type: 'error' });
+  });
   const iconBtn = 'p-1.5 ui-icon-btn disabled:opacity-40 disabled:cursor-not-allowed';
   const menuItem = 'flex items-center gap-3 w-full px-3 py-2 rounded-sm text-sm text-fg-2 hover:text-fg hover:bg-surface-2 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed';
 
@@ -232,7 +210,9 @@ export function ConversationHeader({
               Imported · read-only
             </span>
           )}
-          {canSleep && (
+          {undoSleep ? (
+            <UndoButton pending={undoSleep} onUndo={undoNow} variant="icon" />
+          ) : canSleep && (
             <Tooltip>
               <TooltipTrigger asChild>
                 <button
@@ -248,6 +228,9 @@ export function ConversationHeader({
               <TooltipContent>{isSlept ? 'Wake' : 'Sleep'}</TooltipContent>
             </Tooltip>
           )}
+          {undoArchive ? (
+            <UndoButton pending={undoArchive} onUndo={undoNow} variant="icon" />
+          ) : (
           <Tooltip>
             <TooltipTrigger asChild>
               <button
@@ -261,6 +244,7 @@ export function ConversationHeader({
             </TooltipTrigger>
             <TooltipContent>{isArchived ? 'Restore' : 'Archive'}</TooltipContent>
           </Tooltip>
+          )}
 
           {/* Same panel icon as the sidebar's toggle, held open-styled while the panel shows */}
           {onToggleInsightsPanel && (
@@ -312,6 +296,11 @@ export function ConversationHeader({
             right panel at the far right. A session with no right panel (a
             worker) shows no panel control, exactly as on desktop. */}
         <div className="flex items-center gap-1 sm:hidden">
+          {/* The menu closes when Sleep or Archive is tapped, so Undo takes
+              the menu button's place until its time runs out. */}
+          {undoHere ? (
+            <UndoButton pending={undoHere} onUndo={undoNow} variant="menu" />
+          ) : (
           <Popover
             open={mobileMenuOpen}
             onOpenChange={setMobileMenuOpen}
@@ -390,6 +379,7 @@ export function ConversationHeader({
               </div>
             </PopoverContent>
           </Popover>
+          )}
           {onToggleInsightsPanel && (
             <button
               type="button"

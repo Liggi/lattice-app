@@ -1,6 +1,8 @@
 import type { Provider } from '@/types/unified-messages.js';
 import { Router } from 'express';
 import { asyncHandler } from '@/middleware/error-handler.js';
+import { requireTrustedOrigin } from '@/middleware/trusted-origin.js';
+import { reapIdleSessions } from '@/services/sessions/idle-session-reaper.js';
 import { createLogger } from '@/services/infrastructure/logger.js';
 import type { ActiveConversationRegistry, ActiveConversation } from '@/services/process/active-conversation-registry.js';
 import type { SessionInfoService } from '@/services/sessions/session-info-service.js';
@@ -194,6 +196,16 @@ export function createSessionStatusRoutes(deps: SessionStatusRoutesDeps): Router
   } = deps;
 
   const router = Router();
+
+  // Settings' "Restart idle sessions": ends every session's resident CLI that
+  // is idle, as the reaper does after 30 minutes, so the next message starts a
+  // fresh one that loads MCP sign-ins and settings changed since. Sessions
+  // mid-turn, with pending work or in a team keep running.
+  router.post('/restart-idle', requireTrustedOrigin, asyncHandler(async (_req, res) => {
+    const result = await reapIdleSessions(sessionInfoService, Date.now(), { idleAfterMs: 0 });
+    logger.info('Restarted idle sessions from Settings', { restarted: result.reaped.length, kept: result.kept });
+    res.json({ restarted: result.reaped.length, kept: result.kept });
+  }));
 
   router.get('/status', asyncHandler(async (req, res) => {
     const requestedIds = parseRequestedConversationIds(req.query.ids);

@@ -14,6 +14,7 @@ let maxSeq = 1;
 let workerEvents: { type: string; timestamp: number; data: unknown }[] = [];
 let answeredBefore: number | null = null;
 let card: OpenDecision | null = null;
+let replies = new Map<string, number>();
 const judgeNouls = vi.fn();
 const outputSince = vi.fn((_worker: string, _since: number) => false);
 
@@ -31,6 +32,7 @@ vi.mock('../../src/services/sessions/worker-events.js', async () => {
   const { foldWorkerStates } = await import('../../src/types/worker-events.js');
   return { foldedWorkerStates: () => foldWorkerStates(workerEvents), workerOutputSince: (w: string, t: number) => outputSince(w, t) };
 });
+vi.mock('../../src/services/sessions/held-replies.js', () => ({ repliesOf: () => replies }));
 vi.mock('../../src/services/user-profile.js', () => ({ userName: () => 'Alex' }));
 
 const { projectNeedsYou, projectWorkingOn, projectWorkerTasks, projectWorkerWaits, __resetNeedsYouForTests } = await import('../../src/services/sessions/project-needs-you.js');
@@ -133,6 +135,30 @@ describe('projectNeedsYou', () => {
     projectNeedsYou('conv-p');
     await settle();
     expect(projectNeedsYou('conv-p')?.map(item => item.seq)).toEqual([1, 2]);
+  });
+
+  it('leaves out a thread the user answered from its row or card, until a new ask', async () => {
+    open = [thread(1, { waitingSince: 500 }), thread(2, { waitingSince: 500 })];
+    judgeNouls.mockResolvedValue({ nouls: { act: 0.9, parked: 0.1 } });
+    replies = new Map([['t:1', 600]]);
+    projectNeedsYou('conv-p');
+    await settle();
+    expect(projectNeedsYou('conv-p')?.map(item => item.seq)).toEqual([2]);
+
+    open = [thread(1, { waitingSince: 700, updatedAt: 1100 }), thread(2, { waitingSince: 500 })];
+    maxSeq = 2;
+    projectNeedsYou('conv-p');
+    await settle();
+    expect(projectNeedsYou('conv-p')?.map(item => item.seq)).toEqual([1, 2]);
+    replies = new Map();
+  });
+
+  it('names a thread asked a question by its label, not by a wait the question has moved past', async () => {
+    open = [thread(1, { label: 'Build which first?', ask: 'Which visit gets built first?' }), thread(2, { label: 'Pick one' })];
+    judgeNouls.mockResolvedValue({ nouls: { act: 0.9, parked: 0.1 } });
+    projectNeedsYou('conv-p');
+    await settle();
+    expect(projectNeedsYou('conv-p')?.map(item => item.text)).toEqual(['Build which first?', 'decide 2']);
   });
 
   it("scores the project's open question card like a thread, until the user writes after it", async () => {

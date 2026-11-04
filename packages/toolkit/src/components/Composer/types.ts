@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import type { AttachmentBlock } from '../../hooks/useAttachments.js';
 import type { ComposerPastedSpan } from './pasted-spans.js';
 
@@ -111,13 +112,25 @@ export interface ComposerRuntimeConfig {
     isDefault?: boolean;
     /** Listed behind a collapsed "Other models" row instead of with the rest. */
     other?: boolean;
+    /** A small mark for who serves the model: shown on the menu button, and as the group's tab in the rail layout. */
+    icon?: ReactNode;
+    /** Who serves the model, e.g. 'Claude'; the rail layout shows one group at a time. */
+    group?: string;
+    /** A faint second line under the label in the rail layout, such as the server's host. */
+    detail?: string;
   }>;
+  /** 'rows' (the default) lists every model; 'rail' shows one group at a time beside a column of group marks. */
+  modelMenuLayout?: 'rows' | 'rail';
+  /** Rail layout: the group whose models take a reasoning effort, so the menu
+   *  keeps room for it before one of them is picked. */
+  effortGroup?: string;
   /** A plain line shown at the foot of the model menu, such as where its list came from. */
   modelMenuNote?: string;
   /** The model id the user has chosen; null/undefined means "server default". */
   selectedModel?: string | null;
-  /** Called when the user picks a model; null means "revert to default". */
-  onModelChange?: (modelId: string | null) => void;
+  /** Called when the user picks a model; null means "revert to default". The
+   *  second argument is the picked option's id, even when it is a default. */
+  onModelChange?: (modelId: string | null, optionId?: string) => void;
   /** Reasoning-effort levels the user may pick from (a second selectable
    *  dimension for providers that expose it). When non-empty and onModelChange
    *  is provided, the menu renders a second "Reasoning" radio section. */

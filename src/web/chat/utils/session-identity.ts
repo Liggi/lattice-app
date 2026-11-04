@@ -17,14 +17,27 @@ interface IdentityFields {
 
 interface DetailsFields extends IdentityFields {
   sessionInfo?: { archived?: boolean };
+  pickedUpFromCoordinator?: boolean;
 }
 
-/** The coordinator this conversation was picked up from, or null if it is not a worker. */
+/**
+ * The coordinator this conversation was picked up from, or null if it is not a
+ * worker. Being picked up from an ordinary session does not make it one: a
+ * project started from a plain session is still a project. The parent's list
+ * row says whether it is a coordinator; an archived parent has none, so the
+ * details route answers. Until either does, a coordinator is taken to be a
+ * project and anything else a worker.
+ */
 export function resolveParentConversationId(
   summary: IdentityFields | null | undefined,
   details: DetailsFields | null | undefined,
+  parent?: IdentityFields | null,
 ): string | null {
-  return summary?.pickedUpFrom ?? details?.pickedUpFrom ?? null;
+  const parentId = summary?.pickedUpFrom ?? details?.pickedUpFrom ?? null;
+  if (!parentId) return null;
+  const parentIsCoordinator = parent?.coordinator ?? details?.pickedUpFromCoordinator
+    ?? !(summary?.coordinator || details?.coordinator);
+  return parentIsCoordinator ? parentId : null;
 }
 
 /** True when this conversation dispatches workers of its own. */

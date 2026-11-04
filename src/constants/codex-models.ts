@@ -92,7 +92,7 @@ export const CODEX_EFFORTS: CodexEffortEntry[] = [
   },
   {
     id: 'xhigh',
-    label: 'XHigh',
+    label: 'Extra high',
     description: 'Extra high reasoning depth for complex problems',
   },
   {
