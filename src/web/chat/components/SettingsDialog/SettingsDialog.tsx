@@ -1,5 +1,5 @@
 /* oxlint-disable react-doctor/no-cascading-set-state, react-doctor/no-giant-component, react-doctor/prefer-useReducer, react-doctor/no-render-in-render, react-doctor/no-effect-event-handler */
-import React, { useState, useEffect } from 'react';
+import React, { type JSX, useState, useEffect } from 'react';
 import { Settings, X, Check, Loader2, Download, Copy, CheckCircle2, ChevronDown } from 'lucide-react';
 import { api } from '../../services/api';
 import { usePreferencesContext } from '../../contexts/PreferencesContext';
@@ -8,6 +8,7 @@ import { BackgroundCallsTab } from './BackgroundCallsTab';
 import { formatClaudeModelLabel } from '@/constants/claude-models';
 import { useClaudeModels } from '../../hooks/useClaudeModels';
 import { FeedbackSettingsSection } from '../Feedback/FeedbackSettingsSection';
+import { NotificationsSettingsSection } from './NotificationsSettingsSection';
 import { UpdateSettingsSection } from '../Update/UpdateNotice';
 import { PluginsSettingsSection } from '../../plugins/PluginsSettingsSection';
 
@@ -139,7 +140,7 @@ export function SettingsDialog({ isOpen, onClose, initialTab = 'auth' }: Setting
     <div
       className="fixed inset-0 z-50 flex items-start justify-center sm:items-center"
       style={{
-        paddingTop: 'calc(env(safe-area-inset-top, 0px) + 1rem)',
+        paddingTop: 'calc(var(--app-safe-area-top) + 1rem)',
         paddingRight: 'calc(env(safe-area-inset-right, 0px) + 1rem)',
         paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 1rem)',
         paddingLeft: 'calc(env(safe-area-inset-left, 0px) + 1rem)',
@@ -361,6 +362,8 @@ export function SettingsDialog({ isOpen, onClose, initialTab = 'auth' }: Setting
                   Every new session and project starts here, on this machine. Point it at the folder that holds your repos; the agents find the ones the work involves.
                 </p>
               </div>
+
+              <NotificationsSettingsSection />
 
               <UpdateSettingsSection />
 

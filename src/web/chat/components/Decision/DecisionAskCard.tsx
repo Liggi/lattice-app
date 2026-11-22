@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useRef, type ReactNode } from 'react';
+import { type JSX, createContext, useContext, useEffect, useRef, type ReactNode } from 'react';
 import { DecisionCard } from '@liggi/agent-ui-toolkit';
 import { isOpenDecision, type DecisionAskedData, type DecisionState, type ThreadDecisions } from '@/types/decisions';
 

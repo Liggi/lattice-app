@@ -11,6 +11,7 @@ import { main as startServer } from './server.js';
 import { runSessionCommand } from './cli/session-commands.js';
 import { renderSessionUsageBlock } from './cli/session-cli-spec.js';
 import { FEEDBACK_USAGE, runFeedbackCommand } from './cli/feedback-command.js';
+import { NOTIFY_USAGE, runNotifyCommand } from './cli/notify-command.js';
 import { JOB_USAGE, runJobCommand } from './cli/job-command.js';
 import { runProgressCommand } from './cli/progress-command.js';
 import { ASK_USAGE, runAskCommand } from './cli/ask-command.js';
@@ -36,7 +37,7 @@ which is what the session commands below are written for.
 
 ${renderSessionUsageBlock()}
 
-${FEEDBACK_USAGE}${JOB_USAGE}
+${FEEDBACK_USAGE}${NOTIFY_USAGE}${JOB_USAGE}
 ${ASK_USAGE}
 ${PLUGIN_USAGE}
 ${EXPLAIN_USAGE}
@@ -83,6 +84,11 @@ export async function run(): Promise<void> {
 
   if (first === 'feedback') {
     await runFeedbackCommand(args.slice(1));
+    return;
+  }
+
+  if (first === 'notify') {
+    await runNotifyCommand(args.slice(1));
     return;
   }
 

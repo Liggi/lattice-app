@@ -1,4 +1,4 @@
-import React, { useCallback, useRef } from 'react';
+import React, { type JSX, useCallback, useRef } from 'react';
 import {
   ArrowRight,
   FileCode,

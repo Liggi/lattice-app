@@ -1,7 +1,8 @@
 /* oxlint-disable react-doctor/no-cascading-set-state, react-doctor/no-giant-component, react-doctor/prefer-useReducer, react-doctor/no-render-in-render, react-doctor/no-effect-event-handler */
-import { useState } from 'react';
+import { type JSX, useEffect, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { Archive, Moon, ArrowLeft, PanelRight, PanelLeft, Menu, X, Settings, Import, MessageSquare } from 'lucide-react';
+import { useLiveJobs } from '../ConversationView/RunningJobsStrip';
 import { LatticeLogo } from '../shared/LatticeLogo';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../../services/api';
@@ -14,7 +15,7 @@ import { archivedSidebarQueryKey } from '../../hooks/useArchivedSidebarSessions'
 import { removeConversationFromListCache, type ConversationListCacheData } from '../../utils/conversation-list-cache';
 import { useToast } from '../Toast/Toast';
 import { FeedbackDialog } from '../Feedback/FeedbackDialog';
-import { offerUndo, runUndo, usePendingUndo } from './pending-undo';
+import { noteViewing, offerUndo, runUndo, undoShowsOn, usePendingUndo } from './pending-undo';
 import { UndoButton } from './UndoButton';
 
 interface ConversationHeaderProps {
@@ -53,11 +54,13 @@ export function ConversationHeader({
   const queryClient = useQueryClient();
   const { conversations, invalidateConversations } = useConversations();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const runningJobs = useLiveJobs(sessionId);
   const [settingsOpen, setSettingsOpen] = useState(planSignInWaiting);
   // An agent's proposals appear as cards in the chat, not here.
   const [feedbackOpen, setFeedbackOpen] = useState(false);
   const { showToast } = useToast();
   const pendingUndo = usePendingUndo();
+  useEffect(() => noteViewing(sessionId), [sessionId, pendingUndo]);
 
   const refreshLists = () => Promise.all([
     invalidateConversations(),
@@ -129,9 +132,11 @@ export function ConversationHeader({
   // resolves it, so an archived worker — not in the conversations list —
   // keeps the same way back as a live one.
   const projectId = parentConversationId;
-  // Archive's Undo shows wherever you land; Sleep's only on the session slept.
-  const undoArchive = pendingUndo?.action === 'archive' ? pendingUndo : null;
-  const undoSleep = pendingUndo?.action === 'sleep' && pendingUndo.conversationId === sessionId ? pendingUndo : null;
+  // Archive's Undo shows on the session you land on, Sleep's on the session
+  // slept; switching to another session drops it.
+  const undoShown = pendingUndo && undoShowsOn(pendingUndo, sessionId) ? pendingUndo : null;
+  const undoArchive = undoShown?.action === 'archive' ? undoShown : null;
+  const undoSleep = undoShown?.action === 'sleep' ? undoShown : null;
   const undoHere = undoArchive ?? undoSleep;
   const undoNow = () => runUndo((action) => {
     showToast({ title: action === 'archive' ? 'Could not undo archive' : 'Could not undo sleep', type: 'error' });
@@ -254,9 +259,10 @@ export function ConversationHeader({
                   onClick={onToggleInsightsPanel}
                   aria-label={insightsPanelOpen ? "Hide panel" : "Show panel"}
                   aria-pressed={Boolean(insightsPanelOpen)}
-                  className={`${iconBtn} ${insightsPanelOpen ? 'text-fg bg-surface' : ''}`}
+                  className={`relative ${iconBtn} ${insightsPanelOpen ? 'text-fg bg-surface' : ''}`}
                 >
                   <PanelRight size={16} />
+                  {!insightsPanelOpen && <RunningCount count={runningJobs.length} place="-right-1.5 -top-1.5" />}
                 </button>
               </TooltipTrigger>
               <TooltipContent>{insightsPanelOpen ? 'Hide panel' : 'Show panel'}</TooltipContent>
@@ -386,9 +392,10 @@ export function ConversationHeader({
               onClick={onToggleInsightsPanel}
               aria-label={insightsPanelOpen ? 'Hide panel' : 'Show panel'}
               aria-pressed={Boolean(insightsPanelOpen)}
-              className={`flex items-center justify-center w-10 h-10 ui-icon-btn touch-manipulation ${insightsPanelOpen ? 'text-fg bg-surface' : ''}`}
+              className={`relative flex items-center justify-center w-10 h-10 ui-icon-btn touch-manipulation ${insightsPanelOpen ? 'text-fg bg-surface' : ''}`}
             >
               <PanelRight size={20} />
+              {!insightsPanelOpen && <RunningCount count={runningJobs.length} place="right-0.5 top-0.5" />}
             </button>
           )}
         </div>
@@ -403,5 +410,19 @@ export function ConversationHeader({
         screen="conversation"
       />
     </TooltipProvider>
+  );
+}
+
+/** How many jobs this chat (and a project's workers) has running, on the button that opens the panel listing them. */
+function RunningCount({ count, place }: { count: number; place: string }) {
+  if (count === 0) return null;
+  return (
+    <span
+      data-testid="running-jobs-count"
+      aria-label={`${count} ${count === 1 ? 'job' : 'jobs'} running`}
+      className={`absolute ${place} flex h-[15px] min-w-[15px] items-center justify-center rounded-full bg-accent px-1 text-[10px] font-semibold tabular-nums leading-none text-bg`}
+    >
+      {count}
+    </span>
   );
 }

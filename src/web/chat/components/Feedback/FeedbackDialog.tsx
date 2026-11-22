@@ -1,5 +1,5 @@
 /* oxlint-disable react-doctor/no-cascading-set-state, react-doctor/no-giant-component, react-doctor/prefer-useReducer */
-import { useEffect, useRef, useState } from 'react';
+import { type JSX, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { AlertTriangle, CheckCircle2, Loader2, MessageSquare, X } from 'lucide-react';
 import { api } from '../../services/api';
@@ -186,7 +186,7 @@ export function FeedbackDialog({ isOpen, onClose, conversationId, screen, draftI
     <div
       className="fixed inset-0 z-[60] flex items-start justify-center sm:items-center"
       style={{
-        paddingTop: 'calc(env(safe-area-inset-top, 0px) + 1rem)',
+        paddingTop: 'calc(var(--app-safe-area-top) + 1rem)',
         paddingRight: 'calc(env(safe-area-inset-right, 0px) + 1rem)',
         paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 1rem)',
         paddingLeft: 'calc(env(safe-area-inset-left, 0px) + 1rem)',

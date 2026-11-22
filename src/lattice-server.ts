@@ -145,7 +145,7 @@ export class LatticeServer {
     this.claudeSettingsService = ClaudeSettingsService.getInstance();
     this.managedClaudeHooksService = new ManagedClaudeHooksService(this.claudeSettingsService, this.logger);
     this.workingDirectoriesService = new WorkingDirectoriesService(this.historyReader, this.logger);
-    this.notificationService = new NotificationService();
+    this.notificationService = NotificationService.getInstance();
     this.webPushService = WebPushService.getInstance();
     // Wire up services that don't depend on processManager
     this.permissionTracker.setNotificationService(this.notificationService);

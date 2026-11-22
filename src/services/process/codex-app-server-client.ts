@@ -3,6 +3,8 @@ import { EventEmitter } from 'node:events';
 import { existsSync } from 'node:fs';
 import readline from 'node:readline';
 import { agentEnv } from '../infrastructure/agent-env.js';
+import { ConfigService } from '../infrastructure/config-service.js';
+import { CODEX_API_KEY_PROVIDER, codexModelProvider } from '../../constants/codex-models.js';
 import { codexSkillsRoot } from '../infrastructure/agent-skills.js';
 import { createLogger } from '../infrastructure/logger.js';
 import { parseJson } from '../../utils/json.js';
@@ -106,6 +108,24 @@ export function isCodexRpcRefusal(error: unknown): boolean {
   return typeof code === 'string' || typeof code === 'number';
 }
 
+/**
+ * Models marked apiKeyBilled run on this provider: the OpenAI API with the key
+ * saved in Settings → Providers, passed in an env var of its own because
+ * OPENAI_API_KEY is removed to keep every other model on the ChatGPT plan.
+ */
+const API_KEY_ENV = 'LATTICE_CODEX_OPENAI_API_KEY';
+const API_KEY_PROVIDER_CONFIG = [
+  '-c', `model_providers.${CODEX_API_KEY_PROVIDER}.name="OpenAI API"`,
+  '-c', `model_providers.${CODEX_API_KEY_PROVIDER}.base_url="https://api.openai.com/v1"`,
+  '-c', `model_providers.${CODEX_API_KEY_PROVIDER}.wire_api="responses"`,
+  '-c', `model_providers.${CODEX_API_KEY_PROVIDER}.env_key="${API_KEY_ENV}"`,
+];
+
+function modelProviderParam(model: string): { modelProvider?: string } {
+  const provider = codexModelProvider(model);
+  return provider ? { modelProvider: provider } : {};
+}
+
 export class CodexAppServerClient extends EventEmitter {
   private child: ChildProcessWithoutNullStreams | null = null;
   private nextId = 1;
@@ -135,6 +155,7 @@ export class CodexAppServerClient extends EventEmitter {
     await this.ensureStarted();
     return this.rpc<CodexThreadStartResponse>('thread/start', {
       model: options.model,
+      ...modelProviderParam(options.model),
       cwd: options.cwd,
       approvalPolicy: CODEX_APPROVAL_POLICY,
       sandbox: CODEX_SANDBOX_MODE,
@@ -150,6 +171,7 @@ export class CodexAppServerClient extends EventEmitter {
     return this.rpc<CodexThreadResumeResponse>('thread/resume', {
       threadId,
       model: options.model,
+      ...modelProviderParam(options.model),
       cwd: options.cwd,
       approvalPolicy: CODEX_APPROVAL_POLICY,
       sandbox: CODEX_SANDBOX_MODE,
@@ -282,10 +304,13 @@ export class CodexAppServerClient extends EventEmitter {
   private async startAndInitialize(): Promise<void> {
     const env = agentEnv();
     delete env.OPENAI_API_KEY;
+    const apiKey = ConfigService.getInstance().getConfig().openai?.apiKey;
+    if (apiKey) env[API_KEY_ENV] = apiKey;
 
     this.child = spawn('codex', [
       '-c', 'preferred_auth_method=chatgpt',
       '-c', 'features.goals=true',
+      ...API_KEY_PROVIDER_CONFIG,
       ...this.launchConfig,
       'app-server',
       '--listen', 'stdio://',

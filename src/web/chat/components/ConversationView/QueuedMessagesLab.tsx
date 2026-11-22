@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { type JSX, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { QueuedMessages } from './QueuedMessages';
 import type { PendingInput } from '../../hooks/useHarnessSession';

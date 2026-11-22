@@ -7,13 +7,14 @@ import {
 import { supersededModelRefusal } from '../../src/constants/superseded-models.js';
 
 describe('claude-models registry', () => {
-  it('holds the eleven known model ids', () => {
+  it('holds the twelve known model ids', () => {
     expect(CLAUDE_MODELS.map((m) => m.id)).toEqual([
       'claude-opus-5-5',
       'claude-opus-5',
       'claude-opus-4-8',
       'claude-opus-4-7',
       'claude-opus-4-6',
+      'claude-fable-5-2',
       'claude-fable-5-1',
       'claude-fable-5',
       'claude-sonnet-5-5',
@@ -38,6 +39,7 @@ describe('claude-models registry', () => {
 
   it('marks current models as composer-selectable', () => {
     for (const id of [
+      'claude-fable-5-2',
       'claude-fable-5-1',
       'claude-opus-5-5',
       'claude-sonnet-5-5',
@@ -48,8 +50,8 @@ describe('claude-models registry', () => {
     }
   });
 
-  it('puts only Sonnet 5 under Other in the built-in list', () => {
-    expect(CLAUDE_MODELS.filter((m) => m.other).map((m) => m.id)).toEqual(['claude-sonnet-5']);
+  it('puts only Fable 5.1 and Sonnet 5 under Other in the built-in list', () => {
+    expect(CLAUDE_MODELS.filter((m) => m.other).map((m) => m.id)).toEqual(['claude-fable-5-1', 'claude-sonnet-5']);
   });
 
   it('uses version-explicit labels for models with siblings', () => {

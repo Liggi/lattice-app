@@ -1,3 +1,4 @@
+import { isQuietTurnMarker } from '@/constants/quiet-turn';
 import type { DisplayContentBlock } from '../types';
 
 // `trim()` keeps zero-width characters, and a model asked to end a turn with
@@ -9,7 +10,8 @@ export function hasVisibleText(text: string): boolean {
   return !INVISIBLE_ONLY.test(text);
 }
 
-/** A text block with nothing a reader could see. */
+/** A text block with nothing for a reader: invisible, or a quiet turn's marker. */
 export function isBlankText(block: DisplayContentBlock): boolean {
-  return block.type === 'text' && !(typeof block.text === 'string' && hasVisibleText(block.text));
+  if (block.type !== 'text') return false;
+  return !(typeof block.text === 'string' && hasVisibleText(block.text) && !isQuietTurnMarker(block.text));
 }

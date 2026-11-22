@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { type JSX } from 'react';
 import { Box, PenLine } from 'lucide-react';
 
 /** Who wrote a note on a screenshot: the agent, or you. */

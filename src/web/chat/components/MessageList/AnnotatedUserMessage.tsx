@@ -1,4 +1,4 @@
-import React, { useLayoutEffect, useRef, useState } from 'react';
+import React, { type JSX, useLayoutEffect, useRef, useState } from 'react';
 import type { ParsedAnnotatedMessage } from '../../utils/annotations-format';
 import { parseScreenshotQuote } from '../../utils/image-note-crop';
 

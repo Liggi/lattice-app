@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { type JSX, useState } from 'react';
 import { Eye, EyeOff, Loader2, Plus } from 'lucide-react';
 import { contextWindowProblem, endpointModelOption, endpointModelProblem } from '@/constants/claude-endpoint';
 import { endpointModelName } from '@/constants/model-display';

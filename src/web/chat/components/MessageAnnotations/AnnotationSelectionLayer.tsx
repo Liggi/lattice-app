@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { type JSX, useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { MessageCircleQuestion, MessageSquare, MessageSquarePlus, Trash2 } from 'lucide-react';
 import {
@@ -114,7 +114,7 @@ interface NoteEditorProps {
   onNoteChange: (value: string) => void;
   onSubmit: () => void;
   onCancel: () => void;
-  inputRef: React.RefObject<HTMLTextAreaElement>;
+  inputRef: React.RefObject<HTMLTextAreaElement | null>;
 }
 
 /** Quote preview + textarea + save/cancel, for adding a note or editing one. */

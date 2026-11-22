@@ -19,6 +19,8 @@ import { latticeCli } from '../services/sessions/pickup-prompts.js';
 
 import {
   renderProjectState,
+  STORY_MAX_WORDS,
+  storyWordCount,
   RECONCILE_DISPOSITIONS,
   THREAD_WAIT_KINDS,
   type ProjectNotedData,
@@ -534,6 +536,61 @@ async function cmdSend(cmd: ParsedCommand): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// consult — ask the coordinator's chief of staff, starting it the first time
+
+async function cmdConsult(cmd: ParsedCommand): Promise<void> {
+  const from = str(cmd, 'from');
+  if (!from) fail('consult needs --from <your own conversation id>: the coordinator whose chief of staff to ask');
+  requireConversation(from);
+  const file = str(cmd, 'message-file');
+  const message = file ? fs.readFileSync(file, 'utf-8') : (str(cmd, 'message') ?? cmd.named.message ?? '');
+  if (!message.trim()) fail('consult needs a message (--message-file PATH, --message "…", or trailing text)');
+  const summary = str(cmd, 'summary');
+  const address = readServerAddress();
+  const host = str(cmd, 'host') ?? address.host;
+  const port = int(cmd, 'port') ?? address.port;
+
+  const res = await fetch(`http://${host}:${port}/api/conv/create`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', ...serverAuthHeaders() },
+    body: JSON.stringify({
+      message,
+      pickedUpFrom: from,
+      workerRole: 'chief-of-staff',
+      task: 'Chief of staff: thinks through framing, options, briefs and closing threads with front',
+    }),
+  }).catch((err: unknown) => fail(`could not reach the Lattice server at ${host}:${port} (${err instanceof Error ? err.message : String(err)})`));
+  const text = await res.text();
+  let payload: Record<string, unknown> = {};
+  try {
+    payload = text ? parseJson(text) as Record<string, unknown> : {};
+  } catch {
+    payload = { raw: text };
+  }
+
+  if (res.ok) {
+    const conversationId = String(payload.conversationId ?? '');
+    if (isJson(cmd)) emitJson({ started: true, conversationId });
+    else process.stdout.write(`Started your chief of staff, ${conversationId}, with this as its first message. Its reply reaches you as a report.\n`);
+    return;
+  }
+  if (res.status !== 409 || payload.code !== 'CHIEF_OF_STAFF_EXISTS' || typeof payload.conversationId !== 'string') {
+    fail(`server rejected consult: ${typeof payload.error === 'string' ? payload.error : `HTTP ${res.status}`}`);
+  }
+  const chief = payload.conversationId;
+  const result = await sendSessionMessage({
+    host,
+    port,
+    conversationId: chief,
+    message,
+    from,
+    summary: summary ?? 'Consulting the chief of staff',
+  }).catch((error: unknown) => fail(error instanceof Error ? error.message : String(error)));
+  if (isJson(cmd)) emitJson({ started: false, conversationId: chief, ...result });
+  else process.stdout.write(`Sent to your chief of staff, ${chief}. Its reply reaches you as a report.\n`);
+}
+
+// ---------------------------------------------------------------------------
 // Unread messages — what a session has been sent and no turn has taken yet
 
 /** Rough age, for a line a coordinator reads rather than measures. */
@@ -737,6 +794,12 @@ async function cmdNote(cmd: ParsedCommand): Promise<void> {
     if (!why) fail('--retire needs --with "<why it no longer applies>"; a decision withdrawn without a reason cannot be read back');
     notes.push({ kind: 'retire', text: why, by: 'coordinator', supersedes: parseDecisionSeqs(retire, '--retire') });
   }
+  const story = str(cmd, 'story');
+  if (story) {
+    const words = storyWordCount(story);
+    if (words > STORY_MAX_WORDS) fail(`--story is ${words} words; keep it to ${STORY_MAX_WORDS}: what the project set out to do, what was learned on the way, where that leaves it, what is next`);
+    notes.push({ kind: 'story', text: story, by: 'coordinator' });
+  }
   const priority = str(cmd, 'priority');
   if (priority) {
     notes.push({
@@ -803,7 +866,7 @@ async function cmdNote(cmd: ParsedCommand): Promise<void> {
   const now = str(cmd, 'now');
   if (now) notes.push({ kind: 'now', text: now, by: 'coordinator' });
   if (notes.length === 0) {
-    fail('note needs at least one of --outcome, --priority, --rank, --decide, --retire, --open, --thread, --close, --park, --unpark, --now, --reconcile, --account-from-now');
+    fail('note needs at least one of --outcome, --story, --priority, --rank, --decide, --retire, --open, --thread, --close, --park, --unpark, --now, --reconcile, --account-from-now');
   }
 
   if (open && thread !== undefined) fail('--open starts a new thread and --thread updates an existing one; pass one');
@@ -930,8 +993,8 @@ async function cmdNew(cmd: ParsedCommand): Promise<void> {
   const thread = int(cmd, 'thread');
   const coordinator = bool(cmd, 'coordinator');
   const providerFlag = str(cmd, 'provider');
-  if (providerFlag && providerFlag !== 'claude' && providerFlag !== 'codex') {
-    fail(`--provider must be claude or codex, got "${providerFlag}"`);
+  if (providerFlag && providerFlag !== 'claude' && providerFlag !== 'codex' && providerFlag !== 'antigravity') {
+    fail(`--provider must be claude, codex or antigravity, got "${providerFlag}"`);
   }
   const endpointModels = readEndpointModels();
   const mismatch = modelProviderMismatch(providerFlag, model, endpointModels);
@@ -940,15 +1003,15 @@ async function cmdNew(cmd: ParsedCommand): Promise<void> {
   // to the server, which starts it on the configured coordinator provider
   // (coordinator-defaults.ts).
   const provider = providerFlag ?? providerForModel(model, endpointModels) ?? (coordinator ? undefined : 'claude');
-  // Codex reads effort; Claude has no equivalent, so naming one there is a
-  // silently ignored flag rather than a setting. The create route already
-  // accepted this — the CLI was the only supported way to dispatch and it
-  // could not send it, so an Astra assignment took the configured default
-  // whatever the work needed.
+  // Codex reads effort and Claude takes it as `--effort`; Antigravity
+  // models carry their thinking level in the model id, so naming one there
+  // would be a silently ignored flag rather than a setting.
   const reasoningEffort = str(cmd, 'reasoning-effort');
-  if (reasoningEffort && provider && provider !== 'codex') {
-    fail(`--reasoning-effort is a Codex setting; --provider ${provider} has none`);
+  if (reasoningEffort && provider && provider !== 'codex' && provider !== 'claude') {
+    fail(`--reasoning-effort is a Codex and Claude setting; --provider ${provider} has none`);
   }
+  const profile = str(cmd, 'profile');
+  if (profile && !coordinator) fail('--profile is chosen when a coordinator is created: pass it with --coordinator');
   const fast = bool(cmd, 'fast');
   if (fast && provider && provider !== 'codex') {
     fail(`--fast is a Codex setting; --provider ${provider} has none`);
@@ -975,6 +1038,7 @@ async function cmdNew(cmd: ParsedCommand): Promise<void> {
     ...(from && task ? { task } : {}),
     ...(from && thread !== undefined ? { thread } : {}),
     ...(coordinator ? { coordinator: true } : {}),
+    ...(profile ? { profile } : {}),
     ...(bool(cmd, 'archived') ? { archived: true } : {}),
     ...(model ? { model } : {}),
     ...(reasoningEffort ? { reasoningEffort } : {}),
@@ -1249,6 +1313,7 @@ async function cmdMoveThread(cmd: ParsedCommand): Promise<void> {
 const HANDLERS = new Map<string, (cmd: ParsedCommand) => void | Promise<void>>([
   ['new', cmdNew],
   ['send', cmdSend],
+  ['consult', cmdConsult],
   ['list', cmdList],
   ['show', cmdShow],
   ['search', cmdSearch],
@@ -1271,7 +1336,7 @@ const HANDLERS = new Map<string, (cmd: ParsedCommand) => void | Promise<void>>([
 ]);
 
 /** Verbs that are pure HTTP clients to the running server and open no SQLite connection. */
-const HTTP_VERBS = new Set(['new', 'note', 'state', 'workers', 'switch', 'move-worker', 'move-thread', 'compact', 'react', 'permission']);
+const HTTP_VERBS = new Set(['new', 'consult', 'note', 'state', 'workers', 'switch', 'move-worker', 'move-thread', 'compact', 'react', 'permission']);
 
 /** Verbs that only read, and so can open SQLite read-only. */
 const MUTATING_VERBS = new Set(['archive', 'unarchive']);

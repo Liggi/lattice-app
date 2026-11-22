@@ -6,6 +6,8 @@ export interface CodexModelEntry {
   efforts: string[];
   /** The model to use instead. Set means new sessions, resumes and switches refuse this id. */
   supersededBy?: string;
+  /** Runs on the OpenAI API with the key in Settings, not the ChatGPT sign-in. */
+  apiKeyBilled?: boolean;
 }
 
 export interface CodexEffortEntry {
@@ -15,6 +17,14 @@ export interface CodexEffortEntry {
 }
 
 export const CODEX_MODELS: CodexModelEntry[] = [
+  {
+    id: 'gpt-6.2-astra',
+    label: 'Astra 6.2 (API)',
+    description: 'Newest Astra, on the OpenAI API key rather than the ChatGPT plan',
+    composerSelectable: true,
+    efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+    apiKeyBilled: true,
+  },
   {
     id: 'gpt-6.1-sol',
     label: 'Sol 6.1',
@@ -112,6 +122,14 @@ export const DEFAULT_CODEX_EFFORT = 'xhigh';
 
 export function getCodexModel(id: string): CodexModelEntry | undefined {
   return CODEX_MODELS.find((model) => model.id === id);
+}
+
+/** The Codex model provider defined for API-key models in codex-app-server-client.ts. */
+export const CODEX_API_KEY_PROVIDER = 'openai_api';
+
+/** The Codex provider `id` must run on, or undefined for the provider in the user's Codex config. */
+export function codexModelProvider(id: string | null | undefined): string | undefined {
+  return id && getCodexModel(id)?.apiKeyBilled ? CODEX_API_KEY_PROVIDER : undefined;
 }
 
 export function formatCodexModelLabel(id: string): string {

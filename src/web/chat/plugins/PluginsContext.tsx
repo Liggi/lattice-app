@@ -7,7 +7,7 @@
  * React in the page breaks hooks.
  */
 /* oxlint-disable react-refresh/only-export-components */
-import React, { createContext, useContext, useEffect, useRef, useState, type ComponentType, type ReactNode } from 'react';
+import React, { type JSX, createContext, useContext, useEffect, useRef, useState, type ComponentType, type ReactNode } from 'react';
 import * as ReactDOM from 'react-dom';
 import * as jsxRuntime from 'react/jsx-runtime';
 import { useNavigate } from 'react-router-dom';

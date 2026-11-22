@@ -1158,6 +1158,22 @@ describe('deriveUsage', () => {
     expect(usage.costUsd).toBe(0.10)
   })
 
+  it('ignores a subagent message when reading contextTokens', () => {
+    const events = [
+      makeEvent('run:start'),
+      makeEvent('content', {
+        blocks: [{ type: 'text', text: 'main agent' }],
+        apiUsage: { input_tokens: 2, output_tokens: 80, cache_creation_input_tokens: 1000, cache_read_input_tokens: 101000 },
+      }),
+      makeEvent('content', {
+        blocks: [{ type: 'text', text: 'subagent' }],
+        parentToolUseId: 'toolu_agent',
+        apiUsage: { input_tokens: 2, output_tokens: 4, cache_creation_input_tokens: 3000, cache_read_input_tokens: 221000 },
+      }),
+    ]
+    expect(deriveUsage(events)!.contextTokens).toBe(102002)
+  })
+
   it('contextTokens is undefined when no content events have apiUsage', () => {
     const events = [
       makeEvent('run:start'),

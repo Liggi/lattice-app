@@ -17,6 +17,7 @@
  * not an ask about the article).
  */
 
+import type { JSX } from 'react';
 import { NoteMarkdown } from './ArticleMarkdown';
 import { ASK_STATUS_LABEL, type AskStatus } from './ask-state';
 

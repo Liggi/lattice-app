@@ -14,7 +14,7 @@
  * you back to that exact conversation.
  */
 
-import { useCallback, useEffect } from 'react';
+import { type JSX, useCallback, useEffect } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, ChevronLeft, ChevronRight, MessageSquare } from 'lucide-react';
 import { MapCanvas } from './map/MapCanvas';

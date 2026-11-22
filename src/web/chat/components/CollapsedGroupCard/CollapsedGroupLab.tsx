@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { type JSX, useState, useMemo } from 'react';
 import { ArrowLeft, Pencil, FileText, Terminal, ChevronDown } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { cn } from '@/web/chat/lib/utils';

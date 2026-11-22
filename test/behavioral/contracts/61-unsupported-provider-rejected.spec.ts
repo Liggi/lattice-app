@@ -47,7 +47,7 @@ test.describe('POST /api/conv/create — provider boundary', () => {
     expect(resp.status).toBe(400);
     const body = (await resp.json()) as { error?: string; supportedProviders?: string[] };
     expect(body.error).toBe('unsupported_provider');
-    expect(body.supportedProviders).toEqual(['claude', 'codex', 'opencode']);
+    expect(body.supportedProviders).toEqual(['claude', 'codex', 'opencode', 'antigravity']);
   });
 
   test('accepts supported Codex text attachments and starts the conversation', async () => {

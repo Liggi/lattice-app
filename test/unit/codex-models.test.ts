@@ -12,6 +12,7 @@ import {
 describe('codex-models registry', () => {
   it('holds the known model ids in order', () => {
     expect(CODEX_MODELS.map((m) => m.id)).toEqual([
+      'gpt-6.2-astra',
       'gpt-6.1-sol',
       'gpt-6-astra',
       'gpt-5.6-sol',
@@ -21,6 +22,10 @@ describe('codex-models registry', () => {
       'gpt-5.4-mini',
       'gpt-5.3-codex-spark',
     ]);
+  });
+
+  it('runs only Astra 6.2 on the OpenAI API key', () => {
+    expect(CODEX_MODELS.filter((m) => m.apiKeyBilled).map((m) => m.id)).toEqual(['gpt-6.2-astra']);
   });
 
   it('marks Sol 6.1, Astra and the 5.6 line as composer-selectable', () => {

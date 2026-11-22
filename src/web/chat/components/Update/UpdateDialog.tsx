@@ -1,5 +1,5 @@
 /* oxlint-disable react-doctor/no-cascading-set-state */
-import { useEffect, useState } from 'react';
+import { type JSX, useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -109,7 +109,7 @@ export function UpdateDialog({ status: initial, onClose }: UpdateDialogProps): J
     <div
       className="fixed inset-0 z-[60] flex items-start justify-center sm:items-center"
       style={{
-        paddingTop: 'calc(env(safe-area-inset-top, 0px) + 1rem)',
+        paddingTop: 'calc(var(--app-safe-area-top) + 1rem)',
         paddingRight: 'calc(env(safe-area-inset-right, 0px) + 1rem)',
         paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 1rem)',
         paddingLeft: 'calc(env(safe-area-inset-left, 0px) + 1rem)',

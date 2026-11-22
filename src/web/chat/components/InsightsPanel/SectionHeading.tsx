@@ -7,7 +7,7 @@
  * from the sidebar beside it (2026-09-27).
  */
 
-import React from 'react';
+import React, { type JSX } from 'react';
 
 export function SectionHeading({ children }: { children: React.ReactNode }): JSX.Element {
   return <div className="px-2 pb-1.5 text-xs font-medium text-fg-3">{children}</div>;

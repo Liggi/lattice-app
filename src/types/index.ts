@@ -281,6 +281,8 @@ export interface ConversationConfig {
   conversationId?: string;
   previousMessages?: ConversationMessage[]; // Messages from previous session for resume context
   permissionMode?: string; // Permission mode: "acceptEdits" | "bypassPermissions" | "default" | "plan"
+  /** Claude Code's `--effort` (low | medium | high | xhigh | max); absent leaves the CLI's own default. */
+  effort?: string;
 }
 
 // API request/response types

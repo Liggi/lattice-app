@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useMemo } from 'react';
+import React, { type JSX, createContext, useContext, useMemo } from 'react';
 
 /** What a sending session can be called, from `GET /api/conv/:id/workers`. */
 export interface SenderIdentity {

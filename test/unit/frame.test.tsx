@@ -64,6 +64,31 @@ describe('sessions whose model cannot read images', () => {
   });
 });
 
+describe('an install with a figure toolkit', () => {
+  it('points sessions at its guide instead of the SVG route', () => {
+    const text = frameGuidance('lattice', true, '/kit/GUIDE.md').join('\n');
+    expect(text).toMatch(/read \/kit\/GUIDE\.md/);
+    expect(text).not.toMatch(/lattice frame|viewBox/);
+  });
+
+  it('names questions about structure as a reason to draw first, on both routes', () => {
+    for (const text of [frameGuidance('lattice', true, '/kit/GUIDE.md'), frameGuidance('lattice', true, '')].map((t) => t.join('\n'))) {
+      expect(text).toMatch(/where does X live/);
+      expect(text).toMatch(/picture first/);
+    }
+  });
+
+  it("adds the install's own step after the guide, and nothing when there is none", () => {
+    const text = frameGuidance('lattice', true, '/kit/GUIDE.md', 'Show it to the reviewer first.').join('\n');
+    expect(text).toMatch(/the figure carries one point\.'?\n- Show it to the reviewer first\.$/);
+    expect(frameGuidance('lattice', true, '/kit/GUIDE.md', '').join('\n')).toMatch(/the figure carries one point\.$/);
+  });
+
+  it('keeps sessions that cannot read images on the SVG route', () => {
+    expect(frameGuidance('lattice', false, '/kit/GUIDE.md').join('\n')).toMatch(/never open the PNGs/);
+  });
+});
+
 describe('lattice-gallery block', () => {
   it('reads images, captions and notes, with and without a box', () => {
     const parsed = parseGalleryBlock(JSON.stringify({ images: [{ path: '/tmp/a.png', size: [200, 100], caption: 'A', notes: [{ text: 'boxed', box: [10, 20, 30, 40] }, { text: 'whole' }] }] }));

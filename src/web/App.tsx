@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { type JSX } from 'react';
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import ChatApp from './chat/ChatApp';
 import { ErrorBoundary, AppErrorFallback } from './chat/components/ErrorBoundary';

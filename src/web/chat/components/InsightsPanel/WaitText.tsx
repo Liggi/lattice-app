@@ -15,7 +15,7 @@
  * The coordinator reads "the coordinator".
  */
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { type JSX, useEffect, useRef, useState } from 'react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/web/chat/components/ui/tooltip';
 import type { SessionReference, WorkerCardState } from '@/types/worker-events';
 

@@ -5,7 +5,7 @@
  * line of its own (`thread-dismissal.ts`); this is what the user sees of it.
  */
 
-import React from 'react';
+import React, { type JSX } from 'react';
 import { CirclePause, Undo2 } from 'lucide-react';
 import type { ChatMessage } from '../../types';
 

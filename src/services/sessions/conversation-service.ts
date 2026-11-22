@@ -285,6 +285,24 @@ export class ConversationService {
       logger.debug('Conversations service_tier migration check', { error });
     }
 
+    // The coordinator profile a coordinator was created on (coordinator-profiles.ts),
+    // and the role a worker was created for ('chief-of-staff'). NULL is the
+    // built-in profile and an ordinary worker, which is what every row from
+    // before these columns is.
+    try {
+      const convTableInfo = this.db.pragma('table_info(conversations)') as Array<{ name: string }>;
+      if (!convTableInfo.some(col => col.name === 'profile')) {
+        this.db.exec('ALTER TABLE conversations ADD COLUMN profile TEXT DEFAULT NULL');
+        logger.info('Added profile column to conversations table');
+      }
+      if (!convTableInfo.some(col => col.name === 'worker_role')) {
+        this.db.exec('ALTER TABLE conversations ADD COLUMN worker_role TEXT DEFAULT NULL');
+        logger.info('Added worker_role column to conversations table');
+      }
+    } catch (error) {
+      logger.debug('Conversations profile/worker_role migration check', { error });
+    }
+
     // Add reasoning_effort to segments if it doesn't exist. Nullable on
     // purpose: an existing segment's setting was never recorded, and NULL says
     // "unknown" rather than claiming a default was somebody's choice.
@@ -303,8 +321,8 @@ export class ConversationService {
   private prepareStatements(): void {
     this.stmts = {
       insertConversation: this.db.prepare(`
-        INSERT INTO conversations (conversation_id, created_at, updated_at, working_directory, workspace, latest_provider, latest_segment_id, initial_prompt, picked_up_from, coordinator, service_tier)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO conversations (conversation_id, created_at, updated_at, working_directory, workspace, latest_provider, latest_segment_id, initial_prompt, picked_up_from, coordinator, service_tier, profile, worker_role)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `),
 
       insertSegment: this.db.prepare(`
@@ -453,6 +471,10 @@ export class ConversationService {
     initialPrompt?: string;
     pickedUpFrom?: string;
     coordinator?: boolean;
+    /** Coordinator only: the profile it is created on (coordinator-profiles.ts). */
+    profile?: string;
+    /** Worker only: a role other than an ordinary worker, e.g. 'chief-of-staff'. */
+    workerRole?: string;
     /**
      * Create the conversation already archived, in the same transaction as
      * the conversation row. A verification fixture needs this: a coordinator
@@ -475,6 +497,8 @@ export class ConversationService {
         params.pickedUpFrom || null,
         params.coordinator ? 1 : 0,
         params.serviceTier || null,
+        params.profile || null,
+        params.workerRole || null,
       );
 
       this.stmts.insertSegment.run(
@@ -667,6 +691,28 @@ export class ConversationService {
     const row = this.db.prepare('SELECT service_tier FROM conversations WHERE conversation_id = ?')
       .get(conversationId) as { service_tier: string | null } | undefined;
     return row?.service_tier ?? null;
+  }
+
+  /** The coordinator profile recorded on this conversation, or null (the built-in one). */
+  getProfile(conversationId: string): string | null {
+    const row = this.db.prepare('SELECT profile FROM conversations WHERE conversation_id = ?')
+      .get(conversationId) as { profile: string | null } | undefined;
+    return row?.profile ?? null;
+  }
+
+  /** The role a worker was created for, or null for an ordinary worker. */
+  getWorkerRole(conversationId: string): string | null {
+    const row = this.db.prepare('SELECT worker_role FROM conversations WHERE conversation_id = ?')
+      .get(conversationId) as { worker_role: string | null } | undefined;
+    return row?.worker_role ?? null;
+  }
+
+  /** The worker of a coordinator created for a role, oldest first, or null when it has none. */
+  findWorkerWithRole(coordinatorId: string, role: string): string | null {
+    const row = this.db.prepare(
+      'SELECT conversation_id FROM conversations WHERE picked_up_from = ? AND worker_role = ? ORDER BY created_at ASC LIMIT 1',
+    ).get(coordinatorId, role) as { conversation_id: string } | undefined;
+    return row?.conversation_id ?? null;
   }
 
   wasCreatedHidden(conversationId: string): boolean {

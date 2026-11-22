@@ -1,5 +1,5 @@
 /* oxlint-disable react-doctor/no-array-index-as-key */
-import { useState, useCallback, useMemo } from 'react'
+import { type JSX, useState, useCallback, useMemo } from 'react'
 
 // Isometric projection helpers
 const ISO_ANGLE = Math.PI / 6 // 30 degrees

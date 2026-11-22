@@ -26,7 +26,7 @@
  * answer is always in the same place.
  */
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { type JSX, useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, ChevronDown, ChevronRight, PackageCheck } from 'lucide-react';
 import { ShipStateIcon } from './ShipStateIcon';
 import { cannotRead, hasStarted, isStalled, jobRate, needsLook, PROCESS_ENDED_REASON } from '@/types/job-stall';
@@ -160,7 +160,7 @@ function WorkerJob({ job, now }: { job: JobProgress; now: number }) {
   const stuck = needsLook(job, now);
   return (
     <span data-testid="panel-job" data-job-state={jobState(job, now)} className="mt-2.5 flex flex-col">
-      {hasStarted(job) ? (
+      {counted(job) ? (
         <>
           <span className="flex items-baseline justify-between gap-3 text-[12.5px]">
             <span className="min-w-0 break-words text-pretty text-fg-2">{job.label}</span>
@@ -172,6 +172,15 @@ function WorkerJob({ job, now }: { job: JobProgress; now: number }) {
       <JobStatus job={job} now={now} />
     </span>
   );
+}
+
+/**
+ * Whether the row draws a count and strip: once the job moves, or from the
+ * start when work was already done before it was started (a scan tracked
+ * partway through), since that count was read from the work too.
+ */
+function counted(job: JobProgress): boolean {
+  return hasStarted(job) || job.done > 0;
 }
 
 /** What the panel's tests and the row's tone go by. */
@@ -198,7 +207,13 @@ function StartingLine({ job, now }: { job: JobProgress; now: number }) {
 function JobStatus({ job, now }: { job: JobProgress; now: number }) {
   const error = cannotRead(job);
   if (error !== null) return <span className="mt-1.5 text-[12px]"><Caution testId="panel-job-unreadable">Can't read the count: {error}</Caution></span>;
-  if (!hasStarted(job)) return null;
+  if (!hasStarted(job)) {
+    if (job.done === 0) return null;
+    const waited = duration(now - job.startedAt);
+    return isStalled(job, now)
+      ? <span className="mt-1.5 text-[12px]"><Caution testId="panel-job-starting">No new item in {waited}</Caution></span>
+      : <span data-testid="panel-job-starting" className="mt-1.5 text-[12px] text-fg-3">No new item yet, {waited}</span>;
+  }
   if (isStalled(job, now)) return <span className="mt-1.5 text-[12px]"><Caution testId="panel-job-stuck">No progress for {duration(now - job.movedAt)}</Caution></span>;
   const pace = jobPace(job, now);
   return pace ? <span data-testid="panel-job-pace" className="mt-1.5 text-[12px] text-fg-3">{pace}</span> : null;
@@ -243,7 +258,7 @@ function jobPace(job: JobProgress, now: number): string | null {
  * that has stalled (`job-stall.ts`) goes still, grey ticks and an idle
  * cube, and says it is stuck.
  */
-function JobRow({ job, now, onOpen }: { job: JobProgress; now: number; onOpen?: (conversationId: string) => void }) {
+export function JobRow({ job, now, onOpen }: { job: JobProgress; now: number; onOpen?: (conversationId: string) => void }): JSX.Element {
   const stuck = needsLook(job, now);
   const body = (
     <>
@@ -251,7 +266,7 @@ function JobRow({ job, now, onOpen }: { job: JobProgress; now: number; onOpen?: 
         <SessionStateIcon state={stuck ? { kind: 'idle' } : { kind: 'working', level: 1 }} variant="session" />
       </span>
       <span className="flex min-w-0 flex-1 flex-col">
-        {hasStarted(job) ? (
+        {counted(job) ? (
           <>
             <span className="flex items-baseline justify-between gap-3">
               <span className={`min-w-0 text-[13.5px] leading-[1.45] break-words text-pretty ${stuck ? 'text-fg-2' : 'text-fg'}`}>{job.label}</span>

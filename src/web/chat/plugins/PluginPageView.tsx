@@ -1,3 +1,4 @@
+import type { JSX } from 'react';
 import { useLocation } from 'react-router-dom';
 import { PanelLeft } from 'lucide-react';
 import { ErrorBoundary } from '../components/ErrorBoundary';

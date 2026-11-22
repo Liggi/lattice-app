@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { type JSX, useState } from 'react';
 import { ArrowUp, X } from 'lucide-react';
 import { SessionStateIcon } from '@/web/chat/components/shared/session-state-icon/SessionStateIcon';
 

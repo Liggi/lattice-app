@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { type JSX, useCallback, useMemo, useState } from 'react';
 import { Loader2, RotateCcw } from 'lucide-react';
 import type { UnifiedConversationSummary } from '../../types';
 

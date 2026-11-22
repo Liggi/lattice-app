@@ -1,4 +1,4 @@
-import React, { Component, ReactNode } from 'react';
+import React, { type JSX, Component, ReactNode } from 'react';
 import { AlertTriangle, RefreshCw, ChevronDown, ChevronUp } from 'lucide-react';
 
 interface ErrorBoundaryProps {

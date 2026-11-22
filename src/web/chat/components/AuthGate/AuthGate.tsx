@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { type JSX, useEffect, useState } from 'react';
 import { Eye, EyeOff, KeyRound, Loader2 } from 'lucide-react';
 
 type GateState = 'checking' | 'open' | 'locked';

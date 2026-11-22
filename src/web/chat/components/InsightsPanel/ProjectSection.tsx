@@ -9,7 +9,7 @@
  * progress, in the user's order.
  */
 
-import React from 'react';
+import React, { type JSX } from 'react';
 import type { ProjectState } from '@/types/project-state';
 import { SectionHeading } from './SectionHeading';
 

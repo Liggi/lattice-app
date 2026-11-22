@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { type JSX, useCallback, useEffect, useState } from 'react';
 import { AlertTriangle, CheckCircle2, Loader2 } from 'lucide-react';
 import type { BackgroundJob, BackgroundRoute } from '@/types/config';
 import { endpointHost } from '@/constants/claude-endpoint';

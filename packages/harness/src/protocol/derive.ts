@@ -243,10 +243,11 @@ export function deriveUsage(events: readonly SessionEvent[]): TurnUsage | null {
       }
     }
 
-    // Context window size from the last content event with apiUsage
+    // Context window size from the last content event with apiUsage. A
+    // subagent's messages (parentToolUseId set) report its own context.
     if (contextTokens === undefined && e.type === 'content') {
-      const data = e.data as ContentData
-      if (data.apiUsage) {
+      const data = e.data as ContentData & { parentToolUseId?: string | null }
+      if (data.apiUsage && data.parentToolUseId == null) {
         contextTokens =
           (data.apiUsage.input_tokens ?? 0) +
           (data.apiUsage.cache_creation_input_tokens ?? 0) +

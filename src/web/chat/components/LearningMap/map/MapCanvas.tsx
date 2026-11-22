@@ -17,7 +17,7 @@
 
 import '@xyflow/react/dist/style.css';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { type JSX, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
   Background,

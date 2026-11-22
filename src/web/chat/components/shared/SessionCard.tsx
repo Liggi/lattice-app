@@ -6,7 +6,7 @@
  * line about where the session stands.
  */
 
-import React from 'react';
+import React, { type JSX } from 'react';
 import { Tooltip, TooltipContentPlain, TooltipTrigger } from '../ui/tooltip';
 import { useSessionAttention } from '../../hooks/useAttentionFavicon';
 import type { UnifiedConversationSummary } from '../../types';

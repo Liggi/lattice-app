@@ -10,7 +10,7 @@ export function useScrollManagement(params: {
   sessionId?: string;
   messages: MessageLike[];
   isStreaming?: boolean;
-  scrollContainerRef: RefObject<HTMLDivElement>;
+  scrollContainerRef: RefObject<HTMLDivElement | null>;
 }): {
   showJumpToLatest: boolean;
   unseenCount: number;

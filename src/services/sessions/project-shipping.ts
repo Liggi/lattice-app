@@ -97,7 +97,7 @@ export async function readProjectShipping(project: ProjectState, now = Date.now(
   const repos = present.filter(first);
   const slugs = presentSlugs.filter(first);
   const mentions = mentionedPullRequests(record, repos, slugs);
-  const viewer = slugs.some(Boolean) ? (await run('gh', ['api', 'user', '--jq', '.login']).catch(() => '')).trim() : '';
+  const viewer = slugs.some(Boolean) ? (await cachedGh(['api', 'user', '--jq', '.login'], FOREVER).catch(() => '')).trim() : '';
   await Promise.all(repos.map(async (repo, index) => {
     const github = slugs[index];
     let usesPullRequests = false;
@@ -348,7 +348,7 @@ async function readPromotions(github: string, pulls: GhPull[], now: number): Pro
   if (candidates.length === 0) return [];
   const swaps = new Map<number, Array<{ file: string; from: string; to: string }>>();
   await Promise.all(candidates.map(async (pull) => {
-    const found = await commitSwaps(github, pull.number).catch(() => null);
+    const found = await commitSwaps(github, pull).catch(() => null);
     if (found) swaps.set(pull.number, found);
   }));
   if (swaps.size === 0) return [];
@@ -358,7 +358,7 @@ async function readPromotions(github: string, pulls: GhPull[], now: number): Pro
     if (swaps.has(number)) return Promise.resolve(true);
     const pull = pulls.find((candidate) => candidate.number === number);
     if (!pull || !shaped(pull)) return Promise.resolve(false);
-    if (!older.has(number)) older.set(number, commitSwaps(github, number).then(Boolean, () => false));
+    if (!older.has(number)) older.set(number, commitSwaps(github, pull).then(Boolean, () => false));
     return older.get(number)!;
   };
   const environments = await deploymentEnvironments(github).catch(() => [] as string[]);
@@ -386,8 +386,9 @@ async function readPromotions(github: string, pulls: GhPull[], now: number): Pro
 }
 
 /** Each changed line pair in the pull request that swaps one 40-character commit id for another, or null when any change is something else. */
-async function commitSwaps(github: string, number: number): Promise<Array<{ file: string; from: string; to: string }> | null> {
-  const files = parseJson(await run('gh', ['api', `repos/${github}/pulls/${number}/files`])) as Array<{ filename: string; patch?: string }>;
+async function commitSwaps(github: string, pull: GhPull): Promise<Array<{ file: string; from: string; to: string }> | null> {
+  // updatedAt moves with every push, so an unchanged pull request's files are read once.
+  const files = parseJson(await cachedGh(['api', `repos/${github}/pulls/${pull.number}/files`], FOREVER, pull.updatedAt)) as Array<{ filename: string; patch?: string }>;
   const swaps: Array<{ file: string; from: string; to: string }> = [];
   for (const file of files) {
     const lines = (file.patch ?? '').split('\n');
@@ -410,7 +411,7 @@ const COMMIT_ID_ALL = /\b[0-9a-f]{40}\b/g;
 
 /** The pull requests merged between two commits, from GitHub's squash and merge subjects ("Title (#119)", "Merge pull request #119"). */
 async function pullsBetween(github: string, from: string, to: string): Promise<number[]> {
-  const subjects = (await run('gh', ['api', `repos/${github}/compare/${from}...${to}`, '--jq', '.commits[].commit.message | split("\\n")[0]'])).split('\n');
+  const subjects = (await cachedGh(['api', `repos/${github}/compare/${from}...${to}`, '--jq', '.commits[].commit.message | split("\\n")[0]'], FOREVER)).split('\n');
   const numbers: number[] = [];
   for (const subject of subjects) {
     const number = subject.match(/\(#(\d+)\)\s*$/)?.[1] ?? subject.match(/^Merge pull request #(\d+)/)?.[1];
@@ -420,7 +421,7 @@ async function pullsBetween(github: string, from: string, to: string): Promise<n
 }
 
 async function deploymentEnvironments(github: string): Promise<string[]> {
-  const out = await run('gh', ['api', `repos/${github}/deployments?per_page=100`, '--jq', '[.[].environment] | unique | .[]']);
+  const out = await cachedGh(['api', `repos/${github}/deployments?per_page=100`, '--jq', '[.[].environment] | unique | .[]'], DEPLOYMENTS_FRESH_MS);
   return out.split('\n').filter(Boolean);
 }
 
@@ -480,14 +481,14 @@ function checkState(rollup: GhPull['statusCheckRollup']): 'failing' | 'running' 
 }
 
 async function productionDeploy(github: string): Promise<{ sha: string; at: number } | null> {
-  const out = await run('gh', ['api', `repos/${github}/deployments?per_page=30`, '--jq', '[.[] | select(.environment | test("production"; "i"))][0] | [.sha, .created_at] | @tsv']);
+  const out = await cachedGh(['api', `repos/${github}/deployments?per_page=30`, '--jq', '[.[] | select(.environment | test("production"; "i"))][0] | [.sha, .created_at] | @tsv'], DEPLOYMENTS_FRESH_MS);
   const [sha, at] = out.trim().split('\t');
   return sha ? { sha, at: Date.parse(at) } : null;
 }
 
 async function contains(github: string, deployed: string, merge: string): Promise<boolean | null> {
   try {
-    const status = (await run('gh', ['api', `repos/${github}/compare/${merge}...${deployed}`, '--jq', '.status'])).trim();
+    const status = (await cachedGh(['api', `repos/${github}/compare/${merge}...${deployed}`, '--jq', '.status'], FOREVER)).trim();
     return status === 'ahead' || status === 'identical';
   } catch {
     return null;
@@ -620,6 +621,30 @@ function escape(text: string): string {
 
 function message(error: unknown): string {
   return error instanceof Error ? error.message.split('\n')[0] : String(error);
+}
+
+const FOREVER = Number.POSITIVE_INFINITY;
+const DEPLOYMENTS_FRESH_MS = 10 * 60_000;
+const GH_CACHE_LIMIT = 5000;
+const ghCache = new Map<string, { at: number; out: Promise<string> }>();
+
+/**
+ * A `gh` read, reused for `freshMs`. GitHub allows 5,000 REST calls an hour
+ * across everything signed in as the user, and the watcher re-reads every project
+ * every two minutes, so reads that cannot change (a compare between two commits)
+ * are made once.
+ */
+function cachedGh(args: string[], freshMs: number, version = ''): Promise<string> {
+  const key = `${args.join('\0')}\0${version}`;
+  const hit = ghCache.get(key);
+  if (hit && Date.now() - hit.at < freshMs) return hit.out;
+  const out = run('gh', args);
+  const entry = { at: Date.now(), out };
+  ghCache.delete(key);
+  ghCache.set(key, entry);
+  if (ghCache.size > GH_CACHE_LIMIT) ghCache.delete(ghCache.keys().next().value!);
+  out.catch(() => { if (ghCache.get(key) === entry) ghCache.delete(key); });
+  return out;
 }
 
 function run(command: string, args: string[]): Promise<string> {

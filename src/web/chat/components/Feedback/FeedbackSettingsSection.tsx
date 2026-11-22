@@ -1,11 +1,11 @@
-import { useState } from 'react';
+import { type JSX, useState } from 'react';
 import { MessageSquare } from 'lucide-react';
 import { api } from '../../services/api';
 import { useFeedbackDrafts, useFeedbackStatus, useInvalidateFeedback } from '../../hooks/useFeedback';
 import { FeedbackDialog } from './FeedbackDialog';
 
 /** An on/off switch; the label beside it names what it controls. */
-function Switch({ checked, onChange, disabled, label, testId }: {
+export function Switch({ checked, onChange, disabled, label, testId }: {
   checked: boolean;
   onChange: (next: boolean) => void;
   disabled?: boolean;

@@ -91,7 +91,7 @@
  * 3,000px tall). The clamp is visual only; the whole text stays in the DOM.
  */
 
-import React, { useLayoutEffect, useRef, useState } from 'react';
+import React, { type JSX, useLayoutEffect, useRef, useState } from 'react';
 import { ChevronUp } from 'lucide-react';
 import { WaitText, type WaitTextContext } from './WaitText';
 import { SessionStateIcon, type StateIconState } from '@/web/chat/components/shared/session-state-icon/SessionStateIcon';

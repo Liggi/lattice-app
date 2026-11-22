@@ -12,7 +12,7 @@ export function useJumpToMessage<T extends ReversedMessageItemLike>(params: {
   reversedItems: T[];
   visibleCount: number;
   setBlockBudget: Dispatch<SetStateAction<number>>;
-  scrollContainerRef: RefObject<HTMLDivElement>;
+  scrollContainerRef: RefObject<HTMLDivElement | null>;
   onJumpHandled?: () => void;
   blockBudgetStep?: number;
 }): void {

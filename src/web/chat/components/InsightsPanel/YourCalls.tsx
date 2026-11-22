@@ -18,7 +18,7 @@
  * list, as the sidebar folds its Sleeping sessions; each can be restored.
  */
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { type JSX, useEffect, useRef, useState } from 'react';
 import { Archive, BookOpen, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, Clock3, Pencil, Undo2, X } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -97,7 +97,7 @@ function Unfold({ open, children }: { open: boolean; children: React.ReactNode }
   if (!mounted) return null;
   return (
     <div className={`grid transition-[grid-template-rows,opacity] duration-200 ease-out ${expanded ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0'}`}>
-      <div className="min-h-0 overflow-hidden" {...(open ? {} : { inert: '' })}>{children}</div>
+      <div className="min-h-0 overflow-hidden" inert={!open}>{children}</div>
     </div>
   );
 }
@@ -244,7 +244,7 @@ function OpenableRow({ call, now, open, onToggle, actions }: {
         <AskCall call={call} ask={ask} waited={waited} actions={actions} onPark={park} onDismiss={dismiss} />
       </PopoverContent>
       {open && !desktop && (
-        <div className="fixed inset-0 z-[60] flex flex-col bg-bg md:hidden" style={{ paddingTop: 'env(safe-area-inset-top)', paddingBottom: 'env(safe-area-inset-bottom)' }}>
+        <div className="fixed inset-0 z-[60] flex flex-col bg-bg md:hidden" style={{ paddingTop: 'var(--app-safe-area-top)', paddingBottom: 'env(safe-area-inset-bottom)' }}>
           <div className="flex shrink-0 items-center border-b border-line px-2 py-2">
             <button type="button" onClick={onToggle} className="flex items-center gap-1 rounded-md px-2 py-1.5 text-[13px] font-medium text-fg-2 hover:text-fg">
               <ChevronLeft size={18} aria-hidden /> Waiting on you

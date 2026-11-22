@@ -1,324 +1,119 @@
-import os from 'os';
 import { PermissionRequest } from '@/types/index.js';
 import { createLogger, type Logger } from './infrastructure/logger.js';
-import { ConfigService } from './infrastructure/config-service.js';
 import { WebPushService } from './web-push-service.js';
+import { ViewingPresence } from './viewing-presence.js';
+import { ConversationService } from './sessions/conversation-service.js';
+import { SessionInfoService } from './sessions/session-info-service.js';
+import { InsightsEngine } from './insights/insights-engine.js';
+import { readLastTurnReply } from './sessions/worker-report-delivery.js';
+import { isQuietTurnMarker } from '@/constants/quiet-turn.js';
 
-export interface Notification {
-  title: string;
-  message: string;
-  priority: 'min' | 'low' | 'default' | 'high' | 'urgent';
-  tags: string[];
-  sessionId: string;
-  streamingId: string;
-  permissionRequestId?: string;
-}
+/** Encrypted push payloads are capped near 4 KB; the body keeps well under it with room for the rest. */
+const MAX_BODY_BYTES = 1500;
 
-export interface CompletionNotificationDetails {
-  sessionName?: string;
-  turnHeadline?: string;
-  turnAction?: string;
-}
+export type NotifyResult =
+  | { sent: number; failed: number }
+  | { skipped: 'watching' | 'disabled' | 'no-devices' };
 
 /**
- * Service for sending push notifications via ntfy.sh
+ * Phone and desktop notifications, sent as web push to every device that
+ * turned them on in Settings. Nothing is sent about a conversation someone is
+ * looking at on any device (`ViewingPresence`).
  */
 export class NotificationService {
-  private logger: Logger;
-  private configService: ConfigService;
-  private hostname: string;
-  private webPushService: WebPushService;
-
-  constructor() {
-    this.logger = createLogger('NotificationService');
-    this.configService = ConfigService.getInstance();
-    this.webPushService = WebPushService.getInstance();
-    // Use hostname for ntfy topic
-    this.hostname = os.hostname().toLowerCase().replace(/[^a-z0-9]/g, '');
+  private static instance: NotificationService;
+  static getInstance(): NotificationService {
+    if (!NotificationService.instance) NotificationService.instance = new NotificationService();
+    return NotificationService.instance;
   }
 
-  /**
-   * Get hostname for topic identification
-   */
-  private getHostname(): string {
-    return this.hostname;
-  }
+  private logger: Logger = createLogger('NotificationService');
+  private webPush = WebPushService.getInstance();
+  private presence = ViewingPresence.getInstance();
 
-  /**
-   * Check if notifications are enabled
-   */
-  private async isEnabled(): Promise<boolean> {
-    const config = this.configService.getConfig();
-    return config.interface.notifications?.enabled ?? false;
-  }
-
-  /**
-   * Get the ntfy URL from preferences
-   */
-  private async getNtfyUrl(): Promise<string> {
-    const config = this.configService.getConfig();
-    return config.interface.notifications?.ntfyUrl || 'https://ntfy.sh';
-  }
-
-  /**
-   * Send a notification for a permission request
-   */
-  async sendPermissionNotification(
-    request: PermissionRequest,
-    sessionId?: string,
-    summary?: string
-  ): Promise<void> {
-    if (!(await this.isEnabled())) {
-      this.logger.debug('Notifications disabled, skipping permission notification');
-      return;
-    }
-
-    try {
-      const hostname = this.getHostname();
-      const topic = `lattice-${hostname}`;
-      const ntfyUrl = await this.getNtfyUrl();
-
-      const notification: Notification = {
-        title: 'Claudia Permission Request',
-        message: summary
-          ? `${summary} - ${request.toolName}`
-          : `${request.toolName} tool: ${JSON.stringify(request.toolInput).substring(0, 100)}...`,
-        priority: 'default',
-        tags: ['claudia-permission'],
-        sessionId: sessionId || 'unknown',
-        streamingId: request.streamingId,
-        permissionRequestId: request.id
-      };
-
-      let ntfyError: Error | undefined;
-      try {
-        // Send via ntfy (best-effort)
-        await this.sendNotification(ntfyUrl, topic, notification);
-      } catch (err) {
-        ntfyError = err instanceof Error ? err : new Error(String(err));
-        this.logger.warn('Ntfy permission notification failed (continuing with web push)', {
-          requestId: request.id,
-          error: ntfyError.message,
-        });
-      }
-
-      // Also broadcast via native web push (best-effort, independent of ntfy result)
-      let webPushError: Error | undefined;
-      try {
-        await this.webPushService.initialize();
-        if (this.webPushService.getEnabled()) {
-          const result = await this.webPushService.broadcast({
-            title: notification.title,
-            message: notification.message,
-            tag: notification.tags[0],
-            data: {
-              sessionId: notification.sessionId,
-              streamingId: notification.streamingId,
-              permissionRequestId: notification.permissionRequestId,
-              type: 'permission',
-            },
-          });
-          this.logger.debug('Permission web push broadcast completed', {
-            requestId: request.id,
-            sent: result.sent,
-            failed: result.failed,
-          });
-        }
-      } catch (err) {
-        webPushError = err instanceof Error ? err : new Error(String(err));
-        this.logger.warn('Permission web push broadcast failed', {
-          requestId: request.id,
-          error: webPushError.message,
-        });
-      }
-      
-      this.logger.info('Permission notification dispatched', {
-        requestId: request.id,
-        toolName: request.toolName,
-        topic,
-        ntfyOk: !ntfyError,
-        webPushOk: !webPushError,
-      });
-    } catch (error) {
-      this.logger.error('Failed to send permission notification', error, {
-        requestId: request.id
-      });
-    }
-  }
-
-  /**
-   * Send a notification when a conversation ends
-   */
-  async sendConversationEndNotification(
-    streamingId: string,
-    sessionId: string,
-    summary?: string,
-    details?: CompletionNotificationDetails
-  ): Promise<void> {
-    if (!(await this.isEnabled())) {
-      this.logger.debug('Notifications disabled, skipping conversation end notification');
-      return;
-    }
-
-    try {
-      const hostname = this.getHostname();
-      const topic = `lattice-${hostname}`;
-      const ntfyUrl = await this.getNtfyUrl();
-      const message = this.composeConversationCompletionMessage(summary, details);
-
-      const notification: Notification = {
-        title: 'Task Finished',
-        message,
-        priority: 'default',
-        tags: ['claudia-complete'],
-        sessionId,
-        streamingId
-      };
-
-      let ntfyError: Error | undefined;
-      try {
-        // Send via ntfy (best-effort)
-        await this.sendNotification(ntfyUrl, topic, notification);
-      } catch (err) {
-        ntfyError = err instanceof Error ? err : new Error(String(err));
-        this.logger.warn('Ntfy conversation end notification failed (continuing with web push)', {
-          sessionId,
-          streamingId,
-          error: ntfyError.message,
-        });
-      }
-
-      // Also broadcast via native web push (best-effort, independent of ntfy result)
-      let webPushError: Error | undefined;
-      try {
-        await this.webPushService.initialize();
-        if (this.webPushService.getEnabled()) {
-          const result = await this.webPushService.broadcast({
-            title: notification.title,
-            message: notification.message,
-            tag: notification.tags[0],
-            data: {
-              sessionId: notification.sessionId,
-              streamingId: notification.streamingId,
-              type: 'conversation-end',
-            },
-          });
-          this.logger.debug('Conversation end web push broadcast completed', {
-            sessionId,
-            streamingId,
-            sent: result.sent,
-            failed: result.failed,
-          });
-        }
-      } catch (err) {
-        webPushError = err instanceof Error ? err : new Error(String(err));
-        this.logger.warn('Conversation end web push broadcast failed', {
-          sessionId,
-          streamingId,
-          error: webPushError.message,
-        });
-      }
-      
-      this.logger.info('Conversation end notification dispatched', {
-        sessionId,
-        streamingId,
-        topic,
-        usedSummary: !!summary,
-        usedSessionName: !!details?.sessionName,
-        usedTurnDetail: !!details?.turnAction || !!details?.turnHeadline,
-        ntfyOk: !ntfyError,
-        webPushOk: !webPushError,
-      });
-    } catch (error) {
-      this.logger.error('Failed to send conversation end notification', error, {
-        sessionId,
-        streamingId
-      });
-    }
-  }
-
-  /**
-   * Build a richer completion notification message.
-   */
-  private composeConversationCompletionMessage(
-    summary?: string,
-    details?: CompletionNotificationDetails
-  ): string {
-    const cleanedSummary = this.compactMessage(summary);
-    const sessionName = this.compactMessage(details?.sessionName);
-    const turnAction = this.compactMessage(details?.turnAction);
-    const turnHeadline = this.compactMessage(details?.turnHeadline);
-    const turnDetail = turnAction || turnHeadline;
-
-    if (cleanedSummary && !this.isGenericCompletionSummary(cleanedSummary)) {
-      return this.truncateMessage(cleanedSummary, 180);
-    }
-
-    if (sessionName && turnDetail) {
-      return this.truncateMessage(`${sessionName}: ${turnDetail}`, 180);
-    }
-
-    if (turnDetail) {
-      return this.truncateMessage(turnDetail, 180);
-    }
-
-    if (sessionName) {
-      return this.truncateMessage(`${sessionName} finished`, 180);
-    }
-
-    return 'Task completed';
-  }
-
-  private isGenericCompletionSummary(summary: string): boolean {
-    const normalized = summary.toLowerCase();
-    return normalized === 'task completed'
-      || normalized === 'task finished'
-      || normalized === 'completed'
-      || normalized === 'done'
-      || normalized === 'success';
-  }
-
-  private compactMessage(value?: string): string {
-    if (!value) return '';
-    return value.replace(/\s+/g, ' ').trim();
-  }
-
-  private truncateMessage(value: string, maxLen: number): string {
-    if (value.length <= maxLen) return value;
-    return value.slice(0, maxLen - 3) + '...';
-  }
-
-  /**
-   * Send a notification to ntfy
-   */
-  private async sendNotification(
-    ntfyUrl: string,
-    topic: string,
-    notification: Notification
-  ): Promise<void> {
-    const url = `${ntfyUrl}/${topic}`;
-    
-    const headers: Record<string, string> = {
-      'Title': notification.title,
-      'Priority': notification.priority,
-      'Tags': notification.tags.join(',')
-    };
-
-    // Add custom headers for CUI metadata
-    headers['X-CUI-SessionId'] = notification.sessionId;
-    headers['X-CUI-StreamingId'] = notification.streamingId;
-    if (notification.permissionRequestId) {
-      headers['X-CUI-PermissionRequestId'] = notification.permissionRequestId;
-    }
-
-    const response = await fetch(url, {
-      method: 'POST',
-      headers,
-      body: notification.message
+  /** A permission request waiting on the user. */
+  async sendPermissionNotification(request: PermissionRequest, sessionId?: string, summary?: string): Promise<void> {
+    const title = sessionId ? await this.sessionTitle(sessionId) : 'Lattice';
+    const result = await this.send(sessionId, {
+      title,
+      message: `Needs your permission: ${summary ? `${summary} - ` : ''}${request.toolName}`,
+      kind: 'permission',
     });
+    this.logger.info('Permission notification', { requestId: request.id, sessionId, ...result });
+  }
 
-    if (!response.ok) {
-      throw new Error(`Ntfy returned ${response.status}: ${await response.text()}`);
+  /**
+   * A session's turn ended on a reply for the user. Skips sessions an agent
+   * dispatched (their reply goes to the session that picked them up), archived
+   * ones, and turns that ended without a reply (stopped, compaction, tool call, quiet turn).
+   */
+  async notifyTurnFinished(sessionId: string): Promise<void> {
+    try {
+      const conversation = ConversationService.getInstance().getConversation(sessionId);
+      if (!conversation || conversation.pickedUpFrom) return;
+      if (SessionInfoService.getInstance().getSessionInfoSync(sessionId)?.archived) return;
+      const reply = readLastTurnReply(sessionId);
+      // A coordinator's quiet turn ends on a marker Lattice hides: nothing to show the user.
+      if (!reply || isQuietTurnMarker(reply)) return;
+      const result = await this.send(sessionId, {
+        title: await this.sessionTitle(sessionId),
+        message: openingParagraph(reply),
+        kind: 'turn-finished',
+      });
+      this.logger.info('Turn finished notification', { sessionId, ...result });
+    } catch (error) {
+      this.logger.error('Turn finished notification failed', error, { sessionId });
     }
   }
+
+  /** An agent asking the user to look at something (`lattice notify`). */
+  async notifyFromAgent(sessionId: string, message: string): Promise<NotifyResult> {
+    const result = await this.send(sessionId, { title: await this.sessionTitle(sessionId), message, kind: 'agent' });
+    this.logger.info('Agent notification', { sessionId, ...result });
+    return result;
+  }
+
+  private async send(
+    sessionId: string | undefined,
+    note: { title: string; message: string; kind: string },
+  ): Promise<NotifyResult> {
+    if (!this.webPush.getEnabled()) return { skipped: 'disabled' };
+    if (sessionId && this.presence.isWatched(sessionId)) return { skipped: 'watching' };
+    await this.webPush.initialize();
+    if (this.webPush.getSubscriptionCount() === 0) return { skipped: 'no-devices' };
+    const sentAt = Date.now();
+    if (sessionId) this.presence.noteNotified(sessionId, sentAt);
+    return this.webPush.broadcast({
+      title: note.title,
+      message: fitBytes(note.message, MAX_BODY_BYTES),
+      tag: sessionId ? `conv-${sessionId}` : 'lattice',
+      data: { sessionId, type: note.kind, sentAt, clear: this.presence.clearable(sentAt) },
+    });
+  }
+
+  /** The name the sidebar shows: the user's own name for it, else the project's, else the generated one. */
+  private async sessionTitle(sessionId: string): Promise<string> {
+    const info = SessionInfoService.getInstance().getSessionInfoSync(sessionId);
+    const mission = (await InsightsEngine.getInstance().getInsightsRecord(sessionId).catch(() => null))?.context?.mission?.trim();
+    return info?.custom_name?.trim() || info?.project_name?.trim() || mission || 'Lattice';
+  }
+}
+
+/** The reply's first paragraph, without markdown marks: replies lead with the result. */
+export function openingParagraph(reply: string): string {
+  const first = reply.trim().split(/\n\s*\n/)[0] ?? '';
+  return first
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+    .replace(/[*_`#>]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/** Cuts at a word boundary with a visible ellipsis only when the text is over the push size limit. */
+function fitBytes(text: string, maxBytes: number): string {
+  if (Buffer.byteLength(text) <= maxBytes) return text;
+  let cut = text;
+  while (Buffer.byteLength(cut) > maxBytes - 3) cut = cut.slice(0, cut.lastIndexOf(' ', cut.length - 2));
+  return `${cut}…`;
 }

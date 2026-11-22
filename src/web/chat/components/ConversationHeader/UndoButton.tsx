@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { type JSX, useState } from 'react';
 import { Undo2 } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/web/chat/components/ui/tooltip';
 import { UNDO_WINDOW_MS, type PendingUndo } from './pending-undo';

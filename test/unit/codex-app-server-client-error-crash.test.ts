@@ -4,6 +4,10 @@ import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { CodexAppServerClient } from '../../src/services/process/codex-app-server-client.js';
 
+vi.mock('../../src/services/infrastructure/config-service.js', () => ({
+  ConfigService: { getInstance: () => ({ getConfig: () => ({}) }) },
+}));
+
 type HandleLine = { handleLine(line: string): void };
 
 const streamErrorNotification = JSON.stringify({

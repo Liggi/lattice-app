@@ -61,6 +61,18 @@ describe('foldCoordinatorMachinery', () => {
     expect(folded.map((i) => (i.kind === 'message' ? i.message.id : i.summary))).toEqual(['a1', 'Ran 2 commands']);
   });
 
+  it('drops a quiet turn that ends with the marker, alone or beside other blocks, but keeps a reply that mentions it', () => {
+    const items = [
+      assistant('a1', [text('Both are fine.')]),
+      assistant('a2', [bash('ls')]),
+      assistant('a3', [text('NO_REPLY')]),
+      assistant('a4', [bash('pwd'), text('\n`NO_REPLY`\n')]),
+      assistant('a5', [text('The worker wrote NO_REPLY by mistake; here is what it found.')]),
+    ];
+    const folded = foldCoordinatorMachinery(items, false);
+    expect(folded.map((i) => (i.kind === 'message' ? i.message.id : i.summary))).toEqual(['a1', 'Ran 2 commands', 'a5']);
+  });
+
   it('marks a trailing fold active while streaming and says what is running', () => {
     const items = [assistant('a1', [text('On it.')]), assistant('a2', [bash("/bin/zsh -lc 'lattice session transcript conv-w --last 3'")])];
     const fold = foldCoordinatorMachinery(items, true)[1];

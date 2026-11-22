@@ -28,6 +28,7 @@ export class DaemonProcessAdapter implements ProcessAdapter {
   constructor(
     private client: ProcessManagerClient,
     private isCoordinator: (conversationId: string) => boolean = () => false,
+    private claudeEffort: (conversationId: string) => string | undefined = () => undefined,
   ) {}
 
   async spawn(config: SpawnConfig): Promise<ProcessHandle> {
@@ -58,6 +59,8 @@ export class DaemonProcessAdapter implements ProcessAdapter {
     if (typeof conversationId === 'string') {
       daemonConfig.conversationId = conversationId;
       if (this.isCoordinator(conversationId)) daemonConfig.coordinator = true;
+      const effort = this.claudeEffort(conversationId);
+      if (effort) daemonConfig.effort = effort;
     }
     // Spawn-time attachments reach the daemon as ConversationConfig.initialContent,
     // which process-daemon merges into the CLI's first stdin message. Callers spell

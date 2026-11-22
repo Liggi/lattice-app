@@ -45,8 +45,10 @@ export function contextTokensNewestFirst(events: Iterable<UsageEventLike>, provi
       continue;
     }
     if (event.type === 'content') {
-      const usage = (event.data as { apiUsage?: UsageFields } | undefined)?.apiUsage;
-      if (usage) return sumUsage(usage);
+      // A subagent's messages are in the same log (parentToolUseId set) and
+      // report the subagent's own context, not this session's.
+      const data = event.data as { apiUsage?: UsageFields; parentToolUseId?: string | null } | undefined;
+      if (data?.apiUsage && data.parentToolUseId == null) return sumUsage(data.apiUsage);
     }
   }
   return null;

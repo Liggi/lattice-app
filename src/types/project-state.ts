@@ -62,7 +62,26 @@ export const PROJECT_FOLD_EVENT_TYPES = [
 
 export const PROJECT_NOTE_KINDS = [
   'outcome', 'decision', 'open', 'update', 'close', 'now', 'accounting', 'reconcile', 'priority', 'retire', 'park', 'unpark', 'rank',
+  'story',
 ] as const;
+
+/**
+ * The longest account of where a project stands that a note may carry. Asked
+ * where things stand, coordinators answered in 141 to 657 words (31 times in 7
+ * projects, 7–13 Nov 2026); the account is meant to be read at a glance.
+ */
+export const STORY_MAX_WORDS = 120;
+
+/** Words as the limit counts them. */
+export function storyWordCount(text: string): number {
+  return text.trim().split(/\s+/).filter(Boolean).length;
+}
+
+/**
+ * Thread changes since the story was written after which it is due a rewrite:
+ * any thread closing, or this many opened, parked or brought back.
+ */
+export const STORY_STALE_AFTER_THREAD_CHANGES = 3;
 
 /**
  * How long an open thread or the priority can go untouched before the
@@ -273,8 +292,25 @@ export interface PendingAttention {
   reconciledAt?: number;
 }
 
+/**
+ * The project's own account of where it stands: what it set out to do, what
+ * was learned on the way, where that leaves it and what is next. Replaced
+ * whole by each `story` note; the coordinator keeps it current.
+ */
+export interface ProjectStory {
+  seq: number;
+  at: number;
+  text: string;
+  /** Threads closed since it was written. */
+  closedSince: number;
+  /** Threads opened, parked or brought back since it was written. */
+  changedSince: number;
+}
+
 export interface ProjectState {
   outcome: string | null;
+  /** Null until the coordinator writes one. */
+  story: ProjectStory | null;
   /**
    * The decisions that still bind, newest last. A decision a later one
    * replaced, or a `retire` note withdrew, is in `retired` instead — so
@@ -343,7 +379,7 @@ export interface ProjectEventLike {
 
 export function emptyProjectState(): ProjectState {
   return {
-    outcome: null, decisions: [], retired: [], priority: null, rank: [], open: [], closed: [],
+    outcome: null, story: null, decisions: [], retired: [], priority: null, rank: [], open: [], closed: [],
     attention: [], historical: [], accountingFrom: null, now: null, answeredBefore: null, nudges: 0, revision: 0,
   };
 }
@@ -576,6 +612,9 @@ export function foldProjectState(events: readonly ProjectEventLike[]): ProjectSt
       case 'outcome':
         state.outcome = data.text;
         break;
+      case 'story':
+        state.story = { seq: event.seq, at: event.timestamp, text: data.text, closedSince: 0, changedSince: 0 };
+        break;
       case 'decision':
         decisions.set(event.seq, { seq: event.seq, at: event.timestamp, text: data.text, by: data.by === 'user' ? 'user' : 'coordinator' });
         // A correction states what it replaces. Everything it names leaves
@@ -622,6 +661,7 @@ export function foldProjectState(events: readonly ProjectEventLike[]): ProjectSt
         if (!('waitingOn' in data)) thread.waitingOn = null;
         threads.set(event.seq, thread);
         for (const worker of thread.workers) workerThread.set(worker, event.seq);
+        if (state.story) state.story.changedSince += 1;
         break;
       }
       case 'update': {
@@ -674,6 +714,7 @@ export function foldProjectState(events: readonly ProjectEventLike[]): ProjectSt
         // A priority names the work to get on with; the work is over.
         if (state.priority?.thread === thread.seq) state.priority = null;
         closedOrder.push(thread.seq);
+        if (state.story) state.story.closedSince += 1;
         break;
       }
 
@@ -683,6 +724,7 @@ export function foldProjectState(events: readonly ProjectEventLike[]): ProjectSt
         const thread = threads.get(data.ref);
         if (!thread || thread.closedAt !== undefined) break;
         thread.updatedAt = event.timestamp;
+        if (state.story) state.story.changedSince += 1;
         if (data.kind === 'unpark') {
           // Back as a fresh wait: an ask restored from the backlog gets its full time again.
           if (thread.parked) thread.waitingSince = event.timestamp;
@@ -919,6 +961,31 @@ export interface RenderProjectStateOptions {
   userName?: string;
   /** The clock to age threads and the priority against; omitted, no ages are shown. */
   now?: number;
+  /**
+   * The revision of the record the reader was last shown. Given, the decisions
+   * in force are not listed again: only the ones made or taken out of force
+   * since, with the count and where the full list is. Everything else prints
+   * in full. Decisions are where a long project's record grows (138 in force,
+   * 37,000 characters, in one project in Nov 2026), and they change rarely.
+   */
+  decisionsSince?: number;
+}
+
+function renderDecisionChanges(state: ProjectState, since: number, user: string, options: RenderProjectStateOptions): string[] {
+  const whose = (decision: ProjectDecision): string => (decision.by === 'user' ? ` (${user}'s call)` : '');
+  const added = state.decisions.filter((decision) => decision.seq > since);
+  const withdrawn = (state.retired ?? []).filter((decision) => decision.retiredBy > since && decision.seq <= since);
+  const where = options.cli && options.conversationId
+    ? `\`${options.cli} session state ${options.conversationId}\` lists them all`
+    : '`session state <conv>` lists them all';
+  const count = `${state.decisions.length} in force`;
+  if (added.length === 0 && withdrawn.length === 0) {
+    return [`Decisions: ${count}, none made or withdrawn since you last saw the record (${where}).`];
+  }
+  const lines = [`Decisions: ${count}, the rest as you last saw them (${where}). Since then:`];
+  for (const decision of added) lines.push(`- new [${decision.seq}] ${decision.text}${whose(decision)}`);
+  for (const decision of withdrawn) lines.push(`- no longer in force [${decision.seq}] ${decision.text} — [${decision.retiredBy}] ${decision.reason}`);
+  return lines;
 }
 
 /**
@@ -941,13 +1008,20 @@ export function renderProjectState(state: ProjectState, options: RenderProjectSt
   const closed = state.closed ?? [];
   const historical = state.historical ?? [];
   lines.push(`Outcome: ${state.outcome ?? '(not noted yet)'}`);
+  if (state.story) {
+    const age = options.now !== undefined ? `written ${formatAgo(options.now - state.story.at)} ago` : 'as last written';
+    const since = state.story.closedSince + state.story.changedSince;
+    lines.push(`Where it stands (${age}${since > 0 ? `; ${since} thread change${since === 1 ? '' : 's'} since` : ''}): ${state.story.text}`);
+  }
   if (state.priority) {
     const where = state.priority.thread !== null ? ` (thread [${state.priority.thread}])` : '';
     const age = options.now !== undefined ? ` · set ${formatAgo(options.now - state.priority.at)} ago` : '';
     lines.push(`Priority: ${state.priority.text}${where}${age}`);
   }
   if ((state.rank ?? []).length > 0) lines.push(`Rank (${user}'s order): ${state.rank.map((seq) => `[${seq}]`).join(' ')}`);
-  if ((state.decisions ?? []).length > 0) {
+  if (options.decisionsSince !== undefined) {
+    lines.push(...renderDecisionChanges(state, options.decisionsSince, user, options));
+  } else if ((state.decisions ?? []).length > 0) {
     lines.push('Decisions in force:');
     for (const decision of state.decisions) {
       lines.push(`- [${decision.seq}] ${decision.text}${decision.by === 'user' ? ` (${user}'s call)` : ''}`);

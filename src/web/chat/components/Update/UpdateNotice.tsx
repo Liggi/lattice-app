@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { type JSX, useState } from 'react';
 import { CircleArrowUp } from 'lucide-react';
 import { useUpdateStatus } from '../../hooks/useUpdateStatus';
 import { UpdateDialog } from './UpdateDialog';

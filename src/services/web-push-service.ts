@@ -31,6 +31,9 @@ export class WebPushService {
   private configDir!: string;
   private isInitialized = false;
   private configService: ConfigService;
+  /** The key in use, which a just-generated key is before its config write lands. */
+  private activePublicKey: string | null = null;
+  private generatedKeys: { publicKey: string; privateKey: string } | null = null;
 
   private insertStmt!: Database.Statement;
   private deleteStmt!: Database.Statement;
@@ -108,8 +111,9 @@ export class WebPushService {
   private configureVapid(): void {
     const config = this.configService.getConfig();
     let subject = config.interface.notifications?.webPush?.subject || 'mailto:admin@example.com';
-    let publicKey = config.interface.notifications?.webPush?.vapidPublicKey;
-    let privateKey = config.interface.notifications?.webPush?.vapidPrivateKey;
+    // A key pair generated earlier is used until its config write lands, or every call would generate another.
+    let publicKey = config.interface.notifications?.webPush?.vapidPublicKey || this.generatedKeys?.publicKey;
+    let privateKey = config.interface.notifications?.webPush?.vapidPrivateKey || this.generatedKeys?.privateKey;
 
     // Auto-generate VAPID keys if missing and notifications enabled
     let generated = false;
@@ -118,6 +122,7 @@ export class WebPushService {
         const keys = webpush.generateVAPIDKeys();
         publicKey = keys.publicKey;
         privateKey = keys.privateKey;
+        this.generatedKeys = keys;
         // Persist into config (partial update preserves other interface fields)
         void this.configService.updateConfig({
           interface: {
@@ -147,6 +152,7 @@ export class WebPushService {
     }
 
     webpush.setVapidDetails(subject, publicKey, privateKey);
+    this.activePublicKey = publicKey;
 
     // If keys were generated just now, expire existing subscriptions to force re-register
     if (generated) {
@@ -160,13 +166,12 @@ export class WebPushService {
   }
 
   getPublicKey(): string | null {
-    const publicKey = this.configService.getConfig().interface.notifications?.webPush?.vapidPublicKey || null;
-    return publicKey || null;
+    return this.activePublicKey || this.configService.getConfig().interface.notifications?.webPush?.vapidPublicKey || null;
   }
 
   getEnabled(): boolean {
-    const enabled = this.configService.getConfig().interface.notifications?.enabled ?? false;
-    return enabled;
+    // On unless switched off: each device opts in by subscribing in Settings.
+    return this.configService.getConfig().interface.notifications?.enabled !== false;
   }
 
   getSubscriptionCount(): number {
@@ -205,14 +210,20 @@ export class WebPushService {
           keys: { p256dh: row.p256dh, auth: row.auth },
         } as unknown as PushSubscription;
         try {
-          await webpush.sendNotification(sub, JSON.stringify(payload), { TTL: 60 });
+          // Kept for a while so a phone that is asleep or a laptop that is shut still gets it on waking.
+          await webpush.sendNotification(sub, JSON.stringify(payload), { TTL: 6 * 60 * 60 });
           this.upsertSeenStmt.run(new Date().toISOString(), 0, row.endpoint);
           sent += 1;
         } catch (_err: unknown) {
           failed += 1;
           // 410 Gone or 404 Not Found => expire subscription
           const status = (_err as { statusCode?: number })?.statusCode;
-          if (status === 404 || status === 410) {
+          // Google's push service answered 410 for a Windows Chrome sign-up two seconds old, then
+          // accepted pushes to it (2026-11-15); a sign-up that new is kept rather than dropped.
+          const isNew = Date.now() - Date.parse(row.created_at) < 5 * 60_000;
+          if ((status === 404 || status === 410) && isNew) {
+            this.logger.warn('Push service refused a new subscription; keeping it', { endpoint: row.endpoint, status });
+          } else if (status === 404 || status === 410) {
             this.upsertSeenStmt.run(new Date().toISOString(), 1, row.endpoint);
             this.logger.info('Expired web push subscription removed', { endpoint: row.endpoint, status });
           } else {

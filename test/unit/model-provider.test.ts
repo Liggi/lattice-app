@@ -19,6 +19,11 @@ describe('providerForModel', () => {
     expect(providerForModel('moonshotai/kimi-k3.1-pro', ['qwen3-coder'])).toBe('opencode');
   });
 
+  it('sends an agy: id to Antigravity, even when it names a Claude model', () => {
+    expect(providerForModel('agy:gemini-3.8-flash-high')).toBe('antigravity');
+    expect(providerForModel('agy:claude-sonnet-4-6')).toBe('antigravity'); // stale-model-ok: Antigravity's own id
+  });
+
   it("sends a saved Anthropic endpoint's model to Claude, slash and all", () => {
     expect(providerForModel('moonshotai/kimi-k3.1-pro', ['moonshotai/kimi-k3.1-pro'])).toBe('claude');
     expect(providerForModel(' moonshotai/kimi-k3.1-pro[1m] ', ['moonshotai/kimi-k3.1-pro'])).toBe('claude');

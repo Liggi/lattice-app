@@ -16,7 +16,7 @@
  * finds its explanation.
  */
 
-import { useMemo, useState } from 'react';
+import { type JSX, useMemo, useState } from 'react';
 import * as TooltipPrimitive from '@radix-ui/react-tooltip';
 import { Info, Loader2 } from 'lucide-react';
 import { NoteMarkdown } from './ArticleMarkdown';

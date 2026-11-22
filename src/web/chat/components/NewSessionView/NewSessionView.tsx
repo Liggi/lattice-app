@@ -9,11 +9,11 @@
  */
 
 import type { PastedSpan } from '@liggi/agent-ui-harness/protocol';
-import React, { useState, useCallback, useEffect } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import React, { type JSX, useState, useCallback, useEffect } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { PanelLeft, Settings } from 'lucide-react';
 import { DEFAULT_OPENCODE_MODEL_ID } from '@/constants/opencode-models.js';
+import { ANTIGRAVITY_EFFORT_LABELS, ANTIGRAVITY_MODELS, DEFAULT_ANTIGRAVITY_PICKER_ID, antigravityModelEntry, antigravityModelId } from '@/constants/antigravity-models.js';
 
 
 import {
@@ -29,14 +29,10 @@ import { useConversations } from '../../contexts/ConversationsContext';
 import type { Provider } from '@/types/unified-messages';
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources/messages';
 import { resolveInitialLaunchPermissionMode } from '../../utils/session-launch-permissions';
-import { ActionQueueDialog } from '../DevNotesDialog/DevNotesDialog';
 import { LatticeLogo } from '../shared/LatticeLogo';
-import { HeaderNotesButton } from '../ConversationHeader/HeaderControls';
 import { runUndo, usePendingUndo } from '../ConversationHeader/pending-undo';
 import { UndoButton } from '../ConversationHeader/UndoButton';
 import { useToast } from '../Toast/Toast';
-import { launchQueueSession } from '../ConversationHeader/queue-session';
-import type { DevNote, StoredRecommendation } from '../../types';
 import { TooltipProvider } from '../ui/tooltip';
 import { SettingsDialog } from '../SettingsDialog/SettingsDialog';
 import { planSignInWaiting } from '../SettingsDialog/ChatGPTPlanCard';
@@ -68,7 +64,6 @@ interface NewSessionViewProps {
 }
 
 /** Header attention count refresh cadence; pauses while the tab is hidden. */
-const HEADER_ATTENTION_POLL_MS = 15_000;
 
 function createPendingLaunchId(): string {
   return `pending-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -93,13 +88,12 @@ export function NewSessionView({ sidebarOpen, onToggleSidebar }: NewSessionViewP
   const workspaceId = 'main';
 
   const [isCreating, setIsCreating] = useState(false);
-  const [queueOpen, setQueueOpen] = useState(false);
   // Read provider and permission mode from URL params or fall back to defaults
   const _paramProvider = searchParams.get('provider');
   const paramMode = searchParams.get('mode');
 
-  // "New project" (?coordinator=1) starts a coordinator on Claude or Codex with
-  // no model to pick; the server prepends the `front` preamble when the create
+  // "New project" (?coordinator=1) starts a coordinator on Claude or Codex,
+  // on the configured model unless one is picked; the server prepends the `front` preamble when the create
   // call says so.
   const coordinator = searchParams.get('coordinator') === '1';
   const coordinatorSettings = {
@@ -108,6 +102,7 @@ export function NewSessionView({ sidebarOpen, onToggleSidebar }: NewSessionViewP
   };
   const searchParamProvider: Provider = _paramProvider === 'codex' ? 'codex'
     : _paramProvider === 'claude' ? 'claude'
+    : _paramProvider === 'antigravity' && !coordinator ? 'antigravity'
     : coordinator ? coordinatorProviderFor(coordinatorSettings, signIn) : 'claude';
   const [provider, setProvider] = useState<Provider>(searchParamProvider);
   const [goalObjective, setGoalObjective] = useState('');
@@ -148,8 +143,10 @@ export function NewSessionView({ sidebarOpen, onToggleSidebar }: NewSessionViewP
   // Codex only: reasoning-effort options depend on the selected model. If the
   // current effort choice isn't offered by the newly-selected model, reset it.
   useEffect(() => {
-    if (provider !== 'codex' || selectedEffort === null) return;
-    const efforts = effortsForCodexModel(selectedModel ?? codexDefaultModel);
+    if ((provider !== 'codex' && provider !== 'antigravity') || selectedEffort === null) return;
+    const efforts: readonly string[] = provider === 'antigravity'
+      ? antigravityModelEntry(selectedModel ?? DEFAULT_ANTIGRAVITY_PICKER_ID)?.efforts ?? []
+      : effortsForCodexModel(selectedModel ?? codexDefaultModel);
     if (!efforts.includes(selectedEffort)) {
       setSelectedEffort(null);
     }
@@ -208,24 +205,36 @@ export function NewSessionView({ sidebarOpen, onToggleSidebar }: NewSessionViewP
 
   // One picker for every model a new session can start on: Claude, OpenAI and
   // the saved endpoints, each under its own mark. A project's coordinator
-  // offers just its configured model for each provider.
+  // offers every Claude model (its configured one marked default) and just
+  // its configured Codex model.
   const pickerModels = React.useMemo(() => {
     if (coordinator) {
       return [
-        { id: claudeDefaultModel, label: claudeDefaultModel === CLAUDE_CLI_DEFAULT_MODEL ? 'Claude Code default' : formatClaudeModelLabel(claudeDefaultModel), isDefault: true, icon: <ModelMark kind="claude" />, group: 'Claude' },
+        ...claudeAvailableModels,
         { id: codexDefaultModel, label: formatCodexModelLabel(codexDefaultModel), isDefault: true, icon: <ModelMark kind="openai" />, group: 'OpenAI' },
       ];
     }
     const endpointMark = <ModelMark kind="endpoint" />;
+    const antigravityMark = <ModelMark kind="antigravity" />;
     return [
       ...claudeAvailableModels,
       ...codexAvailableModels,
+      ...ANTIGRAVITY_MODELS.map((m) => ({
+        id: m.id,
+        label: m.label,
+        description: m.description,
+        isDefault: m.id === DEFAULT_ANTIGRAVITY_PICKER_ID,
+        icon: antigravityMark,
+        group: 'Google',
+      })),
       ...claudeEndpoints.map((option) => ({ ...endpointModelOption(option, false), icon: endpointMark, group: 'Your endpoints' })),
     ];
-  }, [coordinator, claudeDefaultModel, codexDefaultModel, claudeAvailableModels, codexAvailableModels, claudeEndpoints]);
+  }, [coordinator, codexDefaultModel, claudeAvailableModels, codexAvailableModels, claudeEndpoints]);
   const pickerSelectedModel = endpoint
     ? endpoint.model
-    : provider === 'codex' ? selectedModel ?? codexDefaultModel : selectedModel ?? claudeDefaultModel;
+    : provider === 'codex' ? selectedModel ?? codexDefaultModel
+    : provider === 'antigravity' ? antigravityModelEntry(selectedModel)?.id ?? DEFAULT_ANTIGRAVITY_PICKER_ID
+    : selectedModel ?? claudeDefaultModel;
 
   // Codex effort options follow the currently-effective codex model.
   const codexAvailableEfforts = React.useMemo(() => {
@@ -241,6 +250,15 @@ export function NewSessionView({ sidebarOpen, onToggleSidebar }: NewSessionViewP
     });
   }, [selectedModel, codexDefaultModel, codexDefaultEffort]);
 
+  const antigravityAvailableEfforts = React.useMemo(() => {
+    const entry = antigravityModelEntry(selectedModel ?? DEFAULT_ANTIGRAVITY_PICKER_ID);
+    return (entry?.efforts ?? []).map((effortId) => ({
+      id: effortId,
+      label: ANTIGRAVITY_EFFORT_LABELS[effortId] ?? effortId,
+      isDefault: effortId === entry?.defaultEffort,
+    }));
+  }, [selectedModel]);
+
   const permissionMode = resolveInitialLaunchPermissionMode({
     explicit: paramMode ?? undefined,
     fallback: serverConfig?.defaultPermissionMode,
@@ -251,36 +269,6 @@ export function NewSessionView({ sidebarOpen, onToggleSidebar }: NewSessionViewP
   // Every session launches from the one folder set in Settings; the agents
   // find the repos under it that the work involves.
   const workingDirectory = serverConfig?.defaultWorkingDirectory?.trim() || '~';
-
-  // Header attention count (dev notes + pending recommendations). React Query owns the
-  // cadence so a backgrounded tab stops polling — refetchIntervalInBackground defaults
-  // to false, where the old raw setInterval kept firing two requests every 15s forever.
-  const {
-    data: queueCount = 0,
-    refetch: refetchHeaderAttention,
-  } = useQuery({
-    queryKey: ['new-session-header-attention'],
-    queryFn: async (): Promise<number> => {
-      try {
-        const [notesRes, recsRes] = await Promise.all([
-          api.getDevNotes(),
-          api.getPendingRecommendations(),
-        ]);
-        return notesRes.notes.length + recsRes.recommendations.length;
-      } catch (error) {
-        console.error('Failed to refresh new-session header state:', error);
-        throw error;
-      }
-    },
-    refetchInterval: HEADER_ATTENTION_POLL_MS,
-    staleTime: HEADER_ATTENTION_POLL_MS,
-    // One attempt per tick, as the old interval did; the next tick is the retry.
-    retry: false,
-  });
-
-  const refreshHeaderAttention = useCallback(async () => {
-    await refetchHeaderAttention();
-  }, [refetchHeaderAttention]);
 
   const _handleProviderChange = useCallback((nextProvider: Provider) => {
     setProvider(nextProvider);
@@ -300,52 +288,16 @@ export function NewSessionView({ sidebarOpen, onToggleSidebar }: NewSessionViewP
       setEndpointModel(option.id);
       return;
     }
-    const nextProvider: Provider = option.group === 'OpenAI' ? 'codex' : 'claude';
+    const nextProvider: Provider = option.group === 'OpenAI' ? 'codex'
+      : option.group === 'Google' ? 'antigravity'
+      : 'claude';
     if (nextProvider !== provider || endpoint) {
       keepPickedModelRef.current = true;
       _handleProviderChange(nextProvider);
     }
-    setSelectedModel(coordinator ? null : model);
+    setSelectedModel(model);
     setSelectedEffort(null);
-  }, [pickerModels, provider, endpoint, coordinator, _handleProviderChange]);
-
-  const handleQueueClose = useCallback(() => {
-    setQueueOpen(false);
-    void refreshHeaderAttention();
-  }, [refreshHeaderAttention]);
-
-  const handleLaunchQueueSession = useCallback(async (
-    notes: DevNote[],
-    recommendations: StoredRecommendation[],
-    nextProvider?: Provider,
-    nextPermissionMode?: 'default' | 'acceptEdits' | 'bypassPermissions'
-  ) => {
-    if (notes.length === 0 && recommendations.length === 0) return;
-
-    const effectiveProvider = nextProvider || 'claude';
-    const response = await launchQueueSession(
-      api,
-      notes,
-      recommendations,
-      workingDirectory,
-      {
-        workspace: workspaceId,
-        provider: effectiveProvider,
-        model: serverConfig?.defaultModel,
-        permissionMode: nextPermissionMode || permissionMode,
-      }
-    );
-
-    if (!response) return null;
-
-    await invalidateConversations();
-    return { sessionId: response.conversationId };
-  }, [
-    invalidateConversations,
-    permissionMode,
-    serverConfig?.defaultModel,
-    workingDirectory,
-  ]);
+  }, [pickerModels, provider, endpoint, _handleProviderChange]);
 
   const handleSubmit = useCallback(async (
     message: string,
@@ -369,8 +321,13 @@ export function NewSessionView({ sidebarOpen, onToggleSidebar }: NewSessionViewP
       ? codexDefaultModel
       : targetProvider === 'opencode'
         ? DEFAULT_OPENCODE_MODEL_ID
-        : effectiveDefaultModel;
-    const fallbackModel = model || providerFallbackModel;
+        : targetProvider === 'antigravity'
+          ? DEFAULT_ANTIGRAVITY_PICKER_ID
+          : effectiveDefaultModel;
+    // Antigravity names the model and its thinking level in one id.
+    const fallbackModel = targetProvider === 'antigravity'
+      ? antigravityModelId(model || providerFallbackModel, effort)
+      : model || providerFallbackModel;
     // No --model at all lets the Claude CLI pick its own default.
     const requestModel = fallbackModel === CLAUDE_CLI_DEFAULT_MODEL ? undefined : fallbackModel;
     const requestedEffort = effort ?? (coordinator ? codexDefaultEffort : undefined);
@@ -541,7 +498,6 @@ export function NewSessionView({ sidebarOpen, onToggleSidebar }: NewSessionViewP
               variant="icon"
             />
           )}
-          <HeaderNotesButton count={queueCount} onClick={() => setQueueOpen(true)} />
           <button
             type="button"
             onClick={() => setSettingsOpen(true)}
@@ -559,7 +515,7 @@ export function NewSessionView({ sidebarOpen, onToggleSidebar }: NewSessionViewP
         <div className="flex-1 flex items-center justify-center">
           <div className="flex flex-col items-center gap-3">
             <div className="flex flex-col items-center gap-2">
-            {!endpoint && <ProviderSignInStatus
+            {!endpoint && provider !== 'antigravity' && <ProviderSignInStatus
               status={signIn}
               provider={provider === 'codex' ? 'codex' : 'claude'}
               onOpenProviders={() => setSettingsOpen(true)}
@@ -602,21 +558,18 @@ export function NewSessionView({ sidebarOpen, onToggleSidebar }: NewSessionViewP
                       selectedEffort,
                       onEffortChange: setSelectedEffort,
                     }
-                  : {}),
+                  : provider === 'antigravity' && !coordinator
+                    ? {
+                        availableEfforts: antigravityAvailableEfforts,
+                        selectedEffort,
+                        onEffortChange: setSelectedEffort,
+                      }
+                    : {}),
               }}
             />
           </div>
         </div>
       </div>
-        <ActionQueueDialog
-          isOpen={queueOpen}
-          onClose={handleQueueClose}
-          onLaunchSession={handleLaunchQueueSession}
-          defaultProvider={'claude'}
-          defaultPermissionMode={permissionMode}
-          initialProvider={provider}
-          initialPermissionMode={permissionMode}
-        />
         <SettingsDialog isOpen={settingsOpen} onClose={() => setSettingsOpen(false)} />
       </div>
     </TooltipProvider>

@@ -64,6 +64,18 @@ export const PROVIDER_CAPABILITIES: Readonly<Record<Provider, ProviderCapabiliti
     // separate knob; opencode expresses it through the model's `variant`.
     modelSwitching: { model: true, reasoningEffort: false },
   },
+  antigravity: {
+    // agy's stream-json input takes text blocks only: an image is saved to a
+    // file the model opens, and attached text goes inline.
+    attachments: { image: true, text: true, pdf: false },
+    interactiveQuestions: false,
+    // Launched with --dangerously-skip-permissions; agy never asks.
+    approvals: 'fixed-never',
+    goals: false,
+    branching: 'unsupported',
+    // --model applies at spawn; agy has no mid-session switch Lattice drives.
+    modelSwitching: { model: true, reasoningEffort: false },
+  },
 };
 
 export function getProviderCapabilities(provider: Provider): ProviderCapabilities {

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { type JSX, useState } from 'react';
 import { Check, Loader2, RotateCw } from 'lucide-react';
 
 const QUIET_BTN = 'flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-[13px] text-fg-3 hover:text-fg hover:bg-surface-2 transition-colors cursor-pointer disabled:opacity-50';

@@ -2,6 +2,7 @@ import type { ProcessAdapter, ProcessHandle, SpawnConfig } from '@liggi/agent-ui
 import { DaemonProcessAdapter } from './daemon-process-adapter.js';
 import { CodexProcessAdapter } from './codex-process-adapter.js';
 import { OpencodeProcessAdapter } from './opencode-process-adapter.js';
+import { AntigravityProcessAdapter } from './antigravity-process-adapter.js';
 import {
   createProviderDriver,
   type ProviderDriver,
@@ -14,15 +15,18 @@ export class MultiplexingProcessAdapter implements ProcessAdapter {
   private readonly claudeDriver: ProviderDriver;
   private readonly codexDriver: ProviderDriver;
   private readonly opencodeDriver: ProviderDriver;
+  private readonly antigravityDriver: ProviderDriver;
 
   constructor(
     private readonly claudeAdapter: DaemonProcessAdapter,
     private readonly codexAdapter: CodexProcessAdapter,
     private readonly opencodeAdapter: OpencodeProcessAdapter,
+    antigravityAdapter: AntigravityProcessAdapter = new AntigravityProcessAdapter(),
   ) {
     this.claudeDriver = createProviderDriver('claude', 'claude-daemon', claudeAdapter);
     this.codexDriver = createProviderDriver('codex', 'codex-app-server', codexAdapter);
     this.opencodeDriver = createProviderDriver('opencode', 'opencode-server', opencodeAdapter);
+    this.antigravityDriver = createProviderDriver('antigravity', 'antigravity-cli', antigravityAdapter);
   }
 
   async spawn(config: SpawnConfig): Promise<ProcessHandle> {
@@ -54,6 +58,8 @@ export class MultiplexingProcessAdapter implements ProcessAdapter {
         return this.codexDriver;
       case 'opencode':
         return this.opencodeDriver;
+      case 'antigravity':
+        return this.antigravityDriver;
       case 'claude':
         return this.claudeDriver;
     }
@@ -68,6 +74,7 @@ export class MultiplexingProcessAdapter implements ProcessAdapter {
     const provider = config.extra?.provider;
     if (provider === 'codex') return this.codexDriver;
     if (provider === 'opencode') return this.opencodeDriver;
+    if (provider === 'antigravity') return this.antigravityDriver;
     return this.claudeDriver;
   }
 }

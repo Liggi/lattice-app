@@ -1,3 +1,4 @@
+import type { JSX } from 'react';
 import { AlertTriangle } from 'lucide-react';
 import { usePlugins } from './PluginsContext';
 

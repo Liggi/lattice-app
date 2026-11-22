@@ -1,5 +1,5 @@
 /* oxlint-disable react-doctor/no-giant-component, react-doctor/prefer-useReducer, react-doctor/no-render-in-render */
-import React, { useRef, useMemo, useCallback, useState } from 'react';
+import React, { type JSX, useRef, useMemo, useCallback, useState } from 'react';
 import { ArrowDown, ChevronRight, GitBranch, Loader2 } from 'lucide-react';
 import { MessageItem } from './MessageItem';
 import { ErrorBoundary } from '../ErrorBoundary';

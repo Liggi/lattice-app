@@ -1,5 +1,5 @@
 /* oxlint-disable react-doctor/no-cascading-set-state, react-doctor/no-giant-component, react-doctor/prefer-useReducer, react-doctor/no-render-in-render, react-doctor/no-effect-event-handler */
-import { useEffect } from 'react';
+import { type JSX, useEffect } from 'react';
 import { Routes, Route, Navigate, useNavigate, useParams } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Layout } from './components/Layout/Layout';
@@ -27,6 +27,7 @@ import { ToastProvider } from './components/Toast/Toast';
 import { TooltipProvider } from './components/ui/tooltip';
 import { AttentionFaviconController } from './hooks/useAttentionFavicon';
 import { useSessionTabNavigation } from './hooks/useSessionTabNavigation';
+import { useViewingPresence } from './hooks/useViewingPresence';
 import { useSidebarLists } from './hooks/useSidebarLists';
 import { sidebarOrderedIds } from './utils/sidebar-ordering';
 import { useSessionsSidebarState } from './hooks/useSessionsSidebarState';
@@ -54,6 +55,7 @@ function ConversationViewWrapper(): JSX.Element {
   const navigate = useNavigate();
 
   useSessionTabNavigation(conversationId);
+  useViewingPresence(conversationId);
 
   // Sidebar state lives here so it persists across session changes
   const { sidebarOpen, openSidebar, closeSidebar, toggleSidebar } = useSessionsSidebarState();

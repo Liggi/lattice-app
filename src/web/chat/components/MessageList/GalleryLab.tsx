@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { type JSX, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { MessageItem } from './MessageItem';
 import type { ChatMessage } from '../../types';

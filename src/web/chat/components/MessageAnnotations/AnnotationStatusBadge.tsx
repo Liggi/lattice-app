@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { type JSX, useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Loader2, MessageSquareText, X } from 'lucide-react';
 import type { PendingAnnotation } from '../../utils/annotations-format';

@@ -25,6 +25,10 @@ describe('contextTokensOf', () => {
     const zeroTurn = { type: 'turn:end', data: { usage: { input_tokens: 0, cache_read_input_tokens: 0 } } };
     expect(contextTokensOf([codexTurn(134_000), zeroTurn], 'codex')).toBe(134_000);
   });
+  it('ignores a subagent message, which reports the subagent\'s own context', () => {
+    const subagentCall = { type: 'content', data: { ...claudeCall(224_000).data, parentToolUseId: 'toolu_agent' } };
+    expect(contextTokensOf([claudeCall(102_000), subagentCall], 'claude')).toBe(102_000);
+  });
   it('is null with no measurement', () => {
     expect(contextTokensOf([{ type: 'input:sent', data: { text: 'hi' } }], 'claude')).toBeNull();
   });

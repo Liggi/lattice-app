@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { type JSX } from 'react';
 import type { PendingInput } from '../../hooks/useHarnessSession';
 import { AgentMessage } from '../MessageList/AgentMessage';
 import { UserMessageBody, attachmentMedia, isAttachmentBlock } from '../MessageList/MessageItem';

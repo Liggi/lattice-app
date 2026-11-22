@@ -168,6 +168,19 @@ html[data-display-mode='standalone'] {
   --app-composer-dock-bottom-gap: 0px;
 }
 
+/* Top inset. iOS 26+ draws a blur over the top ~40px of a Home Screen web app,
+   below the status bar, and no meta tag or CSS turns it off; the installed iOS
+   app starts its content below it. Browsers and other platforms are unchanged. */
+:root {
+  --app-safe-area-top: env(safe-area-inset-top, 0px);
+}
+
+@supports (-webkit-touch-callout: none) {
+  html[data-display-mode='standalone'] {
+    --app-safe-area-top: calc(env(safe-area-inset-top, 0px) + 24px);
+  }
+}
+
 /* Guardrail: all buttons should show pointer cursor unless disabled */
 button:not(:disabled),
 [role="button"]:not([aria-disabled="true"]) {
@@ -219,7 +232,7 @@ body {
   }
 
   /* Frame inset, plus iOS PWA safe areas (notch + home indicator + rounded corners) */
-  padding-top: calc(env(safe-area-inset-top, 0px) + var(--frame-top));
+  padding-top: calc(var(--app-safe-area-top) + var(--frame-top));
   padding-right: calc(env(safe-area-inset-right, 0px) + var(--frame-x));
   padding-bottom: calc(var(--app-safe-area-bottom) + var(--frame-bottom));
   padding-left: calc(env(safe-area-inset-left, 0px) + var(--frame-x));

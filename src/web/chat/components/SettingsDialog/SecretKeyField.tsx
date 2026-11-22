@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { type JSX, useState } from 'react';
 import { Check, Eye, EyeOff, Loader2, Trash2 } from 'lucide-react';
 
 interface SecretKeyFieldProps {

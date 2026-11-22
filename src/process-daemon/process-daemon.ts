@@ -29,6 +29,7 @@ import { ConversationConfig, SystemInitMessage, StreamEvent, StreamMessage, Latt
 import { ClaudeLoginTerminalManager, type LoginTerminalProcess, type LoginTerminalSize } from './claude-login-terminal.js';
 import { findUserClaudeExecutable } from '../services/process/claude-cli.js';
 import { claudeSpawnEnv } from './claude-spawn-auth.js';
+import { removeForeignTranscriptFields } from './foreign-transcript-fields.js';
 import { agentEnv } from '../services/infrastructure/agent-env.js';
 
 class JsonLinesParser extends EventEmitter {
@@ -659,6 +660,21 @@ export class ProcessDaemon extends EventEmitter {
   // Process Management (extracted from ClaudeProcessManager)
   // ============================================================================
 
+  /**
+   * A resume on a Claude model (no endpoint base URL) first drops the fields
+   * other models' endpoints saved in the transcript, which Anthropic refuses.
+   * A failure is logged and the resume goes ahead: the CLI then reports the
+   * API error itself.
+   */
+  private async prepareResumeTranscript(sessionId: string, cwd: string, spawnEnv: Record<string, string | undefined>): Promise<void> {
+    if (spawnEnv.ANTHROPIC_BASE_URL) return;
+    try {
+      await removeForeignTranscriptFields(sessionId, cwd);
+    } catch (error) {
+      logger.warn('Could not clean the transcript before resuming on Claude', { sessionId, error: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
   private async handleSpawn(params: SpawnParams, owner: net.Socket | null = null): Promise<SpawnResult> {
     const { config } = params;
     const isResume = !!config.resumedSessionId;
@@ -676,14 +692,16 @@ export class ProcessDaemon extends EventEmitter {
     try {
       // For multimodal, don't pass message as CLI arg - we'll send via stdin
       const args = isResume && config.resumedSessionId
-        ? this.buildResumeArgs({ sessionId: config.resumedSessionId, message: config.initialPrompt, permissionMode: config.permissionMode, streamingId, hasMultimodalContent, model: config.model, coordinator: config.coordinator })
+        ? this.buildResumeArgs({ sessionId: config.resumedSessionId, message: config.initialPrompt, permissionMode: config.permissionMode, streamingId, hasMultimodalContent, model: config.model, effort: config.effort, coordinator: config.coordinator })
         : this.buildStartArgs(config);
 
       logger.info('Spawn cwd', { streamingId, configWorkingDirectory: config.workingDirectory, resolvedCwd: cwd, processCwd: process.cwd() });
 
+      const spawnEnv = claudeSpawnEnv(config.model);
+      if (isResume && config.resumedSessionId) await this.prepareResumeTranscript(config.resumedSessionId, cwd, spawnEnv);
       const env = {
         ...this.childEnv(),
-        ...claudeSpawnEnv(config.model),
+        ...spawnEnv,
         ...silentTurnEnv(config),
         CUI_STREAMING_ID: streamingId,
         PWD: cwd,
@@ -889,14 +907,16 @@ export class ProcessDaemon extends EventEmitter {
 
     // Spawn the process (same as handleSpawn)
     const args = isResume && config.resumedSessionId
-      ? this.buildResumeArgs({ sessionId: config.resumedSessionId, message: config.initialPrompt, permissionMode: config.permissionMode, streamingId, hasMultimodalContent, model: config.model, coordinator: config.coordinator })
+      ? this.buildResumeArgs({ sessionId: config.resumedSessionId, message: config.initialPrompt, permissionMode: config.permissionMode, streamingId, hasMultimodalContent, model: config.model, effort: config.effort, coordinator: config.coordinator })
       : this.buildStartArgs(config);
 
     logger.info('Optimistic spawn cwd', { streamingId, configWorkingDirectory: config.workingDirectory, resolvedCwd: cwd });
 
+    const spawnEnv = claudeSpawnEnv(config.model);
+    if (isResume && config.resumedSessionId) await this.prepareResumeTranscript(config.resumedSessionId, cwd, spawnEnv);
     const env = {
       ...this.childEnv(),
-      ...claudeSpawnEnv(config.model),
+      ...spawnEnv,
       ...silentTurnEnv(config),
       CUI_STREAMING_ID: streamingId,
       PWD: cwd,
@@ -1735,7 +1755,7 @@ export class ProcessDaemon extends EventEmitter {
     return args;
   }
 
-  private buildResumeArgs(config: { sessionId: string; message: string; permissionMode?: string; streamingId: string; hasMultimodalContent?: boolean; model?: string; coordinator?: boolean }): string[] {
+  private buildResumeArgs(config: { sessionId: string; message: string; permissionMode?: string; streamingId: string; hasMultimodalContent?: boolean; model?: string; effort?: string; coordinator?: boolean }): string[] {
     const args = this.buildBaseArgs();
 
     // Resume message is sent via stdin (not as CLI arg) so that Claude stays
@@ -1759,6 +1779,10 @@ export class ProcessDaemon extends EventEmitter {
     // Pass model if specified - needed for experimental features like Agent Teams
     if (config.model) {
       args.push('--model', config.model);
+    }
+    // Per invocation, like the model: a resume without it runs at the CLI default.
+    if (config.effort) {
+      args.push('--effort', config.effort);
     }
 
     // Tool restrictions hold per invocation, so a resumed coordinator needs them again.
@@ -1845,6 +1869,9 @@ export class ProcessDaemon extends EventEmitter {
 
     if (config.model) {
       args.push('--model', config.model);
+    }
+    if (config.effort) {
+      args.push('--effort', config.effort);
     }
 
     if (config.allowedTools?.length) {

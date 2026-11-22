@@ -1,11 +1,13 @@
 /* oxlint-disable react-doctor/no-cascading-set-state, react-doctor/no-giant-component, react-doctor/prefer-useReducer, react-doctor/no-render-in-render, react-doctor/no-effect-event-handler */
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { type JSX, useState, useEffect, useCallback } from 'react';
 import { Circle, Loader2, X, GitBranch, Check, RefreshCw, AlertTriangle, LocateFixed } from 'lucide-react';
 import type { SessionInsights, Turn } from '../../types';
 import { api } from '../../services/api';
 import { useActivityStreamSubscription } from '../../contexts/ActivityStreamContext';
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from '../ui/tooltip';
 import { useToast } from '../Toast/Toast';
+import { JobRow } from './NarrowPanel';
+import { useLiveJobs, useNow } from '../ConversationView/RunningJobsStrip';
 
 /** Sync state for insights freshness */
 export interface SyncState {
@@ -52,11 +54,28 @@ function getTurnOutcome(actions: string[]): string | null {
 }
 
 const mobileSafeAreaInsetsStyle: React.CSSProperties = {
-  paddingTop: 'env(safe-area-inset-top, 0px)',
+  paddingTop: 'var(--app-safe-area-top)',
   paddingRight: 'env(safe-area-inset-right, 0px)',
   paddingBottom: 'env(safe-area-inset-bottom, 0px)',
   paddingLeft: 'env(safe-area-inset-left, 0px)',
 };
+
+/**
+ * The chat's running jobs, at the top of its panel: the same rows a project's
+ * Running list draws, with the count, a progress strip and when each will end
+ * or that it is stuck. Nothing when no job is running.
+ */
+function RunningJobs({ conversationId }: { conversationId?: string }) {
+  const jobs = useLiveJobs(conversationId);
+  const now = useNow(30_000);
+  if (jobs.length === 0) return null;
+  return (
+    <section data-testid="panel-running" className="flex flex-col gap-1 -mx-2">
+      <h3 className="px-2 pb-1 text-xs font-medium text-fg-2">Running</h3>
+      {jobs.map((job) => <JobRow key={`${job.session}:${job.label}`} job={job} now={now} />)}
+    </section>
+  );
+}
 
 interface InsightsPanelProps {
   insights: SessionInsights | null;
@@ -302,6 +321,7 @@ export function InsightsPanel({ insights, isLoading, isOpen, onClose, syncState,
                 <X size={16} />
               </button>
             </div>
+            <RunningJobs conversationId={sessionId} />
             <div className="flex items-center gap-2 text-[13px] text-fg-3 mt-8">
               <Circle size={6} className="text-fg-3 animate-pulse" />
               <span>History will appear as the session progresses.</span>
@@ -312,6 +332,7 @@ export function InsightsPanel({ insights, isLoading, isOpen, onClose, syncState,
         {/* Desktop */}
         <aside className="hidden md:block w-[360px] border-l border-line bg-bg flex-shrink-0 overflow-y-auto">
           <div className="p-5">
+            <RunningJobs conversationId={sessionId} />
             <div className="flex items-center gap-2 text-[13px] text-fg-3 mt-8">
               <Circle size={6} className="text-fg-3 animate-pulse" />
               <span>History will appear as the session progresses.</span>
@@ -329,6 +350,7 @@ export function InsightsPanel({ insights, isLoading, isOpen, onClose, syncState,
   // Shared panel content
   const panelContent = (
       <div className="p-5 space-y-6">
+        <RunningJobs conversationId={sessionId} />
         {/* Credit exhaustion warning — visible at top when updates are paused */}
         {creditsExhausted && (
           <div className="flex items-start gap-2 p-2.5 rounded-md bg-[rgb(var(--color-amber-rgb)/0.1)] mb-3">

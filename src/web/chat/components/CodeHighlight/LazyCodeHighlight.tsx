@@ -1,4 +1,4 @@
-import React, { Suspense } from 'react';
+import React, { type JSX, Suspense } from 'react';
 import { cn } from '@/web/chat/lib/utils';
 import { ErrorBoundary } from '../ErrorBoundary/ErrorBoundary';
 

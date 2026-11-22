@@ -1,5 +1,5 @@
 /* oxlint-disable react-doctor/no-cascading-set-state, react-doctor/no-giant-component, react-doctor/prefer-useReducer, react-doctor/no-render-in-render, react-doctor/no-effect-event-handler */
-import React, { useState } from 'react';
+import React, { type JSX, useState } from 'react';
 import { ChevronDown, ChevronRight, Copy, Check } from 'lucide-react';
 // import { cn } from "../../lib/utils";
 import { Button } from '../ui/button';

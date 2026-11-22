@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import React, { type JSX, createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { useToast } from '../Toast/Toast';
 import { Check, Copy, SmilePlus } from 'lucide-react';
 import {

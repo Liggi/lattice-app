@@ -21,7 +21,7 @@
  * while it is open (2026-09-19 flow agreement).
  */
 
-import React, { useState } from 'react';
+import React, { type JSX, useState } from 'react';
 import { ArrowRightLeft, ChevronDown, ChevronRight, ExternalLink, MessageSquare, Play, SquarePen } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';

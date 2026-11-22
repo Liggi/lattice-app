@@ -20,7 +20,7 @@
  * (`thread-dismissal.ts`); parking keeps it for later and its workers carry on.
  */
 
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { type JSX, useCallback, useEffect, useRef, useState } from 'react';
 import { WorkerRow } from './WorkersSection';
 import { NarrowPanel } from './NarrowPanel';
 import type { WaitTextContext } from './WaitText';
@@ -138,7 +138,7 @@ export function StateOfPlaySection({
   const toggle = useCallback((key: string) => setOpenKey((current) => (current === key ? null : key)), []);
 
   // A parked or dismissed row keeps its place, saying so, until its Undo lapses.
-  const rows: React.ReactNode[] = calls
+  const rows: React.ReactElement[] = calls
     .filter((call) => !gone.some((entry) => entry.key === call.key))
     .map((call) => (
       <CallRow key={call.key} call={call} now={now} open={openKey === call.key} onToggle={() => toggle(call.key)} actions={actions} />
@@ -189,6 +189,6 @@ export function StateOfPlaySection({
 }
 
 const EMPTY_PROJECT: ProjectState = {
-  outcome: null, decisions: [], retired: [], priority: null, rank: [], open: [], closed: [],
+  outcome: null, story: null, decisions: [], retired: [], priority: null, rank: [], open: [], closed: [],
   attention: [], historical: [], accountingFrom: null, now: null, answeredBefore: null, nudges: 0, revision: 0,
 };

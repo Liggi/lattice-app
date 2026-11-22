@@ -6,7 +6,7 @@
  * each. Any other ask shows as written, with one box.
  */
 
-import React, { useState } from 'react';
+import React, { type JSX, useState } from 'react';
 import { Check, Pencil, Undo2 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';

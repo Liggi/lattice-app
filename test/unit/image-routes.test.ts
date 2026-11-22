@@ -10,6 +10,7 @@ import { errorHandler } from '../../src/middleware/error-handler.js';
 import { localImageUrl } from '../../src/web/chat/components/MessageList/MessageItem.js';
 
 const PNG = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex');
+const PHONE = Buffer.concat([PNG, Buffer.from('phone')]);
 
 describe('GET /api/images', () => {
   let server: Server;
@@ -29,6 +30,16 @@ describe('GET /api/images', () => {
     fs.writeFileSync(path.join(workDir, 'repo-shot.png'), PNG);
     fs.writeFileSync(path.join(outside, 'private.png'), PNG);
     fs.symlinkSync(path.join(outside, 'private.png'), path.join(tmp, 'link.png'));
+    // figkit writes the figure, then its phone layout; an older figure has only an inline preview, -phone.png.
+    const past = new Date(Date.now() - 60_000);
+    fs.writeFileSync(path.join(tmp, 'fig.png'), PNG);
+    fs.utimesSync(path.join(tmp, 'fig.png'), past, past);
+    fs.writeFileSync(path.join(tmp, 'fig.phone.png'), PHONE);
+    fs.writeFileSync(path.join(tmp, 'old-phone.png'), PHONE);
+    fs.writeFileSync(path.join(tmp, 'old.png'), PNG);
+    fs.writeFileSync(path.join(tmp, 'redrawn.phone.png'), PHONE);
+    fs.utimesSync(path.join(tmp, 'redrawn.phone.png'), past, past);
+    fs.writeFileSync(path.join(tmp, 'redrawn.png'), PNG);
 
     const app = express();
     app.use('/api/images', createImageRoutes({ listWorkingDirectories: async () => [workDir] }));
@@ -60,6 +71,16 @@ describe('GET /api/images', () => {
     expect((await get(path.join(tmp, 'link.png'))).status).toBe(403);
   });
 
+  it('serves the stacked phone layout for variant=phone only when it is figkit\'s and at least as new as the figure', async () => {
+    const body = async (p: string, variant?: string) =>
+      Buffer.from(await (await fetch(baseUrl + encodeURIComponent(p) + (variant ? `&variant=${variant}` : ''))).arrayBuffer());
+    expect((await body(path.join(tmp, 'fig.png'), 'phone')).equals(PHONE)).toBe(true);
+    expect((await body(path.join(tmp, 'fig.png'))).equals(PNG)).toBe(true);
+    expect((await body(path.join(tmp, 'old.png'), 'phone')).equals(PNG)).toBe(true);
+    expect((await body(path.join(tmp, 'redrawn.png'), 'phone')).equals(PNG)).toBe(true);
+    expect((await body(path.join(tmp, 'shot.png'), 'phone')).equals(PNG)).toBe(true);
+  });
+
   it('refuses non-images and files whose bytes are not the claimed image type', async () => {
     expect((await get(path.join(tmp, 'notes.txt'))).status).toBe(415);
     expect((await get(path.join(tmp, 'secret.png'))).status).toBe(415);
@@ -73,5 +94,10 @@ describe('localImageUrl', () => {
     expect(localImageUrl('https://example.com/x.png')).toBe('https://example.com/x.png');
     expect(localImageUrl('/api/images?path=x')).toBe('/api/images?path=x');
     expect(localImageUrl('//cdn.example.com/x.png')).toBe('//cdn.example.com/x.png');
+  });
+
+  it('gives the same file a different URL in each message, so a rewritten file is fetched again', () => {
+    expect(localImageUrl('/tmp/a.png', 'msg 1')).toBe('/api/images?path=%2Ftmp%2Fa.png&v=msg%201');
+    expect(localImageUrl('https://example.com/x.png', 'msg 1')).toBe('https://example.com/x.png');
   });
 });

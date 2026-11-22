@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
+import React, { type JSX, createContext, useContext, useState, useCallback, useEffect } from 'react';
 import { X, ExternalLink, Check, AlertCircle, Copy } from 'lucide-react';
 
 /**

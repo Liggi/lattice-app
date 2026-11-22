@@ -19,7 +19,7 @@
  * close control keeps its accessible name.
  */
 
-import React, { useState } from 'react';
+import React, { type JSX, useState } from 'react';
 import { X } from 'lucide-react';
 import type { SessionReference, WorkerCardState } from '@/types/worker-events';
 import type { ProjectState } from '@/types/project-state';
@@ -48,7 +48,7 @@ interface CoordinatorPanelProps {
 }
 
 const mobileSafeAreaInsetsStyle: React.CSSProperties = {
-  paddingTop: 'env(safe-area-inset-top, 0px)',
+  paddingTop: 'var(--app-safe-area-top)',
   paddingRight: 'env(safe-area-inset-right, 0px)',
   paddingBottom: 'env(safe-area-inset-bottom, 0px)',
   paddingLeft: 'env(safe-area-inset-left, 0px)',

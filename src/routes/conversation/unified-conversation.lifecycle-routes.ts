@@ -22,10 +22,12 @@ import { normalizeWorkingDirectory } from '@/utils/working-directory.js';
 import { getHarnessSessionManager } from '@/harness/setup.js';
 import { DEFAULT_CODEX_MODEL_ID } from '@/constants/codex-models.js';
 import { DEFAULT_OPENCODE_MODEL_ID } from '@/constants/opencode-models.js';
+import { DEFAULT_ANTIGRAVITY_MODEL_ID } from '@/constants/antigravity-models.js';
 import { supersededModelRefusal } from '@/constants/superseded-models.js';
 import { modelProviderMismatch, providerForModel } from '@/constants/model-provider.js';
 import { resolveResumeModel } from '@/services/sessions/resume-model.js';
-import { coordinatorClaudeModel, coordinatorCodexDefaults, coordinatorProvider } from '@/services/sessions/coordinator-defaults.js';
+import { coordinatorClaudeModel, coordinatorCodexDefaults, coordinatorProfileSettings, coordinatorProvider } from '@/services/sessions/coordinator-defaults.js';
+import { effortProblem, profileForNewCoordinator, profileForRecorded, type ProfileModel } from '@/constants/coordinator-profiles.js';
 import {
   currentCodexReasoningEffort,
   knownCodexReasoningEffort,
@@ -44,7 +46,7 @@ import type { ProjectOpenThread } from '@/types/project-state.js';
 import { persistCoordinatorImages } from '@/services/sessions/coordinator-attachments.js';
 import { AttachedFileError, saveLargeAttachedFiles } from '@/services/sessions/large-attached-files.js';
 import { parseAttachmentBlocks } from '@/harness/attachment-blocks.js';
-import type { WorkerStartedData } from '@/types/worker-events.js';
+import { SERVER_NOTE_PREFIX, type WorkerStartedData } from '@/types/worker-events.js';
 
 /** Save large attached files, turning a missing upload into a request error. */
 async function saveLargeFilesOrRefuse(conversationId: string, blocks: ContentBlockParam[]): Promise<ContentBlockParam[]> {
@@ -66,6 +68,7 @@ const OPENCODE_PERMISSION_MODE = 'opencode-managed';
 function defaultModelForProvider(provider: Provider): string {
   if (provider === 'codex') return DEFAULT_CODEX_MODEL;
   if (provider === 'opencode') return DEFAULT_OPENCODE_MODEL_ID;
+  if (provider === 'antigravity') return DEFAULT_ANTIGRAVITY_MODEL_ID;
   return 'unknown';
 }
 
@@ -166,6 +169,10 @@ export function registerUnifiedConversationLifecycleRoutes(
       thread?: number;
       /** Start this conversation as a coordinator (front persona). */
       coordinator?: boolean;
+      /** Coordinator only: the profile it runs on (coordinator-profiles.ts). Absent: the configured default. */
+      profile?: string;
+      /** Worker only: 'chief-of-staff' starts the coordinator's chief of staff from its profile. */
+      workerRole?: string;
       /**
        * Create it already archived, so it never appears in the sidebar. For
        * verification fixtures: a coordinator is a project as soon as its row
@@ -213,6 +220,42 @@ export function registerUnifiedConversationLifecycleRoutes(
         );
       }
     }
+    if (body.profile !== undefined && !body.coordinator) {
+      throw new LatticeError('INVALID_REQUEST', 'profile is chosen when a coordinator is created: pass it with coordinator', 400);
+    }
+    const profileSettings = coordinatorProfileSettings();
+    const resolvedProfile = body.coordinator ? profileForNewCoordinator(body.profile, profileSettings) : null;
+    if (resolvedProfile && 'error' in resolvedProfile) throw new LatticeError('INVALID_REQUEST', resolvedProfile.error, 400);
+    // The chief of staff comes from the coordinator's own profile, and there
+    // is one per project, so a second consult reaches the same session.
+    let roleDefaults: ProfileModel | null = null;
+    if (body.workerRole !== undefined) {
+      if (body.workerRole !== 'chief-of-staff') {
+        throw new LatticeError('INVALID_REQUEST', `workerRole must be "chief-of-staff", got "${body.workerRole}"`, 400);
+      }
+      if (!parentConversation) {
+        throw new LatticeError('INVALID_REQUEST', 'a chief of staff works for a coordinator: pass pickedUpFrom', 400);
+      }
+      const parentProfile = profileForRecorded(conversationService.getProfile(parentConversation.conversationId), profileSettings);
+      if (!parentProfile.profile.chiefOfStaff) {
+        throw new LatticeError('INVALID_REQUEST', `${parentConversation.conversationId} is on the "${parentProfile.name}" profile, which has no chief of staff`, 400);
+      }
+      const existing = conversationService.findWorkerWithRole(parentConversation.conversationId, 'chief-of-staff');
+      if (existing) {
+        res.status(409).json({ error: `${parentConversation.conversationId} already has a chief of staff: ${existing}`, code: 'CHIEF_OF_STAFF_EXISTS', conversationId: existing });
+        return;
+      }
+      roleDefaults = parentProfile.profile.chiefOfStaff;
+    }
+    // A profile's front model applies when the caller pins neither a provider nor a model.
+    if (resolvedProfile && !('error' in resolvedProfile) && resolvedProfile.profile.front && !body.provider && !body.model) {
+      roleDefaults = resolvedProfile.profile.front;
+    }
+    if (roleDefaults && !body.provider && !body.model) {
+      body.provider = roleDefaults.provider as Provider;
+      body.model = roleDefaults.model;
+      body.reasoningEffort ??= roleDefaults.effort;
+    }
     if (parentConversation) {
       body.workingDirectory ||= parentConversation.workingDirectory;
       body.workspace ||= parentConversation.workspace;
@@ -241,12 +284,16 @@ export function registerUnifiedConversationLifecycleRoutes(
     if (supersededCreate) throw new LatticeError('SUPERSEDED_MODEL', supersededCreate, 400);
     // New conversation, so a creation default is the right fallback — there is
     // no earlier choice for it to overwrite (codex-effort.ts).
+    // Claude takes `--effort`, recorded on the segment so every later spawn
+    // of the conversation runs at it (harness/setup.ts). Other providers have none.
+    const effortRefusal = provider !== 'codex' ? effortProblem(provider, body.reasoningEffort) : null;
+    if (effortRefusal) throw new LatticeError('INVALID_REQUEST', effortRefusal, 400);
     const reasoningEffort = provider === 'codex'
       ? resolveCodexReasoningEffort({
           requested: body.reasoningEffort,
           fallback: coordinatorDefaults?.reasoningEffort,
         }).effort
-      : undefined;
+      : provider === 'claude' ? body.reasoningEffort : undefined;
     if (body.serviceTier !== undefined && body.serviceTier !== 'fast') {
       throw new LatticeError('INVALID_REQUEST', `serviceTier must be "fast", got "${body.serviceTier}"`, 400);
     }
@@ -267,10 +314,10 @@ export function registerUnifiedConversationLifecycleRoutes(
       throw new LatticeError('INVALID_REQUEST', parsedPastes.error, 400);
     }
     const pastes = parsedPastes.spans;
-    if (provider !== 'claude' && provider !== 'codex' && provider !== 'opencode') {
+    if (provider !== 'claude' && provider !== 'codex' && provider !== 'opencode' && provider !== 'antigravity') {
       res.status(400).json({
         error: 'unsupported_provider',
-        supportedProviders: ['claude', 'codex', 'opencode'],
+        supportedProviders: ['claude', 'codex', 'opencode', 'antigravity'],
       });
       return;
     }
@@ -297,6 +344,8 @@ export function registerUnifiedConversationLifecycleRoutes(
       ? CODEX_PERMISSION_MODE
       : provider === 'opencode'
         ? OPENCODE_PERMISSION_MODE
+        : provider === 'antigravity'
+          ? 'antigravity-managed'
         : requestedMode || workerDefault || serverConfig.defaultPermissionMode || 'bypassPermissions';
 
     logger.info('[CONV] Creating new conversation', {
@@ -326,6 +375,8 @@ export function registerUnifiedConversationLifecycleRoutes(
         initialPrompt: message,
         pickedUpFrom: parentConversation?.conversationId,
         coordinator: Boolean(body.coordinator),
+        profile: resolvedProfile && !('error' in resolvedProfile) ? resolvedProfile.name : undefined,
+        workerRole: body.workerRole,
         archived,
       });
 
@@ -347,9 +398,13 @@ export function registerUnifiedConversationLifecycleRoutes(
               cli: latticeCli(),
               thread: threadAssignment ? { seq: threadAssignment.seq, text: threadAssignment.text } : null,
               readsImages,
+              chiefOfStaff: body.workerRole === 'chief-of-staff',
             }) + message
           : body.coordinator
-            ? buildCoordinatorPreamble({ conversationId, workingDirectory, cli: latticeCli(), installedProviders: installedProviders(), claudeEndpointModels: claudeEndpointModels(), readsImages }) + message
+            ? buildCoordinatorPreamble({
+                conversationId, workingDirectory, cli: latticeCli(), installedProviders: installedProviders(), claudeEndpointModels: claudeEndpointModels(), readsImages,
+                ...(resolvedProfile && !('error' in resolvedProfile) ? { profile: resolvedProfile } : {}),
+              }) + message
             : buildSessionPreamble(latticeCli(), conversationId, readsImages) + (message ?? '');
 
         // Prime conversation metadata
@@ -401,6 +456,9 @@ export function registerUnifiedConversationLifecycleRoutes(
             } : {}),
             ...(provider === 'opencode' ? {
               model: model ?? DEFAULT_OPENCODE_MODEL_ID,
+            } : {}),
+            ...(provider === 'antigravity' ? {
+              model: model ?? DEFAULT_ANTIGRAVITY_MODEL_ID,
             } : {}),
             systemPrompt: body.systemPrompt,
             initialContent,
@@ -584,10 +642,11 @@ export function registerUnifiedConversationLifecycleRoutes(
 
     if (latestSegment.provider !== 'claude'
       && latestSegment.provider !== 'codex'
-      && latestSegment.provider !== 'opencode') {
+      && latestSegment.provider !== 'opencode'
+      && latestSegment.provider !== 'antigravity') {
       res.status(400).json({
         error: 'unsupported_provider',
-        supportedProviders: ['claude', 'codex', 'opencode'],
+        supportedProviders: ['claude', 'codex', 'opencode', 'antigravity'],
       });
       return;
     }
@@ -611,7 +670,7 @@ export function registerUnifiedConversationLifecycleRoutes(
       // gets. Never fatal — the message goes either way.
       let resumeOrientation = '';
       try {
-        resumeOrientation = buildProjectOrientation(conversationId, latticeCli())
+        resumeOrientation = buildProjectOrientation(conversationId, latticeCli(), { resumed: true })
           + buildWorkerDriftNote(conversationId, latticeCli());
       } catch (err) {
         logger.warn('[CONV] Project orientation skipped on resume', {
@@ -637,7 +696,7 @@ export function registerUnifiedConversationLifecycleRoutes(
             model: resumeModel,
             ...(knownResumeEffort ? { reasoningEffort: knownResumeEffort } : {}),
           } : {}),
-          ...(latestSegment.provider === 'opencode' ? {
+          ...(latestSegment.provider === 'opencode' || latestSegment.provider === 'antigravity' ? {
             model: resumeModel,
           } : {}),
           initialContent,
@@ -714,8 +773,8 @@ export function registerUnifiedConversationLifecycleRoutes(
   router.post('/:conversationId/switch', asyncHandler(async (req: RequestWithRequestId, res) => {
     const { conversationId } = req.params;
     const body = (req.body ?? {}) as { provider?: string; model?: string };
-    if (body.provider !== 'claude' && body.provider !== 'codex') {
-      throw new LatticeError('INVALID_REQUEST', 'provider must be claude or codex', 400);
+    if (body.provider !== 'claude' && body.provider !== 'codex' && body.provider !== 'antigravity') {
+      throw new LatticeError('INVALID_REQUEST', 'provider must be claude, codex or antigravity', 400);
     }
     if (typeof body.model !== 'string' || body.model.trim() === '') {
       throw new LatticeError('INVALID_REQUEST', 'model is required', 400);
@@ -734,6 +793,29 @@ export function registerUnifiedConversationLifecycleRoutes(
       claudeSpawn: () => {
         ensureHooksBeforeSpawn();
         return { permissionMode: claudePermissionMode };
+      },
+      // A failed switch away from Claude starts it again on its own transcript.
+      // Claude does not wait on an empty prompt, so it is told what happened.
+      claudeResumeConfig: (id, segment) => {
+        const resumeModel = resolveResumeModel({ provider: 'claude', storedModel: segment.model });
+        const permissionMode = resolveExistingConversationPermissionMode({
+          provider: 'claude',
+          storedMode: sessionInfoService.getSessionInfoSync(id)?.permission_mode || null,
+        });
+        ensureHooksBeforeSpawn();
+        return {
+          permissionMode,
+          config: {
+            prompt: `${SERVER_NOTE_PREFIX} A move of this conversation to another model did not complete, and you are running again where you left off. Nothing was lost and there is nothing to do: reply "Still here." and wait for the next message.]`,
+            cwd: conversation?.workingDirectory,
+            resume: segment.providerSessionId,
+            args: [
+              ...(resumeModel ? [`--model=${resumeModel}`] : []),
+              ...(permissionMode ? [`--permission-mode=${permissionMode}`] : []),
+            ],
+            extra: { sessionId: id, provider: 'claude', workspace: conversation?.workspace },
+          },
+        };
       },
       // What a lifecycle resume of the Codex segment would start, minus a
       // message: the thread is resumed and waits.
@@ -759,6 +841,9 @@ export function registerUnifiedConversationLifecycleRoutes(
     // rejects the Codex one the conversation was created with.
     if (result.status === 'switched' && result.to.provider === 'claude') {
       await sessionInfoService.updateSessionInfo(conversationId, { permission_mode: claudePermissionMode });
+    }
+    if (result.status === 'switched' && result.to.provider === 'antigravity') {
+      await sessionInfoService.updateSessionInfo(conversationId, { permission_mode: 'antigravity-managed' });
     }
     const httpStatus = result.status === 'refused'
       ? (result.code === 'not-found' ? 404 : result.code === 'unknown-model' || result.code === 'unsupported' || result.code === 'not-coordinator' ? 400 : 409)

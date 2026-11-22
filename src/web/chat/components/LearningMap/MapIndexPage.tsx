@@ -4,7 +4,7 @@
  * `createMap` upserts by name, so the field doubles as "go to the map called
  * X", which is how a session refers to a map anyway.
  */
-import { useCallback, useEffect, useState } from 'react';
+import { type JSX, useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { ArrowLeft, Loader2, Map as MapIcon, Plus } from 'lucide-react';
 import { createMap, listMaps, type KmMapSummary } from '../../services/api/km-api';

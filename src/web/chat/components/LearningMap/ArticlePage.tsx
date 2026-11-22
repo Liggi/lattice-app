@@ -22,7 +22,7 @@
  * to, and an edge is the question that took you there.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { type JSX, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, X } from 'lucide-react';

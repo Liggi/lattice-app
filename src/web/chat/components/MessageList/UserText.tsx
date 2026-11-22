@@ -1,4 +1,4 @@
-import React, { useLayoutEffect, useRef, useState } from 'react';
+import React, { type JSX, useLayoutEffect, useRef, useState } from 'react';
 import type { PastedSpan } from '@liggi/agent-ui-harness/protocol';
 import { AttachedText } from './AttachedText';
 

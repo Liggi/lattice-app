@@ -48,6 +48,8 @@ import { isFromLatticePage } from '@/middleware/trusted-origin.js';
 import { senderIdentities, sessionReferences } from '@/services/sessions/sender-identity.js';
 import {
   PROJECT_NOTE_KINDS,
+  STORY_MAX_WORDS,
+  storyWordCount,
   RECONCILE_DISPOSITIONS,
   THREAD_WAIT_KINDS,
   type ProjectNotedData,
@@ -776,6 +778,10 @@ export function registerUnifiedConversationQueryRoutes(
     // structured half, so neither needs text; everything else is the note.
     if (!text && kind !== 'close' && kind !== 'update' && kind !== 'unpark' && kind !== 'rank') {
       res.status(400).json({ error: 'text is required' });
+      return;
+    }
+    if (kind === 'story' && storyWordCount(text) > STORY_MAX_WORDS) {
+      res.status(400).json({ error: `the account of where the project stands is ${storyWordCount(text)} words; keep it to ${STORY_MAX_WORDS}: what it set out to do, what was learned on the way, where that leaves it, what is next` });
       return;
     }
     if (kind === 'outcome' && typeof body.name === 'string' && body.name.trim() && !normalizeProjectName(body.name)) {

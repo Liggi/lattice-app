@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { type JSX, useState } from 'react';
 import { Clipboard, FileText } from 'lucide-react';
 import { CollapsibleToolCard, tk } from '@liggi/agent-ui-toolkit';
 import { parseSavedTextFile, parseUploadedTextFile } from '@/constants/attached-text-file';

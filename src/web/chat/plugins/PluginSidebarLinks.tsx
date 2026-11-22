@@ -1,3 +1,4 @@
+import type { JSX } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { Puzzle } from 'lucide-react';
 import { ErrorBoundary } from '../components/ErrorBoundary';

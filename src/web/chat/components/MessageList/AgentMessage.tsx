@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { type JSX, useState } from 'react';
 import { ChevronDown } from 'lucide-react';
 import type { MessageAttribution } from '../../types/index.js';
 import { attributionLabel } from '../shared/message-attribution.js';

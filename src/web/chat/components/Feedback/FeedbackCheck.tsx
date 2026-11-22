@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { type JSX, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { ChevronRight, Loader2 } from 'lucide-react';
 import { api } from '../../services/api';
 import { ApiRequestError } from '../../services/api/core';

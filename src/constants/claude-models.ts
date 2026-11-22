@@ -47,10 +47,17 @@ export const CLAUDE_MODELS: ClaudeModelEntry[] = [
     supersededBy: 'claude-opus-5-5',
   },
   {
+    id: 'claude-fable-5-2',
+    label: 'Fable 5.2',
+    description: 'For your toughest challenges',
+    composerSelectable: true,
+  },
+  {
     id: 'claude-fable-5-1',
     label: 'Fable 5.1',
     description: 'For your toughest challenges',
     composerSelectable: true,
+    other: true,
   },
   {
     id: 'claude-fable-5',

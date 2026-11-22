@@ -15,6 +15,7 @@
  * and the step exists before the article at the end of it does.
  */
 
+import type { JSX } from 'react';
 import { Handle, Position, type Node, type NodeProps } from '@xyflow/react';
 import { Loader2 } from 'lucide-react';
 import type { MapNodeData } from './map-layout';

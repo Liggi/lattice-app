@@ -11,6 +11,7 @@ import {
   type CoordinatorSettings,
   type ProviderSignIn,
 } from '@/constants/coordinator-defaults.js';
+import type { ProfileSettings } from '@/constants/coordinator-profiles.js';
 import { ConfigService } from '@/services/infrastructure/config-service.js';
 import { getProviderAuthService } from '@/services/provider-auth-service.js';
 
@@ -51,4 +52,9 @@ export function coordinatorClaudeModel(): string | undefined {
 /** The coordinator's Codex model and effort. */
 export function coordinatorCodexDefaults(): CoordinatorCodexDefaults {
   return coordinatorCodexDefaultsFrom(settings());
+}
+
+/** The configured coordinator profiles and default, for coordinator-profiles.ts. */
+export function coordinatorProfileSettings(): ProfileSettings | undefined {
+  return settings() as ProfileSettings | undefined;
 }

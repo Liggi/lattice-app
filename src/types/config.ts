@@ -2,6 +2,8 @@
  * Configuration types for Lattice.
  */
 
+import type { CoordinatorProfile } from '../constants/coordinator-profiles.js';
+
 // ============================================================
 // Permission Modes - Single Source of Truth
 // ============================================================
@@ -118,6 +120,11 @@ export interface CoordinatorConfig {
    * tier mostly adds waiting. Worker routing is separate.
    */
   reasoningEffort?: string;
+  /**
+   * The profile a new coordinator starts on when the caller names none.
+   * Default: 'opus', today's setup. See coordinator-profiles.ts.
+   */
+  defaultProfile?: string;
 }
 
 export interface ClaudeEndpointConfig {
@@ -287,6 +294,16 @@ export interface LatticeConfig {
    * Other sessions keep the Claude sign-in.
    */
   claudeEndpoints?: ClaudeEndpointConfig[];
+  /**
+   * Antigravity (`agy`) sessions. With a Google Cloud project set, `agy` signs
+   * in with this machine's gcloud application-default login and bills that
+   * project per token; without one it uses its own saved sign-in.
+   */
+  antigravity?: { googleCloudProject?: string; googleCloudLocation?: string };
+  /** Path to a figure toolkit's guide. When set, agents that can read images draw pictures with it instead of `lattice frame`. */
+  figureGuide?: string;
+  /** One more step for the toolkit's picture guidance, added after its own, for something only this install has (a reviewer to show figures to first). */
+  figureGuideStep?: string;
 
   /**
    * TypeSafe (Jev) configuration: the coordinator router's judge.
@@ -302,6 +319,12 @@ export interface LatticeConfig {
    * Coordinator role settings.
    */
   coordinator?: CoordinatorConfig;
+
+  /**
+   * Named coordinator profiles beyond the built-in 'opus': which model fills
+   * each role and when each is used. See coordinator-profiles.ts.
+   */
+  coordinatorProfiles?: Record<string, CoordinatorProfile>;
 
   /**
    * How messages reach a session that is already in a turn.

@@ -14,8 +14,8 @@ export function useBlockBudget<T extends ReversedItemLike>(params: {
   hasMore: boolean;
   isLoadingMore: boolean;
   onLoadMore?: () => void;
-  topSentinelRef: RefObject<HTMLDivElement>;
-  scrollContainerRef: RefObject<HTMLDivElement>;
+  topSentinelRef: RefObject<HTMLDivElement | null>;
+  scrollContainerRef: RefObject<HTMLDivElement | null>;
   /** Hydration phase from the harness. The load-more sentinel is kept
    *  disarmed while the session is still hydrating so short last turns
    *  don't trigger a cascade of backfill pagination with staggered entry
@@ -131,6 +131,18 @@ export function useBlockBudget<T extends ReversedItemLike>(params: {
     [reversedItems.length, visibleCount]
   );
   const hasInternalMore = hasMore || truncatedOlderCount > 0;
+
+  // A last turn made only of tool calls collapses into one row, leaving an
+  // empty screen with nothing to scroll and no way up. Once caught up, a
+  // view that does not fill the screen loads older history until it does.
+  useEffect(() => {
+    if (hasUserScrolled || !hasInternalMore || hydrationPhase === 'hydrating') return;
+    const frame = requestAnimationFrame(() => {
+      const container = scrollContainerRef.current;
+      if (container && container.scrollHeight <= container.clientHeight) setHasUserScrolled(true);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [hasUserScrolled, hasInternalMore, hydrationPhase, visibleCount, scrollContainerRef]);
 
   useEffect(() => {
     if (!topSentinelRef.current || isLoadingMore) return;

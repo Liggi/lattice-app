@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { type JSX, useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Gauge, Loader2 } from 'lucide-react';
 import type { ContextCompactionData, TurnUsage } from '@liggi/agent-ui-harness/protocol';

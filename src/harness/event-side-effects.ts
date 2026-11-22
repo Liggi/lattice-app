@@ -17,6 +17,7 @@
  * - turn:end → compact the session if its context is over the threshold
  * - turn:end / run:end / run:error → drain the session's inbox into its next turn
  * - turn:end → keep the conversation's hand-off record current
+ * - turn:end → notify the user's devices that a turn ended on a reply for them
  * - run:end / run:error → push session-idle + flush the hand-off record
  * - run:ready / input:sent / task:notification → wake a session put to sleep by
  *   hand, before the session-started push so the sidebar's refetch sees it awake
@@ -41,6 +42,7 @@ import { settleHeldDeliveries } from '../services/sessions/held-delivery-settlem
 import { maybeAutoCompact } from '../services/sessions/context-compaction.js';
 import { noteStatusChanged } from '../services/sessions/session-status-changes.js';
 import { getHarnessSessionManager } from './setup.js';
+import { NotificationService } from '../services/notification-service.js';
 import { SessionInfoService } from '../services/sessions/session-info-service.js';
 import type { ActiveConversationRegistry } from '../services/process/active-conversation-registry.js';
 
@@ -93,6 +95,7 @@ export function createEventSideEffectsCallback(
           registry.notifyActive(event.sessionId);
         } else {
           registry.notifyIdle(event.sessionId);
+          void NotificationService.getInstance().notifyTurnFinished(event.sessionId);
         }
         void InsightsEngine.getInstance().onTurnEnd(event.sessionId);
         void deliverWorkerReport(event.sessionId);

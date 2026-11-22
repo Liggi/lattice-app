@@ -3,7 +3,7 @@
  * linking to Settings → Providers. Nothing is shown when it is signed in.
  */
 
-import React from 'react';
+import React, { type JSX } from 'react';
 import type { ProviderSignIn, ProviderSignInStatus as Status } from '../../hooks/useProviderSignIn';
 
 const LABELS = { claude: 'Claude', codex: 'Codex' } as const;

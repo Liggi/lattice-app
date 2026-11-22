@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import type Database from 'better-sqlite3';
 import { createLogger, type Logger } from '../infrastructure/logger.js';
 import { DatabaseProvider } from '../infrastructure/database-provider.js';
+import { isQuietTurnMarker } from '../../constants/quiet-turn.js';
 import { anthropicService } from '../insights/anthropic-service.js';
 import { SessionInfoService } from '../sessions/session-info-service.js';
 import { resolveCanonicalId } from '../sessions/resolve-canonical-id.js';
@@ -447,7 +448,8 @@ export class InsightsEngine {
         }
       }
     }
-    return { assistantTexts: assistantTexts.map((t) => t.trim()).filter(Boolean), todoState, contentCount };
+    // A coordinator's quiet-turn marker is not something it said.
+    return { assistantTexts: assistantTexts.map((t) => t.trim()).filter((t) => t && !isQuietTurnMarker(t)), todoState, contentCount };
   }
 
   /** Read conversation content from harness events, for insight generation. */
@@ -1073,6 +1075,18 @@ export class InsightsEngine {
 
             await this.cacheInsights(sessionId, insights);
             computed++;
+
+            // A new session is usually named here, by the sidebar's backfill,
+            // before its first turn ends; onTurnEnd then has nothing new to
+            // compute, so without this event the open sidebar never shows it.
+            if (insights.context) {
+              try {
+                const { getSessionActivityWatcher } = await import('../sessions/session-activity-watcher.js');
+                await getSessionActivityWatcher().emitInsightsUpdate(sessionId, 'generated', traceId);
+              } catch {
+                this.logger.debug('Failed to emit SSE for insights', { sessionId: sessionId.slice(0, 8) });
+              }
+            }
 
             // Build after state and determine what changed
             const afterState = buildStateSnapshot(null, insights);

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, { type JSX, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { ArrowUp, Check, CornerDownLeft, Maximize2, MessageCircleQuestion, Minimize2, X } from 'lucide-react';
 import { ConversationView } from '../ConversationView/ConversationView';

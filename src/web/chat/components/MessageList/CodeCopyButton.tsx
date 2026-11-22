@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { type JSX, useEffect, useRef, useState } from 'react';
 import { Check, Copy, X } from 'lucide-react';
 import { cn } from '@/web/chat/lib/utils';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/web/chat/components/ui/tooltip';
@@ -20,7 +20,7 @@ const LABEL: Record<CopyState, string> = {
  */
 export function CodeCopyButton({ text, className }: { text: string; className?: string }): JSX.Element {
   const [state, setState] = useState<CopyState>('idle');
-  const timer = useRef<ReturnType<typeof setTimeout>>();
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   useEffect(() => () => clearTimeout(timer.current), []);
 
   const handleClick = (e: React.MouseEvent) => {

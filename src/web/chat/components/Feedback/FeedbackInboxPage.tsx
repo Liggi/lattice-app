@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { type JSX, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { AlertTriangle, Bot, Check, Loader2, PanelLeft, RefreshCw, ShieldAlert } from 'lucide-react';

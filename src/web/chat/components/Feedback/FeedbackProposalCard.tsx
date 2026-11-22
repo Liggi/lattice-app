@@ -1,5 +1,5 @@
 /* oxlint-disable react-doctor/no-cascading-set-state */
-import { useState, type ReactNode } from 'react';
+import { type JSX, useState, type ReactNode } from 'react';
 import { AlertTriangle, CheckCircle2, Loader2, MessageSquare, X } from 'lucide-react';
 import { api } from '../../services/api';
 import { useFeedbackProposal, useInvalidateFeedback } from '../../hooks/useFeedback';

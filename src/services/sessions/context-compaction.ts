@@ -29,6 +29,8 @@ import type { RawEvent } from '../../session-history/types.js';
 import { contextTokensNewestFirst, type UsageEventLike } from '../../session-history/context-tokens.js';
 import { ConversationService } from './conversation-service.js';
 import { buildCoordinatorPreamble, buildSessionPreamble, buildWorkerPreamble, latticeCli } from './pickup-prompts.js';
+import { profileForRecorded } from '../../constants/coordinator-profiles.js';
+import { coordinatorProfileSettings } from './coordinator-defaults.js';
 import { claudeEndpointModels, installedProviders, sessionReadsImages } from './installed-providers.js';
 import { tryAdmitTurn } from './turn-admission.js';
 import { unfinishedSwitch } from './coordinator-switch-state.js';
@@ -215,6 +217,7 @@ function buildCoordinatorRestoreBlock(
   const preamble = buildCoordinatorPreamble({
     conversationId, workingDirectory, cli, installedProviders: installedProviders(), claudeEndpointModels: claudeEndpointModels(),
     readsImages: sessionReadsImages(ConversationService.getInstance().getLatestSegment(conversationId)?.model),
+    profile: profileForRecorded(ConversationService.getInstance().getProfile(conversationId), coordinatorProfileSettings()),
   });
   const roster = renderWorkerRoster(events, cli);
 
@@ -271,6 +274,7 @@ function buildWorkerRestoreBlock(conversationId: string, conversation: {
       cli,
       thread: thread ? { seq: thread.seq, text: thread.text } : null,
       readsImages: sessionReadsImages(ConversationService.getInstance().getLatestSegment(conversationId)?.model),
+      chiefOfStaff: ConversationService.getInstance().getWorkerRole(conversationId) === 'chief-of-staff',
     }).replace(/\n+---\s*$/, '').trimEnd(),
     '',
     card ? `What front dispatched you to do: ${card.task}` : 'Front\'s record of your dispatch is not in its log.',

@@ -1,6 +1,6 @@
 {
   "name": "@liggi/agent-ui-harness",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "description": "Manages the lifecycle of an interactive CLI agent process connected to a browser UI",
   "license": "MIT",
   "type": "module",
@@ -33,10 +33,10 @@
     "@testing-library/dom": "^10.4.1",
     "@testing-library/react": "^16.3.2",
     "@types/node": "^22.20.4",
-    "@types/react": "^18.2.66",
+    "@types/react": "^19.3.0",
     "fast-check": "^3.23.2",
     "jsdom": "^29.0.1",
-    "react": "^18.2.0",
+    "react": "^19.3.1",
     "typescript": "^5.9.3",
     "vitest": "^4.1.11"
   },

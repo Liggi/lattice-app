@@ -87,7 +87,7 @@ export const SESSION_VERBS: VerbSpec[] = [
     flags: [
       { name: 'model', kind: 'string', value: 'ID', desc: 'Model id, e.g. claude-opus-5-5.' },
       { name: 'provider', kind: 'string', value: 'P', desc: 'claude (default) or codex.' },
-      { name: 'reasoning-effort', kind: 'string', value: 'E', desc: 'Codex only: minimal | low | medium | high | xhigh. Without it the session takes the configured default.' },
+      { name: 'reasoning-effort', kind: 'string', value: 'E', desc: 'Codex: minimal | low | medium | high | xhigh; Claude: low | medium | high | xhigh | max (its --effort). Without it the session takes the configured default.' },
       { name: 'fast', kind: 'boolean', desc: 'Codex only: run every turn on Codex\'s Fast tier (about 1.5x speed, more usage). Models Codex does not list with a Fast tier run at normal speed.' },
 
       { name: 'cwd', kind: 'string', value: 'DIR', desc: 'Working directory (default: $PWD, or the --from parent\'s).' },
@@ -95,6 +95,7 @@ export const SESSION_VERBS: VerbSpec[] = [
       { name: 'task', kind: 'string', value: 'TEXT', desc: 'With --from: one line saying what the worker is to find out or do (shown on its card).' },
       { name: 'thread', kind: 'int', value: 'ID', desc: 'With --from: the coordinator\'s open thread this worker is being put on (the id `session state` shows).' },
       { name: 'coordinator', kind: 'boolean', desc: 'Start as a coordinator: a new project that reports to nobody, so not with --from (front persona; on --provider, else the provider of --model, else the configured coordinator provider).' },
+      { name: 'profile', kind: 'string', value: 'NAME', desc: 'With --coordinator: the profile it runs on, which sets front\'s model, its worker routing and any chief of staff (default: coordinator.defaultProfile, else "opus").' },
       { name: 'archived', kind: 'boolean', desc: 'Create it already archived, so it never appears in the sidebar. For verification fixtures.' },
       { name: 'prompt-file', kind: 'string', value: 'PATH', desc: 'Read the prompt from a file.' },
       { name: 'prompt', kind: 'string', value: 'TEXT', desc: 'Prompt text.' },
@@ -108,8 +109,9 @@ export const SESSION_VERBS: VerbSpec[] = [
     notes: [
       'Prompt source precedence: --prompt-file, then --prompt, then --message,\n' +
         '  then the trailing positional text.',
-      '--reasoning-effort reaches Codex sessions only and sets the effort a Codex\n' +
-        '  model runs at; a Claude session ignores it.',
+      '--reasoning-effort sets the effort a Codex model runs at, or a Claude\n' +
+        '  session\'s --effort, which it keeps on every resume. Antigravity models carry\n' +
+        '  their thinking level in the model id instead.',
 
       'With --from, the new session inherits the parent\'s cwd and workspace unless\n' +
         '  --cwd/--workspace are given, gets a worker preamble ahead of the prompt, and\n' +
@@ -119,6 +121,25 @@ export const SESSION_VERBS: VerbSpec[] = [
         '  moment its row exists, so archiving it after the fact still shows it to them.\n' +
         '  A session created with --from a fixture is created hidden in the same way.',
       'Needs the server running, as does send. Read commands use SQLite directly.',
+    ],
+  },
+  {
+    name: 'consult',
+    summary: 'Coordinator only: ask your chief of staff, starting it the first time.',
+    positionals: [{ name: 'message', rest: true }],
+    flags: [
+      { name: 'from', kind: 'string', value: 'CONV', desc: 'Your own conversation id: the coordinator whose chief of staff to ask.' },
+      { name: 'message', kind: 'string', value: 'TEXT', desc: 'What to ask.' },
+      { name: 'message-file', kind: 'string', value: 'PATH', desc: 'Read what to ask from a file.' },
+      { name: 'summary', kind: 'string', value: 'TEXT', desc: 'One line, the substance of the question, for your thread.' },
+      { name: 'host', kind: 'string', value: 'H', desc: 'Server host (default: from config).' },
+      { name: 'port', kind: 'int', value: 'N', desc: 'Server port (default: from config).' },
+      JSON_FLAG,
+    ],
+    notes: [
+      'Only a coordinator whose profile has a chief of staff can consult one. The first consult starts\n' +
+        '  it on the profile\'s model, as a worker of yours with its own card; later ones go to the same\n' +
+        '  session. Its reply arrives as a report, like any worker\'s.',
     ],
   },
   {
@@ -295,6 +316,7 @@ export const SESSION_VERBS: VerbSpec[] = [
       { name: 'by-user', kind: 'boolean', desc: 'With --decide: the decision was the user\'s, not yours.' },
       { name: 'replaces', kind: 'string', value: 'SEQS', desc: 'With --decide: the decision seqs this one supersedes; they stop binding and stay in history.' },
       { name: 'retire', kind: 'string', value: 'SEQS', desc: 'Withdraw decisions by seq with nothing in their place; needs --with "<why>".' },
+      { name: 'story', kind: 'string', value: 'TEXT', desc: 'Where the project stands, at most 120 words, as four short lines: "Aim: …", "Learned: …", "Now: …", "Next: …". Replaces the previous one whole.' },
       { name: 'priority', kind: 'string', value: 'TEXT', desc: 'The remaining work this project is on now; survives the turn, a compaction and a resume (--thread binds it to one).' },
       { name: 'open', kind: 'string', value: 'TEXT', desc: 'Open a thread: one line saying what piece of work it is for.' },
       { name: 'thread', kind: 'int', value: 'ID', desc: 'Update an existing thread by the id `state` shows, keeping its text and id.' },

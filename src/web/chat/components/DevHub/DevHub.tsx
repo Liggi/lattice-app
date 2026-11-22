@@ -1,5 +1,5 @@
 /* oxlint-disable react-doctor/no-cascading-set-state, react-doctor/no-giant-component, react-doctor/prefer-useReducer, react-doctor/no-render-in-render, react-doctor/no-effect-event-handler */
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { type JSX, useState, useEffect, useRef, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Beaker,
@@ -37,9 +37,6 @@ const PROTOTYPES = [
 
   // Feb 10, 2026 - New Session UI exploration
   { path: '/prototype/new-session-variants', name: 'New Session Variants', category: 'ui', created: '2026-02-10' },
-
-  // Feb 9, 2026 - Action Queue (unified dev notes + recommendations)
-  { path: '/prototype/action-queue', name: 'Action Queue', category: 'ui', created: '2026-02-09' },
 
   // Feb 7, 2026
   { path: '/prototype/ask-question-variants', name: 'Ask Question Variants', category: 'ui', created: '2026-02-07' },

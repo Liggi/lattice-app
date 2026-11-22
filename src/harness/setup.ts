@@ -12,6 +12,8 @@ import type { ActiveSession } from '../process-daemon/types.js';
 import { CodexProcessAdapter } from './codex-process-adapter.js';
 import { OpencodeProcessAdapter } from './opencode-process-adapter.js';
 import { MultiplexingProcessAdapter } from './multiplexing-process-adapter.js';
+import { AntigravityProcessAdapter } from './antigravity-process-adapter.js';
+import { ConfigService } from '../services/infrastructure/config-service.js';
 import { appendCustomHarnessEvent } from './harness-custom-events.js';
 import { createHarnessRoutes } from './routes.js';
 import { createEventSideEffectsCallback } from './event-side-effects.js';
@@ -78,7 +80,13 @@ export function setupHarness(deps: HarnessSetupDeps): HarnessRuntime {
   const isCoordinator = (conversationId: string) => (
     ConversationService.getInstance().getConversation(conversationId)?.coordinator === true
   );
-  const claudeAdapter = new DaemonProcessAdapter(deps.processManagerClient, isCoordinator);
+  // The effort a Claude conversation was created at, on its latest segment,
+  // so every spawn of it (resume, compaction, a send to an idle session) keeps it.
+  const claudeEffort = (conversationId: string) => {
+    const segment = ConversationService.getInstance().getLatestSegment(conversationId);
+    return segment?.provider === 'claude' ? segment.reasoningEffort ?? undefined : undefined;
+  };
+  const claudeAdapter = new DaemonProcessAdapter(deps.processManagerClient, isCoordinator, claudeEffort);
   const codexRequestCoordinator = deps.pendingQuestionService
     ? new CodexRequestCoordinator(deps.pendingQuestionService)
     : undefined;
@@ -122,6 +130,7 @@ export function setupHarness(deps: HarnessSetupDeps): HarnessRuntime {
     claudeAdapter,
     codexAdapter,
     opencodeAdapter,
+    new AntigravityProcessAdapter(() => ConfigService.getInstance().getConfig().antigravity),
   );
 
   // Persistent event storage — events survive restarts and in-memory eviction

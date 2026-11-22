@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useMemo, useEffect, useState, useCallback, useRef } from 'react';
+import React, { type JSX, createContext, useContext, useMemo, useEffect, useState, useCallback, useRef } from 'react';
 import { api } from '../services/api';
 import { useActivityStreamSubscription } from './ActivityStreamContext';
 

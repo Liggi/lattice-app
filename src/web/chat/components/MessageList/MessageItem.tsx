@@ -1,6 +1,6 @@
 /* oxlint-disable react-doctor/no-cascading-set-state, react-doctor/no-giant-component, react-doctor/prefer-useReducer, react-doctor/no-render-in-render, react-doctor/no-effect-event-handler, react-doctor/no-array-index-as-key */
 import { NoteMarkdown } from '../LearningMap/article/ArticleMarkdown';
-import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react';
+import React, { type JSX, useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import { SkillHeading } from './SkillHeading';
 import { Code, Lightbulb, AlertTriangle, Copy, Check, FileText, Image, Loader2, ExternalLink, FlaskConical, LayoutDashboard, MessageCircle, Wrench, Brain } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
@@ -264,7 +264,7 @@ interface MarkdownComponentProps {
  * there, Chrome ends a drag that runs just below the last line in the next
  * block instead, and a selection across two blocks cannot take a note.
  */
-function useSelectingInMessage(rowRef: React.RefObject<HTMLElement>): boolean {
+function useSelectingInMessage(rowRef: React.RefObject<HTMLElement | null>): boolean {
   const [selecting, setSelecting] = useState(false);
   useEffect(() => {
     const row = rowRef.current;
@@ -569,6 +569,8 @@ export const markdownComponents: Record<string, React.ComponentType<MarkdownComp
     );
   },
   code({ node: _node, inline, className, children, ...props }: MarkdownComponentProps) {
+    // eslint-disable-next-line react-hooks/rules-of-hooks -- react-markdown renders these as components
+    const imageVersion = React.useContext(ImageVersionContext);
     const match = /language-(\w+)/.exec(className || '');
     const language = match ? match[1] : 'text';
 
@@ -576,7 +578,7 @@ export const markdownComponents: Record<string, React.ComponentType<MarkdownComp
       return <DiagramBlock source={String(children)} />;
     }
     if (!inline && className?.includes('language-lattice-gallery')) {
-      return <GalleryBlock source={String(children)} imageUrl={localImageUrl} />;
+      return <GalleryBlock source={String(children)} imageUrl={(p) => localImageUrl(p, imageVersion)} />;
     }
 
     // Block code with a language fence → syntax highlighting
@@ -608,31 +610,48 @@ export const markdownComponents: Record<string, React.ComponentType<MarkdownComp
     );
   },
   img({ src, alt }: MarkdownComponentProps & { src?: string; alt?: string }) {
-    const url = localImageUrl(src);
+    // eslint-disable-next-line react-hooks/rules-of-hooks -- react-markdown renders these as components
+    const url = localImageUrl(src, React.useContext(ImageVersionContext));
     return (
       <ViewableImage src={url} alt={alt ?? ''} className="not-prose inline-block my-1 max-w-full cursor-zoom-in">
-        <img
-          src={url}
-          alt={alt ?? ''}
-          loading="lazy"
-          className="block max-w-full h-auto max-h-[70vh] rounded-md border border-line"
-        />
+        <picture>
+          {url?.startsWith('/api/images?') && /\.png$/i.test(src ?? '') && (
+            <source media="(max-width: 639px)" srcSet={`${url}&variant=phone`} />
+          )}
+          <img
+            src={url}
+            alt={alt ?? ''}
+            loading="lazy"
+            className="block max-w-full h-auto max-h-[70vh] rounded-md border border-line"
+          />
+        </picture>
       </ViewableImage>
     );
   }
 };
 
 /**
+ * On a narrow screen a PNG is asked for with variant=phone: the image route then
+ * serves figkit's stacked phone layout of the figure when one sits beside it, and
+ * the file itself otherwise.
+ *
  * An agent embeds a screenshot as `![alt](/tmp/shot.png)`: an absolute path on
  * the Lattice host. Point it at the server's image route so it renders from any
  * browser, including a phone. URLs and relative paths are left alone.
  */
-export function localImageUrl(src: string | undefined): string | undefined {
+export function localImageUrl(src: string | undefined, version?: string): string | undefined {
   if (!src || !src.startsWith('/') || src.startsWith('//') || src.startsWith('/api/')) return src;
   let decoded = src;
   try { decoded = decodeURI(src); } catch { /* keep as written */ }
-  return `/api/images?path=${encodeURIComponent(decoded)}`;
+  return `/api/images?path=${encodeURIComponent(decoded)}${version ? `&v=${encodeURIComponent(version)}` : ''}`;
 }
+
+/**
+ * The message an image is shown in. Agents often overwrite the same file for each
+ * round of screenshots, and a browser reuses the image it already holds for a URL
+ * without asking again, so each message asks for its images under its own URL.
+ */
+export const ImageVersionContext = React.createContext<string | undefined>(undefined);
 
 
 export function MessageItem({
@@ -776,7 +795,9 @@ export function MessageItem({
       if (typeof message.content === 'string') {
         return (
           <div>
-            <ContentWithInsights text={message.content} markdownComponents={markdownComponents} />
+            <ImageVersionContext.Provider value={message.messageId}>
+              <ContentWithInsights text={message.content} markdownComponents={markdownComponents} />
+            </ImageVersionContext.Provider>
           </div>
         );
       }
@@ -815,7 +836,9 @@ export function MessageItem({
             if (!displayText) return; // Skip empty blocks after stripping
             elements.push(
               <div key={blockId}>
-                <ContentWithInsights text={displayText} markdownComponents={markdownComponents} />
+                <ImageVersionContext.Provider value={message.messageId}>
+                  <ContentWithInsights text={displayText} markdownComponents={markdownComponents} />
+                </ImageVersionContext.Provider>
               </div>
             );
             return;

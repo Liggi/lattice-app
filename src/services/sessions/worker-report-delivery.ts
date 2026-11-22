@@ -181,6 +181,11 @@ function lastTurnEvents(conversationId: string): RawEvent[] {
   return getEvents(conversationId);
 }
 
+/** The reply the conversation's latest turn ended on, or null when it ended without one. */
+export function readLastTurnReply(conversationId: string): string | null {
+  return readLastTurn(lastTurnEvents(conversationId)).reply;
+}
+
 /** Called from the turn:end side effect for every conversation; a no-op unless it has a parent. Never rejects. */
 export async function deliverWorkerReport(workerConversationId: string): Promise<void> {
   try {

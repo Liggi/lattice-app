@@ -40,6 +40,20 @@ function isInside(file: string, root: string): boolean {
  * path renders in the UI. Only PNG/JPEG/GIF/WebP files under a temp directory
  * or a Lattice session's working directory are served.
  */
+/**
+ * figkit draws a second, stacked layout of a figure whose sides sit next to each
+ * other, as `name.phone.png` beside `name.png`, and writes it after the figure.
+ * A phone asks for it with variant=phone; any figure without one, or with one
+ * older than the figure, is served as it is.
+ */
+async function phoneLayout(desktop: string, isAllowed: (f: string) => Promise<boolean>): Promise<string> {
+  if (!/\.png$/i.test(desktop)) return desktop;
+  const phone = await realpathOrNull(desktop.replace(/\.png$/i, '.phone.png'));
+  if (!phone || !(await isAllowed(phone))) return desktop;
+  const [d, p] = await Promise.all([fs.stat(desktop), fs.stat(phone)]);
+  return p.isFile() && p.mtimeMs >= d.mtimeMs ? phone : desktop;
+}
+
 export function createImageRoutes(deps: ImageRoutesDeps): Router {
   const router = Router();
   let workingDirs: { roots: string[]; at: number } | null = null;
@@ -64,16 +78,17 @@ export function createImageRoutes(deps: ImageRoutesDeps): Router {
     if (!type) {
       throw new LatticeError('NOT_AN_IMAGE', 'Only .png, .jpg, .jpeg, .gif and .webp files are served', 415);
     }
-    const file = await realpathOrNull(requested);
-    if (!file) throw new LatticeError('NOT_FOUND', 'Image not found', 404);
+    const desktop = await realpathOrNull(requested);
+    if (!desktop) throw new LatticeError('NOT_FOUND', 'Image not found', 404);
 
     const tempRoots = (await Promise.all(['/tmp', os.tmpdir()].map(realpathOrNull))).filter((d): d is string => d !== null);
-    const allowed = tempRoots.some((r) => isInside(file, r))
-      || (await sessionRoots(false)).some((r) => isInside(file, r))
-      || (await sessionRoots(true)).some((r) => isInside(file, r));
-    if (!allowed) {
+    const isAllowed = async (f: string) => tempRoots.some((r) => isInside(f, r))
+      || (await sessionRoots(false)).some((r) => isInside(f, r))
+      || (await sessionRoots(true)).some((r) => isInside(f, r));
+    if (!(await isAllowed(desktop))) {
       throw new LatticeError('PATH_NOT_ALLOWED', 'Images are served only from a temp directory or a session working directory', 403);
     }
+    const file = req.query.variant === 'phone' ? await phoneLayout(desktop, isAllowed) : desktop;
 
     const handle = await fs.open(file, 'r');
     try {

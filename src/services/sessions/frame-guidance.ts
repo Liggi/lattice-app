@@ -1,3 +1,5 @@
+import { ConfigService } from '@/services/infrastructure/config-service.js';
+
 /**
  * How an agent draws a picture in a Lattice reply: when to draw at all, what
  * makes a good frame, and the render-and-look step (`lattice frame`). A frame
@@ -10,13 +12,21 @@
  * A session whose model cannot read images is never told to open the PNGs:
  * one on a custom endpoint did (2026-10-23), and every later turn failed
  * because the transcript now held an image its model rejects.
+ *
+ * An install can set `figureGuide` in its config to use a figure toolkit of its
+ * own instead, and `figureGuideStep` to add one step of its own to that guidance.
+ * Sessions that cannot read images keep the SVG route, whose checks work from
+ * the source.
  */
-export function frameGuidance(cli: string, readsImages = true): string[] {
+export function frameGuidance(
+  cli: string,
+  readsImages = true,
+  figureGuide = configured('figureGuide'),
+  figureGuideStep = configured('figureGuideStep'),
+): string[] {
+  if (figureGuide && readsImages) return toolkitGuidance(figureGuide, figureGuideStep);
   return [
-    'Pictures',
-    '- Draw a picture only when position carries meaning: parts of a system and what flows between them, a chart whose',
-    '  shape is the point, what lives inside what, a rough sketch of a screen, a branching decision. Steps, timelines,',
-    '  comparisons and yes/no grids are markdown lists and tables, which the chat renders well. Never draw ASCII art.',
+    ...whenToDraw(),
     '- A picture is a frame: one still, like a frame from an explainer video. Write it as an SVG 1920 wide and 1080 tall',
     `  (\`viewBox="0 0 1920 1080" width="1920" height="1080"\`), render it with \`${cli} frame <file.svg>\`, and embed the PNG`,
     '  it prints as `![what it shows](/path/to/frame.png)`. Readers tap it to open it full screen and zoom. Keep the',
@@ -46,6 +56,46 @@ export function frameGuidance(cli: string, readsImages = true): string[] {
     '  </svg>',
     '  ```',
     ...(readsImages ? lookStep(cli) : sourceCheckStep(cli)),
+  ];
+}
+
+/**
+ * When to draw, shared by both routes. Questions about structure are named as a
+ * trigger because past sessions (Apr to Nov 2026) answered them with numbered
+ * steps or prose, and a picture came only after the user asked for one; small
+ * flat figures with one point landed, nested maps did not.
+ */
+function whenToDraw(): string[] {
+  return [
+    'Pictures',
+    '- Draw a picture only when position carries meaning: parts of a system and what flows between them, what lives',
+    '  inside what and which thing points at which, a chart whose shape is the point, a rough sketch of a screen, a',
+    '  branching decision, a before and after.',
+    '- Questions like "what are the entities?", "where does X live?", "how do these relate?", "what loads what?" or',
+    '  "walk me through it" are about structure: answer them with a picture first, not numbered steps. Each figure',
+    '  has at most 5 boxes and no box drawn inside another; more than that is two or three figures in a row (what',
+    '  exists, one case through it, what changes), not one map. Under each figure, write only what it cannot show',
+    '  (why, the exceptions, what to do); never retell it as steps.',
+    '- Steps with no shape, timelines, comparisons and yes/no grids are markdown lists and tables, which the chat renders',
+    '  well. Never draw ASCII art.',
+  ];
+}
+
+function configured(key: 'figureGuide' | 'figureGuideStep'): string | undefined {
+  try {
+    return ConfigService.getInstance().getConfig()[key];
+  } catch {
+    return undefined;
+  }
+}
+
+function toolkitGuidance(guide: string, step?: string): string[] {
+  return [
+    ...whenToDraw(),
+    `- Before drawing, read ${guide}, and make the picture the way it says. Do not hand-write an SVG.`,
+    '- Fix every problem it reports, open the image and its phone version and look as a reader would, then embed the',
+    '  PNG as `![what it shows](/path/to/figure.png)`. Keep the explanation in your prose; the figure carries one point.',
+    ...(step ? [`- ${step}`] : []),
   ];
 }
 

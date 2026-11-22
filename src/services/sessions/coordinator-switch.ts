@@ -32,6 +32,7 @@ import { getEvents } from '../../session-history/repository.js';
 import { projectTranscript } from '../../session-history/renderer.js';
 import type { RawEvent } from '../../session-history/types.js';
 import { CLAUDE_MODELS } from '../../constants/claude-models.js';
+import { antigravityModelEntry, antigravityModelId } from '../../constants/antigravity-models.js';
 import { supersededModelRefusal } from '../../constants/superseded-models.js';
 import {
   SERVER_NOTE_END,
@@ -92,6 +93,12 @@ export interface CoordinatorSwitchDeps {
   claudeSpawn: () => { permissionMode: string; systemPrompt?: string };
   /** The Codex config a resume of this conversation would use; the rollback target. */
   codexResumeConfig: (conversationId: string, segment: ConversationSegment) => SpawnConfig;
+  /**
+   * The same for a Claude segment, with the permission mode it runs in. Claude
+   * does not start on an empty prompt, so its config carries a server note.
+   * Without it a Claude coordinator cannot be switched: there would be no way back.
+   */
+  claudeResumeConfig?: (conversationId: string, segment: ConversationSegment) => { config: SpawnConfig; permissionMode: string };
   timeoutMs?: number;
   /** Delivers what the inbox holds; the real drain unless a test replaces it. */
   drain?: (conversationId: string) => Promise<void>;
@@ -255,10 +262,14 @@ async function killRun(sessionManager: SessionManager, sessionId: string): Promi
  */
 export async function switchCoordinator(
   conversationId: string,
-  target: SwitchTarget,
+  requested: SwitchTarget,
   deps: CoordinatorSwitchDeps,
 ): Promise<SwitchResult> {
   const { sessionManager, conversationService, registry, cli } = deps;
+  // Antigravity names a model and its thinking level in one id; a level-less id takes the model's default.
+  const target: SwitchTarget = requested.provider === 'antigravity'
+    ? { provider: 'antigravity', model: antigravityModelId(requested.model) }
+    : requested;
 
   const admission = tryAdmitTurn(conversationId, 'switch');
   if (!admission) return refused('busy', 'Another send, delivery or compaction holds this conversation\'s next turn. Try again when it is idle.');
@@ -279,12 +290,19 @@ export async function switchCoordinator(
       return result;
     }
 
-    if (target.provider !== 'claude') return refused('unsupported', 'Only a switch to Claude is supported.');
-    if (!CLAUDE_MODELS.some((entry) => entry.id === target.model)) {
-      return refused('unknown-model', `${target.model} is not in the Claude model registry.`);
+    if (target.provider === 'antigravity') {
+      if (!antigravityModelEntry(target.model)) {
+        return refused('unknown-model', `${target.model} is not an Antigravity model Lattice offers.`);
+      }
+    } else if (target.provider === 'claude') {
+      if (!CLAUDE_MODELS.some((entry) => entry.id === target.model)) {
+        return refused('unknown-model', `${target.model} is not in the Claude model registry.`);
+      }
+      const superseded = supersededModelRefusal(target.model);
+      if (superseded) return refused('unknown-model', superseded);
+    } else {
+      return refused('unsupported', 'Only a switch to Claude or Antigravity is supported.');
     }
-    const superseded = supersededModelRefusal(target.model);
-    if (superseded) return refused('unknown-model', superseded);
 
     const previous = conversationService.getLatestSegment(conversationId);
     if (!previous) return refused('not-found', `Conversation ${conversationId} has no segments`);
@@ -293,6 +311,9 @@ export async function switchCoordinator(
         return { status: 'unchanged', conversationId, provider: previous.provider, model: previous.model };
       }
       return refused('same-provider', `Already on ${previous.provider}. A model change within a provider keeps the provider's own transcript: send the next message with --model ${target.model}.`);
+    }
+    if (previous.provider !== 'codex' && !(previous.provider === 'claude' && deps.claudeResumeConfig)) {
+      return refused('unsupported', `A ${previous.provider} coordinator cannot be switched: it could not be started again if the switch failed.`);
     }
     if (previous.providerSessionId.startsWith('pending-')) {
       return refused('no-provider-session', `The ${previous.provider} session has not started yet, so there is nothing to fall back to.`);
@@ -336,7 +357,7 @@ export async function switchCoordinator(
     };
     record({ phase: 'requested' });
 
-    const spawn = deps.claudeSpawn();
+    const spawn = target.provider === 'claude' ? deps.claudeSpawn() : { permissionMode: 'antigravity-managed' };
     // Events the new run appends before its runId is known are kept here and
     // replayed into the waiter, which subscribes synchronously before this
     // collector is dropped, so none is missed or seen twice.
@@ -348,12 +369,15 @@ export async function switchCoordinator(
       const started = await sessionManager.start(conversationId, {
         prompt: handover.text,
         cwd: conversation.workingDirectory,
-        args: [`--model=${target.model}`, `--permission-mode=${spawn.permissionMode}`],
+        args: target.provider === 'claude'
+          ? [`--model=${target.model}`, `--permission-mode=${spawn.permissionMode}`]
+          : [`--model=${target.model}`],
         extra: {
           sessionId: conversationId,
           provider: target.provider,
           workspace: conversation.workspace || 'main',
-          ...(spawn.systemPrompt ? { systemPrompt: spawn.systemPrompt } : {}),
+          ...(target.provider === 'antigravity' ? { model: target.model } : {}),
+          ...('systemPrompt' in spawn && spawn.systemPrompt ? { systemPrompt: spawn.systemPrompt } : {}),
         },
       });
       const newRun = started.runId;
@@ -418,7 +442,9 @@ async function restartPrevious(
 ): Promise<boolean> {
   const { sessionManager, conversationService, registry } = deps;
   try {
-    const restart = await sessionManager.start(conversationId, deps.codexResumeConfig(conversationId, previous));
+    const claude = previous.provider === 'claude' ? deps.claudeResumeConfig?.(conversationId, previous) : undefined;
+    if (previous.provider === 'claude' && !claude) throw new Error('no way to start a Claude coordinator again');
+    const restart = await sessionManager.start(conversationId, claude ? claude.config : deps.codexResumeConfig(conversationId, previous));
     if (restart.processId) conversationService.updateSegmentStreamingId(previous.segmentId, restart.processId);
     registry.register({
       conversationId,
@@ -435,7 +461,7 @@ async function restartPrevious(
         startedAt: new Date().toISOString(),
       } : null,
       workingDirectory: conversation.workingDirectory,
-      permissionMode: 'codex-bypass',
+      permissionMode: claude ? claude.permissionMode : 'codex-bypass',
     });
     return true;
   } catch (err) {
@@ -459,8 +485,8 @@ async function rollBack(
   const { sessionManager, conversationService } = deps;
   const previous = conversation.segments.find((segment) => segment.segmentId === unfinished.fromSegmentId);
   if (!previous) return refused('no-provider-session', `The segment the unfinished switch came from (${unfinished.fromSegmentId}) is missing.`);
-  if (previous.provider !== 'codex') {
-    return refused('unsupported', `The unfinished switch came from ${previous.provider}, and only a Codex coordinator can be started again here.`);
+  if (previous.provider !== 'codex' && !(previous.provider === 'claude' && deps.claudeResumeConfig)) {
+    return refused('unsupported', `The unfinished switch came from ${previous.provider}, which cannot be started again here.`);
   }
   if (!sessionManager.hasSession(conversationId)) sessionManager.recoverFromStorage(conversationId);
   await killRun(sessionManager, conversationId);

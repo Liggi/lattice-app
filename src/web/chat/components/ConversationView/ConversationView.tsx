@@ -1,5 +1,5 @@
 /* oxlint-disable react-doctor/no-cascading-set-state, react-doctor/no-giant-component, react-doctor/prefer-useReducer, react-doctor/no-render-in-render, react-doctor/no-effect-event-handler */
-import React, { useState, useEffect, useCallback, useRef, useMemo, Profiler } from 'react';
+import React, { type JSX, useState, useEffect, useCallback, useRef, useMemo, Profiler } from 'react';
 import { DecisionsProvider, dismissQuestion } from '../Decision/DecisionAskCard';
 import { ExplainsProvider } from '../Explain/ExplainCard';
 import { OpenQuestionStrip } from '../Decision/OpenQuestionStrip';
@@ -25,7 +25,6 @@ import type { AssistantSelectionTarget } from '../../utils/annotation-selection'
 import { useMessageAnnotations } from '../../hooks/useMessageAnnotations';
 import { ImageNotesContext, type ImageNotesApi } from '../MessageList/image-notes-context';
 import { Import } from 'lucide-react';
-import { useToast } from '../Toast/Toast';
 import { ReactionsProvider, SelectionMessageActions } from '../MessageReactions/MessageReactions';
 import { api } from '../../services/api';
 import { useHarnessSession } from '../../hooks/useHarnessSession';
@@ -66,7 +65,6 @@ import { useInsightsPanelState } from './use-insights-panel-state';
 import { foldCoordinatorMachinery } from '../../utils/coordinator-thread';
 import { useDocumentTitle } from './use-document-title';
 import { usePendingQuestions } from './use-pending-questions';
-import { useDevNoteAutoCheckoff } from './use-dev-note-auto-checkoff';
 import { useSessionVisibilityRefresh } from './use-session-visibility-refresh';
 import { useConversationNavigationTelemetry } from './use-conversation-navigation-telemetry';
 import { restoreComposerDraft, useConversationSendHandlers } from './use-conversation-send-handlers';
@@ -79,6 +77,8 @@ import type { Provider } from '@/types/unified-messages';
 import { useClaudeModels } from '../../hooks/useClaudeModels';
 import { endpointModelOption } from '@/constants/claude-endpoint';
 import { ModelMark } from '../Composer/ModelMark';
+import { antigravityFullModels } from '@/constants/antigravity-models.js';
+import { RunningJobsStrip } from './RunningJobsStrip';
 import {
   CODEX_EFFORTS,
   CODEX_MODELS,
@@ -144,7 +144,6 @@ export function ConversationView({ sidebarOpen, onToggleSidebar, conversationId:
   const location = useLocation();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const { showToast } = useToast();
 
   // Keep browser incident context in sync with current conversation
   useEffect(() => {
@@ -172,14 +171,14 @@ export function ConversationView({ sidebarOpen, onToggleSidebar, conversationId:
     renderItems: harnessRenderItems,
     childrenMessages: harnessChildrenMessages,
     usage: harnessUsage,
-    sessionModel: harnessSessionModel,
+    sessionModel: windowSessionModel,
     sessionModelFallback: harnessSessionModelFallback,
     codexGoal: harnessCodexGoal,
     codexGoalEventSeen,
     compaction: harnessCompaction,
     compactionAfterReply: harnessCompactionAfterReply,
     activeStartTime: harnessActiveStartTime,
-    pendingWork,
+    pendingWork: windowPendingWork,
     backgroundTaskStates,
     pendingMessages: harnessPendingMessages,
     actionTrace: harnessActionTrace,
@@ -200,6 +199,16 @@ export function ConversationView({ sidebarOpen, onToggleSidebar, conversationId:
     heldReplies: harnessHeldReplies,
     repliedAt: harnessRepliedAt,
   } = useHarnessSession(conversationId ?? null);
+  // The harness hook reads only the events the page has loaded, the newest
+  // hundred on a cold load. A background subagent writes its tool calls into
+  // the same log, so a long one pushes the session's own last message and its
+  // run:ready out of that window and the hook finds no model. The server's
+  // record of the latest segment's model covers that case.
+  const recordedModel = queryClient.getQueryData<{ metadata?: { model?: string } }>(
+    conversationKeys.details(conversationId || ''),
+  )?.metadata?.model;
+  const harnessSessionModel = windowSessionModel
+    ?? (recordedModel && recordedModel !== 'unknown' ? recordedModel : null);
   // A message from another session arrives on the harness stream, which carries
   // no worker event and need not change our status — so nothing else here would
   // refetch the names. Keying the fetch on the senders actually seen means the
@@ -293,6 +302,17 @@ export function ConversationView({ sidebarOpen, onToggleSidebar, conversationId:
       isDefault: false,
       icon: <ModelMark kind="openai" />,
       group: 'OpenAI',
+    })),
+    [],
+  );
+
+  const switchableAntigravityModels = useMemo(
+    () => antigravityFullModels().map((model) => ({
+      id: model.id,
+      label: model.label,
+      isDefault: false,
+      icon: <ModelMark kind="antigravity" />,
+      group: 'Google',
     })),
     [],
   );
@@ -466,6 +486,10 @@ export function ConversationView({ sidebarOpen, onToggleSidebar, conversationId:
     return conversations.find((conversation) => conversation.conversationId === conversationId) || null;
   }, [conversations, conversationId]);
   const sessionStatus = useSessionStatus(conversationId);
+  // Same window limit as the model above: the subagent's `task:started` can be
+  // older than every loaded event, and the page then called a session with a
+  // subagent running Ready. The server derives this from the whole run.
+  const pendingWork = windowPendingWork ?? sessionStatus.pendingWork ?? null;
   const activeProvider: Provider = conversationSummary?.activeProvider
     ?? conversationSummary?.latestProvider
     ?? sessionStatus.provider
@@ -1050,11 +1074,6 @@ export function ConversationView({ sidebarOpen, onToggleSidebar, conversationId:
     fetchHistory: harnessFetchHistory,
     initialMessageLimit: INITIAL_MESSAGE_LIMIT,
   });
-  useDevNoteAutoCheckoff({
-    conversationId,
-    combinedMessages,
-    showToast,
-  });
 
   // Composer display status — derived directly from harness signals.
   // processAlive = keep-alive process connected (from events: turn:end = alive, run:end = dead)
@@ -1382,6 +1401,7 @@ export function ConversationView({ sidebarOpen, onToggleSidebar, conversationId:
                 </div>
               )}
               {harnessOpenDecision && openCardOutOfSight && <OpenQuestionStrip key={harnessOpenDecision.asked.id} question={harnessOpenDecision.asked.question} onJump={jumpToOpenCard} onDismiss={dismissOpenCard} />}
+              {!embedded && conversationId && <RunningJobsStrip conversationId={conversationId} />}
               {/* Pending mid-turn injected messages — floating above composer */}
               <QueuedMessages key={conversationId} messages={harnessPendingMessages} />
               {/*
@@ -1459,8 +1479,10 @@ export function ConversationView({ sidebarOpen, onToggleSidebar, conversationId:
                     ...(activeProviderCapabilities.modelSwitching.model ? {
                       availableModels: activeProvider === 'codex'
                         ? switchableCodexModels
-                        : switchableClaudeModels,
-                      modelMenuNote: activeProvider === 'codex' ? undefined : claudeModels.note,
+                        : activeProvider === 'antigravity'
+                          ? switchableAntigravityModels
+                          : switchableClaudeModels,
+                      modelMenuNote: activeProvider === 'claude' ? claudeModels.note : undefined,
                       modelMenuLayout: 'rail',
                       selectedModel: pendingModel,
                       onModelChange: setPendingModel,

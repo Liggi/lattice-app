@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import React, { type JSX, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { ChevronLeft, ChevronRight, Eye, EyeOff, MessageSquarePlus, X } from 'lucide-react';
 import { parseJson } from '../../../../utils/json.js';
@@ -458,7 +458,7 @@ export function ImageViewer({ items, start = 0, messageId, onClose }: { items: V
       className="fixed inset-0 z-[100] flex flex-col"
       style={{ background: '#000' }}
     >
-      <div data-image-viewer-bar className="flex items-start gap-3 px-2 pt-[env(safe-area-inset-top)]">
+      <div data-image-viewer-bar className="flex items-start gap-3 px-2 pt-[var(--app-safe-area-top)]">
         {count > 1 && (
           <span data-image-viewer-position className="shrink-0 pl-2 pt-[13px] font-mono text-[13px] tabular-nums text-fg-2">
             {index + 1} of {count}

@@ -10,7 +10,7 @@ import { LatticeError } from '../types/index.js';
 import { DECISION_ASKED_EVENT, type DecisionAskedData } from '../types/decisions.js';
 import { createLogger } from '../services/infrastructure/logger.js';
 import { parseJson } from '../utils/json.js';
-import { DEFAULT_CODEX_MODEL_ID } from '../constants/codex-models.js';
+import { DEFAULT_CODEX_MODEL_ID, codexModelProvider, formatCodexModelLabel } from '../constants/codex-models.js';
 import { parseAttachmentBlocks } from './attachment-blocks.js';
 import { createStdoutQueue } from './stdout-queue.js';
 import {
@@ -683,6 +683,10 @@ class CodexProcessHandle implements ProcessHandle {
     const model = pending.model ?? this.currentModel;
     const reasoningEffort = pending.reasoningEffort ?? this.currentReasoningEffort;
     try {
+      // A thread keeps the provider it started on; turn/start cannot move it.
+      if (codexModelProvider(model) !== codexModelProvider(this.currentModel)) {
+        throw new Error(`${formatCodexModelLabel(model)} and ${formatCodexModelLabel(this.currentModel)} bill different OpenAI accounts (API key vs ChatGPT plan), and a conversation stays on the one it started with: start a new conversation to switch.`);
+      }
       const response = await this.options.client.startTurn({
         threadId: this.threadId,
         input: pending.input,

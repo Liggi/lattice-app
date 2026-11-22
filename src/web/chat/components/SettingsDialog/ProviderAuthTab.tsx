@@ -1,5 +1,5 @@
 /* oxlint-disable react-doctor/no-cascading-set-state, react-doctor/no-giant-component, react-doctor/prefer-useReducer, react-doctor/no-render-in-render, react-doctor/no-effect-event-handler */
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { type JSX, useCallback, useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, CheckCircle2, CircleDashed, ExternalLink, Loader2, LogIn } from 'lucide-react';
 import { useQueryClient } from '@tanstack/react-query';
 import { parseJson } from '../../../../utils/json.js';

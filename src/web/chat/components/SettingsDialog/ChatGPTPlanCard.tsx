@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { type JSX, useCallback, useEffect, useRef, useState } from 'react';
 import { AlertTriangle, CheckCircle2, ExternalLink, Loader2 } from 'lucide-react';
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@liggi/agent-ui-toolkit';
 import { parseJson } from '../../../../utils/json.js';

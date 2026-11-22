@@ -23,6 +23,7 @@
  */
 
 import React, {
+  type JSX,
   createContext,
   useContext,
   useCallback,

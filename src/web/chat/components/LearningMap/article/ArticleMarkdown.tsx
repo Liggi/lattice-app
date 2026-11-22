@@ -23,7 +23,7 @@
  * blocks — nothing may wrap them in between.
  */
 
-import React from 'react';
+import React, { type JSX } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { LazyCodeHighlight } from '../../CodeHighlight';

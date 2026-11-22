@@ -45,9 +45,9 @@ const { DatabaseProvider } = await import('../../src/services/infrastructure/dat
 const { ConversationService } = await import('../../src/services/sessions/conversation-service.js');
 const { SessionInfoService } = await import('../../src/services/sessions/session-info-service.js');
 const { createUnifiedConversationRoutes } = await import('../../src/routes/conversation/unified-conversation.routes.js');
-const { buildProjectOrientation, PROJECT_ORIENTED_EVENT } = await import('../../src/services/sessions/project-orientation.js');
+const { buildProjectOrientation, PROJECT_ORIENTED_EVENT, DECISIONS_REFRESH_EVERY, DECISIONS_CONSOLIDATE_AT } = await import('../../src/services/sessions/project-orientation.js');
 const { readProjectState } = await import('../../src/services/sessions/project-state.js');
-const { renderProjectState } = await import('../../src/types/project-state.js');
+const { renderProjectState, STORY_MAX_WORDS } = await import('../../src/types/project-state.js');
 const { stripContextRestore } = await import('../../src/types/worker-events.js');
 const { parseVerbArgs, SESSION_VERBS_BY_NAME } = await import('../../src/cli/session-cli-spec.js');
 type ProjectState = import('../../src/types/project-state.js').ProjectState;
@@ -279,6 +279,80 @@ describe('orientation on a project turn', () => {
     expect((oriented[0].data as { revision: number }).revision).toBe(before);
     // Writing it must not make itself due again.
     expect(readProjectState(coordinator).revision).toBe(before);
+  });
+
+  it('after a change lists only the decisions made or withdrawn since, and everything else in full', async () => {
+    const kept = await note({ kind: 'decision', text: 'keep the panel narrow' });
+    const dropped = await note({ kind: 'decision', text: 'ship on Fridays' });
+    expect(orient()).toContain('keep the panel narrow');
+    await note({ kind: 'retire', text: 'nobody ships on Fridays now', supersedes: [dropped.seq] });
+    const added = await note({ kind: 'decision', text: 'one worker per thread', by: 'user' });
+    const block = orient();
+    expect(block).not.toContain(`[${kept.seq}] keep the panel narrow`);
+    expect(block).toContain('Decisions: 2 in force');
+    expect(block).toContain(`- new [${added.seq}] one worker per thread (the user's call)`);
+    expect(block).toContain(`- no longer in force [${dropped.seq}] ship on Fridays`);
+    expect(block).toContain('one durable project session');
+    push(coordinator, 'worker:reported', { worker, model: null, text: 'Done.' });
+    expect(orient()).toContain('Decisions: 2 in force, none made or withdrawn since you last saw the record');
+  });
+
+  it('lists every decision again after a compaction, even when the record also moved', async () => {
+    await note({ kind: 'decision', text: 'keep the panel narrow' });
+    orient();
+    push(coordinator, 'worker:reported', { worker, model: null, text: 'Done.' });
+    push(coordinator, 'turn:end', { compact: true });
+    const block = orient();
+    expect(block).toContain('context was just compacted');
+    expect(block).toContain('keep the panel narrow');
+  });
+
+  it('lists every decision again after a run of blocks that listed only changes', async () => {
+    await note({ kind: 'decision', text: 'keep the panel narrow' });
+    orient();
+    for (let i = 0; i < DECISIONS_REFRESH_EVERY; i += 1) {
+      push(coordinator, 'worker:reported', { worker, model: null, text: `report ${i}` });
+      expect(orient()).not.toContain('- [');
+    }
+    push(coordinator, 'worker:reported', { worker, model: null, text: 'one more' });
+    expect(orient()).toContain('keep the panel narrow');
+  });
+
+  it('asks for decisions to be merged with the full list once there are too many, not with the changes', async () => {
+    for (let i = 0; i <= DECISIONS_CONSOLIDATE_AT; i += 1) await note({ kind: 'decision', text: `rule ${i}` });
+    expect(orient()).toContain(`${DECISIONS_CONSOLIDATE_AT + 1} decisions are in force`);
+    await note({ kind: 'decision', text: 'one more rule' });
+    expect(orient()).not.toContain('decisions are in force.');
+  });
+
+  it('carries the account of where the project stands, and refuses one over the word limit', async () => {
+    expect((await note({ kind: 'story', text: Array.from({ length: STORY_MAX_WORDS + 1 }, () => 'word').join(' ') })).status).toBe(400);
+    const story = await note({ kind: 'story', text: 'We set out to shrink the record; the decisions were the bulk; next, the panel.' });
+    expect(story.status).toBe(200);
+    expect(story.state.story).toEqual(expect.objectContaining({ text: 'We set out to shrink the record; the decisions were the bulk; next, the panel.', closedSince: 0 }));
+    expect(orient()).toMatch(/Where it stands \(written [^)]* ago\): We set out to shrink the record/);
+    expect((await note({ kind: 'story', text: 'Replaced whole.' })).state.story?.text).toBe('Replaced whole.');
+  });
+
+  it('asks once for an account when there is none and a thread has closed', async () => {
+    const thread = await note({ kind: 'open', text: 'shrink the record' });
+    orient();
+    await note({ kind: 'close', ref: thread.seq, text: 'live' });
+    expect(orient()).toContain('no account of where it stands yet');
+    push(coordinator, 'worker:reported', { worker, model: null, text: 'Done.' });
+    expect(orient()).not.toContain('account of where');
+  });
+
+  it('asks once for a rewrite when a thread closes after the account was written', async () => {
+    const thread = await note({ kind: 'open', text: 'shrink the record' });
+    await note({ kind: 'story', text: 'Shrinking the record.' });
+    expect(orient()).not.toContain('account of where');
+    await note({ kind: 'close', ref: thread.seq, text: 'live' });
+    expect(orient()).toContain('was written before 1 thread closed');
+    push(coordinator, 'worker:reported', { worker, model: null, text: 'Done.' });
+    expect(orient()).not.toContain('account of where');
+    await note({ kind: 'story', text: 'Record shrunk; next the panel.' });
+    expect(orient()).not.toContain('account of where');
   });
 
   it('is for project sessions with something noted, and nobody else', () => {

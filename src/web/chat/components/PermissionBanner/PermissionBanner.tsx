@@ -1,5 +1,5 @@
 /* oxlint-disable react-doctor/no-cascading-set-state, react-doctor/no-giant-component, react-doctor/prefer-useReducer, react-doctor/no-render-in-render, react-doctor/no-effect-event-handler */
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { type JSX, useState, useEffect, useMemo } from 'react';
 import { ShieldAlert, ClipboardCheck, Check, X, ChevronDown, ChevronRight, FolderLock } from 'lucide-react';
 import type { PermissionRequest } from '../../types';
 import { api } from '../../services/api';

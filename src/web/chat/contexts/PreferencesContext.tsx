@@ -1,5 +1,5 @@
 /* oxlint-disable react-doctor/no-cascading-set-state, react-doctor/no-giant-component, react-doctor/prefer-useReducer, react-doctor/no-render-in-render, react-doctor/no-effect-event-handler */
-import React, { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react';
+import React, { type JSX, createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react';
 import { api } from '../services/api';
 import type { Preferences, Theme } from '../types';
 import type { CoordinatorConfig } from '@/types/config';

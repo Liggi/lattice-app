@@ -17,6 +17,7 @@ self.addEventListener('push', (event) => {
     };
   }
 
+  const data = payload.data || {};
   const title = payload.title || 'Lattice';
   const options = {
     body: payload.message || '',
@@ -25,10 +26,22 @@ self.addEventListener('push', (event) => {
     tag: payload.tag || 'lattice-notification',
     // Merge notifications with the same tag
     renotify: true,
-    data: payload.data || {},
+    data,
   };
 
-  event.waitUntil(self.registration.showNotification(title, options));
+  // Close notifications for conversations looked at since they were sent, on any device.
+  const clear = data.clear || {};
+  event.waitUntil(
+    self.registration.getNotifications()
+      .then((open) => {
+        for (const note of open) {
+          const seenAt = note.data && clear[note.data.sessionId];
+          if (seenAt && (note.data.sentAt || 0) <= seenAt) note.close();
+        }
+      })
+      .catch(() => {})
+      .then(() => self.registration.showNotification(title, options)),
+  );
 });
 
 self.addEventListener('notificationclick', (event) => {
