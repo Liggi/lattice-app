@@ -98,6 +98,10 @@ export const STATUS_BEARING_EVENT_TYPES = [
   // A delivered message the provider started as a turn of its own
   // (where: 'next-turn'); deriveStatus reads it as the next turn running.
   'input:incorporated',
+  // A session's retry circuit opening or closing: an open one is shown as a
+  // failure (retry-circuit-breaker.ts).
+  'retry:circuit-open',
+  'retry:circuit-closed',
 ] as const;
 
 /** What says whether a question card is still open: asked, answered, settled by a message, dismissed, withdrawn. */

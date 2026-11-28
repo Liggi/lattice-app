@@ -455,6 +455,25 @@ export const SESSION_VERBS: VerbSpec[] = [
     ],
   },
   {
+    name: 'profile',
+    summary: 'Coordinator only: move it onto another profile (its worker routing, chief of staff and model), or back.',
+    positionals: [{ name: 'conv', required: true }, { name: 'name' }],
+    flags: [
+      { name: 'revert', kind: 'boolean', desc: 'Undo its latest profile change: the profile, and the model if that change moved it.' },
+      { name: 'host', kind: 'string', value: 'H', desc: 'Server host (default: from config).' },
+      { name: 'port', kind: 'int', value: 'N', desc: 'Server port (default: from config).' },
+      JSON_FLAG,
+    ],
+    notes: [
+      'Only between turns. Front\'s model moves (as `switch` does) only when the\n' +
+        '  profile names a different one; otherwise only its routing changes, and its\n' +
+        '  next input carries the rebuilt preamble so it reads the new routing then.',
+      'Each change is recorded in the coordinator\'s log, so --revert puts back\n' +
+        '  exactly what was there before it, and a second --revert undoes the change\n' +
+        '  before that.',
+    ],
+  },
+  {
     name: 'react',
     summary: 'React with an emoji to the user\'s latest message in your conversation, as they see it.',
     positionals: [{ name: 'conv', required: true }, { name: 'emoji', required: true }],

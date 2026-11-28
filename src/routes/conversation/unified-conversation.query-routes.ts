@@ -23,9 +23,12 @@ import { mapUnifiedMessageToConversationMessage } from '@/services/sessions/unif
 import { thumbnailImageBlocks } from '@/services/sessions/message-truncation.js';
 import { createLogger } from '@/services/infrastructure/logger.js';
 import { readWorkerHistory, readWorkerStates, workerReportTimes } from '@/services/sessions/worker-events.js';
-import { latestWorkerItemReached, unreadInboxSummaries } from '@/services/sessions/session-inbox.js';
+import { latestWorkerItemReached, retryInbox, unreadInboxSummaries } from '@/services/sessions/session-inbox.js';
 import { conversationContextTokens } from '@/services/sessions/context-compaction.js';
 import type { ProjectStateResponse, WorkerCardState, WorkersResponse } from '@/types/worker-events.js';
+import { profileForRecorded } from '@/constants/coordinator-profiles.js';
+import { coordinatorProfileSettings } from '@/services/sessions/coordinator-defaults.js';
+import { profileRoster } from '@/services/sessions/coordinator-profile-roster.js';
 import { readWorkerActivity, watchPanel } from '@/services/sessions/worker-activity.js';
 import { noteWorkerWaits, readWaitPhrases } from '@/services/sessions/worker-wait-phrase.js';
 import { readWorkerRuntime } from '@/services/sessions/worker-runtime.js';
@@ -34,9 +37,7 @@ import { appendProjectNote, readProjectState } from '@/services/sessions/project
 import { askTooLong } from '@/types/ask-text.js';
 import { isDealtWith, PROGRESS_GONE, ProgressError, type ReporterFacts } from '@/services/sessions/job-progress.js';
 import { jobWatch } from '@/services/sessions/job-watch.js';
-import { ShippingWatcher } from '@/services/sessions/project-shipping.js';
-import { CONFIG_DIR } from '@/utils/constants.js';
-import path from 'node:path';
+import { shippingWatch } from '@/services/sessions/shipping-watch.js';
 import { isUsersMove } from '@/types/state-of-play.js';
 import { backfillProjectName } from '@/services/sessions/project-name.js';
 import { namesTheUser, normalizeProjectName } from '@/services/insights/anthropic-service.js';
@@ -46,6 +47,7 @@ import { holdReply, HeldReplyError, repliesOf, undoReply } from '@/services/sess
 import type { ReplyTarget } from '@/types/held-replies.js';
 import { isFromLatticePage } from '@/middleware/trusted-origin.js';
 import { senderIdentities, sessionReferences } from '@/services/sessions/sender-identity.js';
+import { readConversationOutputs } from '@/services/sessions/conversation-outputs.js';
 import {
   PROJECT_NOTE_KINDS,
   STORY_MAX_WORDS,
@@ -466,6 +468,18 @@ export function registerUnifiedConversationQueryRoutes(
     // roster, which a per-worker check cannot do at forty workers.
     const unread = unreadInboxSummaries(states.map((state) => state.worker), conversationId);
     const waitPhrases = readWaitPhrases(conversationId, new Map(states.flatMap((state) => (state.waitingOn ? [[state.worker, state.waitingOn] as const] : []))));
+    // Which profile role each worker fills, so the panel can tell a chief of
+    // staff or a Fable worker from the usual ones (coordinator-profile-roster.ts).
+    const coordinator = conversationService.getConversation(conversationId)?.coordinator;
+    const history = readWorkerHistory(conversationId);
+    const { roster, roles } = coordinator
+      ? profileRoster(
+        profileForRecorded(conversationService.getProfile(conversationId), coordinatorProfileSettings()),
+        states,
+        (worker) => conversationService.getWorkerRole(worker),
+        history,
+      )
+      : { roster: null, roles: new Map<string, { label: string; chiefOfStaff: boolean }>() };
     const workers: WorkerCardState[] = states.map((state) => ({
       ...state,
       contextTokens: conversationContextTokens(state.worker),
@@ -490,15 +504,16 @@ export function registerUnifiedConversationQueryRoutes(
         ? readWorkerActivity(state.worker, state.phase)
         : null,
       waitPhrase: waitPhrases.get(state.worker) ?? null,
+      ...(roles.has(state.worker) ? { role: roles.get(state.worker) } : {}),
     }));
-    const project = conversationService.getConversation(conversationId)?.coordinator ? readProjectState(conversationId) : null;
+    const project = coordinator ? readProjectState(conversationId) : null;
     // Names for the sessions that have written to this one, so a message from
     // another session says who sent it rather than showing its id. Served
     // here because the panel already refetches this on every worker event and
     // status change, which is when a new sender appears.
     res.json({
       workers,
-      history: readWorkerHistory(conversationId),
+      history,
       project,
       ...(project ? { repliedAt: Object.fromEntries(repliesOf(conversationId)) } : {}),
       senders: senderIdentities(conversationId),
@@ -511,6 +526,7 @@ export function registerUnifiedConversationQueryRoutes(
       ),
       unread: Object.fromEntries(unread),
       asOfSeq,
+      ...(roster ? { profile: roster } : {}),
     } satisfies WorkersResponse);
   }));
 
@@ -572,6 +588,7 @@ export function registerUnifiedConversationQueryRoutes(
     const body = (req.body ?? {}) as Record<string, unknown>;
     const text = (key: string) => (typeof body[key] === 'string' ? body[key] as string : undefined);
     const number = (key: string) => (typeof body[key] === 'number' ? body[key] as number : undefined);
+    const flag = (key: string) => (typeof body[key] === 'boolean' ? body[key] as boolean : undefined);
     try {
       const started = await watch.start({
         session: conversationId,
@@ -582,9 +599,14 @@ export function registerUnifiedConversationQueryRoutes(
         command: text('command'),
         cwd: text('cwd'),
         every: number('every'),
+        eventsFile: text('eventsFile'),
         total: number('total'),
         totalLines: text('totalLines'),
+        unit: text('unit'),
         pid: number('pid'),
+        pgid: number('pgid'),
+        managed: flag('managed'),
+        runCommand: text('runCommand'),
         each: number('each'),
       });
       res.json(started);
@@ -596,12 +618,54 @@ export function registerUnifiedConversationQueryRoutes(
       throw err;
     }
   }));
+  router.post('/:conversationId/jobs/update', (req: RequestWithRequestId, res) => {
+    const { conversationId } = req.params;
+    if (!knownConversation(conversationId, res)) return;
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const label = typeof body.label === 'string' ? body.label : '';
+    const num = (key: string) => (typeof body[key] === 'number' && Number.isFinite(body[key] as number) ? body[key] as number : undefined);
+    const text = (key: string) => (typeof body[key] === 'string' ? body[key] as string : undefined);
+    const logTail = Array.isArray(body.logTail) ? body.logTail.filter((line): line is string => typeof line === 'string') : undefined;
+    const job = jobs.update(conversationId, label, {
+      done: num('done'),
+      total: num('total'),
+      skipped: num('skipped'),
+      failedCount: num('failedCount') ?? num('failed'),
+      stage: text('stage'),
+      message: text('message'),
+      logTail,
+      outputAt: num('outputAt'),
+    });
+    res.json({ job });
+  });
+  router.post('/:conversationId/jobs/finish', (req: RequestWithRequestId, res) => {
+    const { conversationId } = req.params;
+    if (!knownConversation(conversationId, res)) return;
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const label = typeof body.label === 'string' ? body.label : '';
+    const exitCode = typeof body.exitCode === 'number' && Number.isFinite(body.exitCode) ? Math.trunc(body.exitCode) : 1;
+    const num = (key: string) => (typeof body[key] === 'number' && Number.isFinite(body[key] as number) ? body[key] as number : undefined);
+    const text = (key: string) => (typeof body[key] === 'string' ? body[key] as string : undefined);
+    const logTail = Array.isArray(body.logTail) ? body.logTail.filter((line): line is string => typeof line === 'string') : undefined;
+    const job = jobs.finish(conversationId, label, {
+      exitCode,
+      done: num('done'),
+      total: num('total'),
+      skipped: num('skipped'),
+      failedCount: num('failedCount') ?? num('failed'),
+      stage: text('stage'),
+      message: text('message'),
+      logTail,
+      reason: text('reason'),
+    });
+    res.json({ job });
+  });
   router.post('/:conversationId/jobs/stop', (req: RequestWithRequestId, res) => {
     const { conversationId } = req.params;
     if (!knownConversation(conversationId, res)) return;
     const body = (req.body ?? {}) as { label?: unknown; why?: unknown };
     try {
-      const job = jobs.stop(conversationId, typeof body.label === 'string' ? body.label : '', typeof body.why === 'string' ? body.why : '');
+      const job = watch.stopJob(conversationId, typeof body.label === 'string' ? body.label : '', typeof body.why === 'string' ? body.why : '');
       res.json({ job });
     } catch (err) {
       if (err instanceof ProgressError) {
@@ -632,7 +696,7 @@ export function registerUnifiedConversationQueryRoutes(
     const reporters = new Map<string, ReporterFacts>(workers.map((worker) => [worker, { worker: true, reports: reports.get(worker) ?? [] }]));
     res.json({ jobs: listed.filter((job) => !isDealtWith(job, reporters.get(job.session), owed)) });
   });
-  const shipping = new ShippingWatcher(path.join(CONFIG_DIR, 'project-shipping.json'), readProjectState);
+  const shipping = shippingWatch();
   shipping.start();
   router.get('/:conversationId/shipping', asyncHandler(async (req: RequestWithRequestId, res) => {
     const { conversationId } = req.params;
@@ -643,6 +707,29 @@ export function registerUnifiedConversationQueryRoutes(
     }
     res.json(await shipping.get(conversationId));
   }));
+
+  // Retry a session whose runs kept failing: closes its retry circuit and
+  // makes one drain of what it has waiting (retry-circuit-breaker.ts).
+  router.post('/:conversationId/retry', asyncHandler(async (req: RequestWithRequestId, res) => {
+    const { conversationId } = req.params;
+    if (!conversationId.startsWith('conv-') || !conversationService.getConversation(conversationId)) {
+      res.status(404).json({ error: 'Conversation not found' });
+      return;
+    }
+    const { wasOpen, retried } = await retryInbox(conversationId);
+    res.json({ ok: true, retried, circuitWasOpen: wasOpen });
+  }));
+
+  // Screenshots and pull request links from the whole log, newest first; the
+  // browser holds only the tail of a long conversation.
+  router.get('/:conversationId/outputs', (req: RequestWithRequestId, res) => {
+    const { conversationId } = req.params;
+    if (!conversationId.startsWith('conv-') || !conversationService.getConversation(conversationId)) {
+      res.status(404).json({ error: 'Conversation not found' });
+      return;
+    }
+    res.json(readConversationOutputs(conversationId));
+  });
 
   // Splitting a project: move a worker, or an open thread with its workers,
   // to another coordinator. `lattice session move-worker` / `move-thread`

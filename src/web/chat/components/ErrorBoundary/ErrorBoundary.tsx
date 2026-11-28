@@ -3,7 +3,7 @@ import { AlertTriangle, RefreshCw, ChevronDown, ChevronUp } from 'lucide-react';
 
 interface ErrorBoundaryProps {
   children: ReactNode;
-  /** What to show when there's an error. Defaults to a styled error card. */
+  /** What to show when there's an error; `null` shows nothing. Defaults to a styled error card. */
   fallback?: ReactNode | ((error: Error, reset: () => void) => ReactNode);
   /** Optional name for this boundary (shown in error UI for debugging) */
   name?: string;
@@ -65,8 +65,8 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
         return this.props.fallback(this.state.error, this.reset);
       }
 
-      // Custom fallback node
-      if (this.props.fallback) {
+      // Custom fallback node, including null for nothing at all
+      if (this.props.fallback !== undefined) {
         return this.props.fallback;
       }
 
@@ -175,3 +175,11 @@ export function AppErrorFallback({ error, reset }: { error: Error; reset: () => 
   );
 }
 
+
+/**
+ * For chrome around the conversation (header widgets, sidebar extras): a widget
+ * that throws renders nothing and logs, instead of taking down the App boundary.
+ */
+export function Contained({ name, children }: { name: string; children: ReactNode }): JSX.Element {
+  return <ErrorBoundary name={name} fallback={null}>{children}</ErrorBoundary>;
+}

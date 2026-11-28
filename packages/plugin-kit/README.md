@@ -46,7 +46,11 @@ export default function activate(host: LatticePluginHost) {
 ```
 
 A card's action runs once, when the user chooses `runs` on the Lattice page,
-and survives a restart. `host.sessions.create({ message, title })` starts a
+and survives a restart. A card can name a `view` that the web entry draws in
+place of `detail` (`web.cardView(name, Component)`); the view can hand the
+action text the user edited (`setEdit`, read as `context.edit`) and stop the
+action with a reason (`blockRuns`). `host.keys.get('slack')` reads the Slack
+token the user saved with `lattice keys import`. `host.sessions.create({ message, title })` starts a
 session named `title`. Write a command into an agent's instructions as
 `${host.cli} plugin my-plugin draft`: agents' shells do not have `lattice` on
 PATH.

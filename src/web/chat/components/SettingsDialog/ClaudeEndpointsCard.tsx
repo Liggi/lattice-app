@@ -97,10 +97,10 @@ export function ClaudeEndpointsCard({ endpoints, onSave }: ClaudeEndpointsCardPr
             <p className="text-[13px] text-fg break-words">{endpointModelOption(endpoint).label}</p>
             <p className="mt-0.5 text-xs font-mono text-fg-3 break-all">{endpoint.model}</p>
             <p className="mt-0.5 text-xs text-fg-3">
-              {endpointModelOption(endpoint).detail}
+              {endpointModelOption(endpoint).description}
               {endpoint.protocol === 'openai'
-                ? <span className="whitespace-nowrap"> · OpenAI API, background calls only</span>
-                : endpoint.contextWindow ? <span className="whitespace-nowrap"> · {endpoint.contextWindow.toLocaleString('en-US')} tokens</span> : null}
+                ? ', through the OpenAI API, for background calls only'
+                : endpoint.contextWindow ? `, with a ${endpoint.contextWindow.toLocaleString('en-US')}-token context` : null}
             </p>
           </div>
           <div className="flex items-center gap-1 shrink-0 max-sm:-ml-2.5">

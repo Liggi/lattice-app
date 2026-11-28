@@ -9,7 +9,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { SessionEvent } from '@liggi/agent-ui-harness/protocol';
-import { eventsToMessages } from '../../src/web/chat/hooks/useHarnessSession.js';
+import { eventsToMessages, eventsToRenderItems } from '../../src/web/chat/hooks/useHarnessSession.js';
 
 function event(type: SessionEvent['type'], data: unknown, seq: number): SessionEvent {
   return {
@@ -83,5 +83,35 @@ describe('message coalescing across turn boundaries', () => {
       : m.content);
     expect(texts[0]).toContain('first run');
     expect(texts[1]).toContain('second run');
+    expect(assistant.map((m) => m.messageId)).toEqual(['h-msg_A', 'h-msg_A#2']);
+    expect(assistant.map((m) => m.id)).toEqual(['h-msg_A', 'h-msg_A#2']);
+  });
+
+  it('disambiguates repeated message ids across runs in both messages and renderItems while still coalescing within a run', () => {
+    const events: SessionEvent[] = [
+      event('run:start', {}, 1),
+      event('content', { messageId: 'agy-thought-0', blocks: [{ type: 'thinking', thinking: 'run 1 thought' }] }, 2),
+      event('turn:end', {}, 3),
+      event('run:end', {}, 4),
+      event('run:start', {}, 5),
+      event('content', { messageId: 'agy-thought-0', blocks: [{ type: 'thinking', thinking: 'run 2 part A' }] }, 6),
+      event('content', { messageId: 'agy-thought-0', blocks: [{ type: 'thinking', thinking: 'run 2 part B' }] }, 7),
+      event('turn:end', {}, 8),
+      event('run:end', {}, 9),
+      event('run:start', {}, 10),
+      event('content', { messageId: 'agy-thought-0', blocks: [{ type: 'thinking', thinking: 'run 3 thought' }] }, 11),
+    ];
+
+    const messages = eventsToMessages(events, providers);
+    expect(messages.map((m) => m.id)).toEqual(['h-agy-thought-0', 'h-agy-thought-0#2', 'h-agy-thought-0#3']);
+    expect(messages.map((m) => m.messageId)).toEqual(['h-agy-thought-0', 'h-agy-thought-0#2', 'h-agy-thought-0#3']);
+    const secondThinking = (messages[1].content as Array<{ thinking?: string }>)[0]?.thinking;
+    expect(secondThinking).toBe('run 2 part A\nrun 2 part B');
+
+    const { renderItems } = eventsToRenderItems(events, false, providers);
+    const renderedIds = renderItems
+      .filter((item): item is Extract<typeof item, { kind: 'message' }> => item.kind === 'message')
+      .map((item) => item.message.id);
+    expect(renderedIds).toEqual(['h-agy-thought-0', 'h-agy-thought-0#2', 'h-agy-thought-0#3']);
   });
 });

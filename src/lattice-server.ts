@@ -13,6 +13,8 @@ const __dirname = dirname(__filename);
 /** JSON body ceiling for /api/harness — sized to the composer's attachment cap
  *  (20 files x 5MB, ~134MB base64). See setupMiddleware(). */
 const HARNESS_JSON_BODY_LIMIT = '150mb';
+/** The checkout a server run from source was started in. */
+const sourceCheckoutDir = path.resolve(__dirname, '..');
 import { ClaudeHistoryReader } from './services/sessions/claude-history-reader.js';
 import { PermissionTracker } from './services/permission-tracker.js';
 import { setupSdkPermissionBridge } from './services/sdk-permission-bridge.js';
@@ -52,7 +54,8 @@ import { drainAllInboxes } from './services/sessions/session-inbox.js';
 import { resumeHeldReplies } from './services/sessions/held-replies.js';
 import { settleHeldDeliveries } from './services/sessions/held-delivery-settlement.js';
 import { wakeRestartWaiters } from './services/sessions/wait-watch.js';
-import { builtClientDir, servesViteDevClient } from './server/vite-dev-client.js';
+import { builtClientDir, runsFromSource, servesViteDevClient } from './server/vite-dev-client.js';
+import { forgetRunningServer, recordRunningServer } from './server/running-server-code.js';
 import { loadPlugins, pluginSkills, stopPlugins } from './services/plugins/plugin-registry.js';
 
 // ViteExpress will be imported dynamically in initialize() if needed
@@ -363,6 +366,7 @@ export class LatticeServer {
       app: this.app,
       processManagerClient: client,
       adoptable: running,
+      permissionTracker: this.permissionTracker,
       resolveResumeSessionId: (conversationId: string) => {
         const conversation = conversationService.getConversation(conversationId);
         if (!conversation || conversation.segments.length === 0) return conversationId;
@@ -550,6 +554,7 @@ export class LatticeServer {
       const watch = jobWatch();
       const retired = watch.store.retireHandReported();
       if (retired > 0) this.logger.info('Ended hand-reported jobs; Lattice counts jobs from their work now', { retired });
+      watch.ensureAllWatchers();
       this.jobReadTickHandle = setInterval(() => { void watch.readAll(); }, 30_000);
     })().catch((err) => {
       this.logger.error('Starting job reads failed', {
@@ -628,6 +633,7 @@ export class LatticeServer {
     try {
       // Initialize all services
       await this.initialize();
+      this.recordLoadedSource();
 
       // Start Express server
       const isDev = servesViteDevClient;
@@ -672,6 +678,19 @@ export class LatticeServer {
       } else {
         throw new LatticeError('SERVER_START_FAILED', `Server startup failed: ${error instanceof Error ? error.message : String(error)}`, 500);
       }
+    }
+  }
+
+  /**
+   * A server run from source that serves dist/web records the server code it
+   * loaded, so a client build can refuse to ship a client it is too old for.
+   */
+  private recordLoadedSource(): void {
+    if (!runsFromSource || servesViteDevClient) return;
+    try {
+      recordRunningServer(sourceCheckoutDir, this.port);
+    } catch (error) {
+      this.logger.warn('Could not record the server source; client builds will not check this server', { error: String(error) });
     }
   }
 
@@ -794,6 +813,9 @@ export class LatticeServer {
     this.logger.debug('Stop method called', {
       hasServer: !!this.server,
     });
+    if (runsFromSource) {
+      try { forgetRunningServer(sourceCheckoutDir); } catch { /* the record of a dead pid is dropped by the next check */ }
+    }
 
     this.stopBackgroundServices();
     await stopPlugins();

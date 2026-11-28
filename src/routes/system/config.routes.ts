@@ -13,6 +13,7 @@ const SECRET_FIELDS = [
   ['anthropic', 'apiKey'],
   ['gemini', 'apiKey'],
   ['typesafe', 'apiKey'],
+  ['slack', 'apiKey'],
 ] as const;
 
 /**

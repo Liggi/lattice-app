@@ -23,6 +23,10 @@
 import React, { type JSX, useCallback, useEffect, useRef, useState } from 'react';
 import { WorkerRow } from './WorkersSection';
 import { NarrowPanel } from './NarrowPanel';
+import { TrackSection } from './PanelShapes';
+import { deriveTrack } from './project-track';
+import type { ProjectOutputs } from './project-outputs';
+import { ProfileSection } from './ProfileSection';
 import type { WaitTextContext } from './WaitText';
 import { BacklogGroup, CallRow, GoneRow, holdReply, threadAction, undoReply, type CallActions } from './YourCalls';
 import { withoutThreadRefs } from '@/types/project-state';
@@ -31,7 +35,7 @@ import { deriveCalls, type Call } from '@/types/your-calls';
 import type { ProjectState } from '@/types/project-state';
 import type { ShownDecision } from '@/types/decisions';
 import type { HeldReply } from '@/types/held-replies';
-import type { WorkerCardState } from '@/types/worker-events';
+import type { ProfileRoster, WorkerCardState } from '@/types/worker-events';
 
 /** How long a parked or dismissed row offers Undo in place. */
 const UNDO_MS = 15_000;
@@ -39,6 +43,7 @@ const UNDO_MS = 15_000;
 interface StateOfPlaySectionProps {
   project: ProjectState | null;
   workers: WorkerCardState[];
+  profile?: ProfileRoster;
   coordinatorId?: string;
   coordinatorRunning: boolean;
   onOpenWorker?: (conversationId: string) => void;
@@ -50,6 +55,8 @@ interface StateOfPlaySectionProps {
   heldReplies?: ReadonlyMap<string, HeldReply>;
   /** When the user last replied about each thread and card (`repliedAt`). */
   repliedAt?: ReadonlyMap<string, number>;
+  /** Screenshots and links the conversation has produced. */
+  outputs?: ProjectOutputs | null;
 }
 
 /** A row parked or dismissed here, saying so until its Undo lapses. */
@@ -70,7 +77,7 @@ function useNow(fast: boolean): number {
 }
 
 export function StateOfPlaySection({
-  project, workers, coordinatorId, coordinatorRunning, onOpenWorker, waitContext, pointedWorker, latestDecision = null, heldReplies = NO_REPLIES, repliedAt = NO_TIMES,
+  project, workers, profile, coordinatorId, coordinatorRunning, onOpenWorker, waitContext, pointedWorker, latestDecision = null, heldReplies = NO_REPLIES, repliedAt = NO_TIMES, outputs = null,
 }: StateOfPlaySectionProps): JSX.Element | null {
   const [gone, setGone] = useState<Gone[]>([]);
   const [openKey, setOpenKey] = useState<string | null>(null);
@@ -162,12 +169,23 @@ export function StateOfPlaySection({
     if (coordinatorId) await threadAction(coordinatorId, seq, 'restore');
   };
 
+  // The chief of staff leads Running while it advises; once its reply is in,
+  // it has reported and Running drops it like any worker that has.
+  const chiefRole = profile?.roles.find((role) => role.chiefOfStaff);
+  const chief = chiefRole?.workers.at(-1);
+  const workersInOrder = chief
+    ? [...play.workers.filter((worker) => worker.worker === chief), ...play.workers.filter((worker) => worker.worker !== chief)]
+    : play.workers;
+
   return (
     <NarrowPanel
       coordinatorId={coordinatorId}
       attention={rows}
       backlog={backlog.length > 0 ? <BacklogGroup items={backlog} onRestore={restoreParked} /> : null}
-      workers={play.workers}
+      workers={workersInOrder}
+      footer={profile ? <ProfileSection roster={profile} /> : null}
+      track={<TrackSection steps={deriveTrack(project, workers)} />}
+      outputs={outputs}
       carrying={play.carrying}
       coordinatorRunning={coordinatorRunning}
       onOpenWorker={onOpenWorker}

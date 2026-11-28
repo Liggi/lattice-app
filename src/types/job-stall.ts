@@ -12,6 +12,13 @@
  * minutes in batches). A job with a process behind it ends when the process
  * does (`job-progress.ts`), so a stuck one always has its process alive. A
  * job whose count can't be read says so instead.
+ *
+ * A `lattice run` job with no item count (no `--total`) is never Starting: it
+ * is stuck only once its command has printed nothing for the same 20 minutes
+ * (or twice `--each`). A `lattice run` job counted from `$LATTICE_JOB_EVENTS`
+ * is judged the same way until its first item, since a wrapped command still
+ * printing is alive even when one item takes longer than 20 minutes; after
+ * that, by its count like any other job (Colab sweep, 28 Nov 2026).
  */
 
 import type { JobProgress, JobSample } from '../services/sessions/job-progress.js';
@@ -28,7 +35,24 @@ export const FIRST_ITEM_MS = 20 * 60_000;
 /** The rate is taken over the moves of about this long before the latest one. */
 const RATE_WINDOW_MS = 30 * 60_000;
 
-type StallFacts = Pick<JobProgress, 'done' | 'startDone' | 'startedAt' | 'movedAt' | 'samples' | 'each'>;
+type StallFacts = Pick<JobProgress, 'done' | 'startDone' | 'startedAt' | 'movedAt' | 'samples' | 'each'>
+  & Partial<Pick<JobProgress, 'managed' | 'total' | 'source' | 'lastOutputAt'>>;
+
+/** A `lattice run` job started without `--total`: it has no item count, only its command's output. */
+export function isIndeterminateJob(job: Partial<Pick<JobProgress, 'managed' | 'total'>>): boolean {
+  return job.managed === true && job.total === 0;
+}
+
+/** Whether the job is judged by its command's output rather than by its count (see the header). */
+export function judgedByOutput(job: StallFacts): boolean {
+  if (isIndeterminateJob(job)) return true;
+  return job.managed === true && job.source?.kind === 'events' && !hasStarted(job);
+}
+
+/** When the job last showed it was alive: its last move, or for a job judged by output, its last output. */
+export function quietSince(job: StallFacts): number {
+  return judgedByOutput(job) ? Math.max(job.startedAt, job.movedAt, job.lastOutputAt ?? 0) : job.movedAt;
+}
 
 /** Whether the job's first item has finished: until then it is Starting, with no count shown. */
 export function hasStarted(job: Pick<JobProgress, 'done' | 'startDone'>): boolean {
@@ -58,15 +82,15 @@ export function jobRate(job: Pick<JobProgress, 'samples'>): number {
 
 /** How long this job may go without moving before it counts as stuck. */
 export function stallAfterMs(job: StallFacts): number {
-  if (!hasStarted(job)) return job.each ? 2 * job.each : FIRST_ITEM_MS;
+  if (!hasStarted(job) || isIndeterminateJob(job)) return job.each ? 2 * job.each : FIRST_ITEM_MS;
   const after = moves(job);
   const usualGap = after.length >= 2 ? (after.at(-1)!.at - after[0].at) / (after.length - 1) : job.each ?? 0;
   return Math.max(MIN_STALL_MS, 2 * usualGap);
 }
 
-/** Whether a running job has stopped moving, or never got to its first item. Says nothing of an ended one. */
+/** Whether a running job has stopped moving, never got to its first item, or (judged by output) went silent. Says nothing of an ended one. */
 export function isStalled(job: StallFacts, now: number): boolean {
-  return now - job.movedAt > stallAfterMs(job);
+  return now - quietSince(job) > stallAfterMs(job);
 }
 
 /** The error to show when reads of the count keep failing, in full; null while they work. */

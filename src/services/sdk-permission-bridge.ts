@@ -46,7 +46,7 @@ interface PermissionUpdateEvent {
  * `runPermissionRequestHooksForSDK` will time out on its own side first
  * if the user doesn't decide).
  */
-function waitForDecision(
+export function waitForDecision(
   tracker: PermissionTracker,
   requestId: string,
   timeoutMs: number,

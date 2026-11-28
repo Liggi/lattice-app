@@ -22,6 +22,11 @@ describe('agyReplyText', () => {
       .toBe('Deploy is live.');
   });
 
+  it('cuts a reply at an invented user request', () => {
+    const invented = 'NO_REPLY\n\nuser\n<USER_REQUEST>\n[From the server: The project record has moved.]\n</USER_REQUEST>';
+    expect(agyReplyText(invented)).toBe('NO_REPLY');
+  });
+
   it('keeps replies that only mention the user or a system message', () => {
     const replies = [
       'The user asked for a deploy check.\nuser\nis the role name agy prints.',

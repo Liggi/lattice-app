@@ -1,6 +1,6 @@
 /**
  * How an agent shows screenshots as a series with its own notes on them: the
- * ```lattice-gallery fence (src/web/chat/utils/gallery-block.ts reads it).
+ * ```lattice-gallery fence (src/utils/gallery-block.ts reads it).
  * Boxes are the weak point, so the guidance asks for measured boxes and the
  * pixel size they were measured in; Lattice scales boxes from that size to the
  * file, so a box taken at 1× on a 2× screenshot still lands.

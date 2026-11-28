@@ -122,7 +122,7 @@ function FoldedMachineryRow({ item, renderBody }: {
           : <ChevronRight size={12} className={`flex-shrink-0 transition-transform duration-150 ${open ? 'rotate-90' : ''}`} />}
         <span className="text-left break-words">
           {item.summary}
-          {active && item.latestHint && <span className="text-fg-3/70"> · {item.latestHint}</span>}
+          {active && item.latestHint && <span className="ml-2.5 text-fg-3/70">{item.latestHint}</span>}
         </span>
       </button>
       {open && (

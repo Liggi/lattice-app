@@ -33,7 +33,8 @@ export const PROVIDER_CAPABILITIES: Readonly<Record<Provider, ProviderCapabiliti
     approvals: 'interactive',
     goals: false,
     branching: 'history-copy',
-    modelSwitching: { model: true, reasoningEffort: false },
+    // Model and `--effort` apply on the next idle turn via respawn-with-resume.
+    modelSwitching: { model: true, reasoningEffort: true },
   },
   codex: {
     attachments: { image: true, text: true, pdf: false },
@@ -73,8 +74,21 @@ export const PROVIDER_CAPABILITIES: Readonly<Record<Provider, ProviderCapabiliti
     approvals: 'fixed-never',
     goals: false,
     branching: 'unsupported',
-    // --model applies at spawn; agy has no mid-session switch Lattice drives.
-    modelSwitching: { model: true, reasoningEffort: false },
+    // Model and thinking level combine into one id (e.g. gemini-4-neon-high)
+    // and apply on the next idle turn via respawn-with-resume.
+    modelSwitching: { model: true, reasoningEffort: true },
+  },
+  inkling: {
+    // A local text model: attached text goes inline, images and PDFs are refused.
+    attachments: { image: false, text: true, pdf: false },
+    interactiveQuestions: false,
+    // Every shell command and file change asks; the permission bridge answers
+    // from the conversation's mode, its allowlists or an approval card.
+    approvals: 'interactive',
+    goals: false,
+    branching: 'unsupported',
+    // One local model, nothing to switch to.
+    modelSwitching: { model: false, reasoningEffort: false },
   },
 };
 

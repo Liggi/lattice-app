@@ -16,6 +16,8 @@
  * - content / input:sent / turn:end / stop:requested → reassess what a worker is doing, for its card
  * - turn:end → compact the session if its context is over the threshold
  * - turn:end / run:end / run:error → drain the session's inbox into its next turn
+ *   (after run:error, on a backoff, and not at all once its retry circuit is open)
+ * - healthy turn:end → close the session's retry circuit
  * - turn:end → keep the conversation's hand-off record current
  * - turn:end → notify the user's devices that a turn ended on a reply for them
  * - run:end / run:error → push session-idle + flush the hand-off record
@@ -30,13 +32,13 @@
  * side effects only forward event-driven pushes through its emitter.
  */
 
-import type { SessionEvent } from '@liggi/agent-ui-harness/protocol';
+import type { RunErrorData, SessionEvent, TurnEndData } from '@liggi/agent-ui-harness/protocol';
 import { createLogger } from '../services/infrastructure/logger.js';
 import { InsightsEngine } from '../services/insights/insights-engine.js';
 import { ConversationService } from '../services/sessions/conversation-service.js';
 import { deliverWorkerReport } from '../services/sessions/worker-report-delivery.js';
 import { noteWorkerActivity, noteWorkerRuntimeChange } from '../services/sessions/worker-activity.js';
-import { drainInbox } from '../services/sessions/session-inbox.js';
+import { drainAfterRunFailure, drainInbox, resetRetryCircuit } from '../services/sessions/session-inbox.js';
 import { noteRunEnd } from '../services/sessions/restart-carry-on.js';
 import { settleHeldDeliveries } from '../services/sessions/held-delivery-settlement.js';
 import { maybeAutoCompact } from '../services/sessions/context-compaction.js';
@@ -97,6 +99,8 @@ export function createEventSideEffectsCallback(
           registry.notifyIdle(event.sessionId);
           void NotificationService.getInstance().notifyTurnFinished(event.sessionId);
         }
+        // A turn that ended without an error proves the run works again.
+        if (!(event.data as TurnEndData | undefined)?.error) resetRetryCircuit(event.sessionId, 'turn-succeeded');
         void InsightsEngine.getInstance().onTurnEnd(event.sessionId);
         void deliverWorkerReport(event.sessionId);
         noteWorkerActivity(event.sessionId);
@@ -129,7 +133,16 @@ export function createEventSideEffectsCallback(
         const drainLater = event.type === 'run:end' && noteRunEnd(event);
         // With the process gone, a message it had queued but not started is
         // settled from the transcript before the drain looks for work.
-        void settleHeldDeliveries(event.sessionId).then(() => (drainLater ? undefined : drainInbox(event.sessionId)));
+        // A run that failed is retried on a backoff, and not at all once it
+        // has failed three times in two minutes: each drain into a process
+        // that cannot start ends in another run:error (85k of them in four
+        // minutes on 2026-11-20).
+        const failure = event.type === 'run:error' ? (event.data as RunErrorData | undefined)?.message ?? 'The session could not start' : null;
+        void settleHeldDeliveries(event.sessionId).then(() => {
+          if (drainLater) return undefined;
+          if (failure !== null) return drainAfterRunFailure(event.sessionId, failure);
+          return drainInbox(event.sessionId);
+        });
         break;
       }
       default:

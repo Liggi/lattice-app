@@ -20,6 +20,7 @@ export function providerForModel(model: string | null | undefined, endpointModel
   const id = bare?.toLowerCase();
   if (!id) return undefined;
   if (id.startsWith('agy:')) return 'antigravity';
+  if (id.startsWith('inkling:')) return 'inkling';
   // opencode ids are its own `provider/model`, whatever model they name.
   if (id.includes('/')) return 'opencode';
   if (id.startsWith('claude-') || CLAUDE_ALIASES.has(id)) return 'claude';

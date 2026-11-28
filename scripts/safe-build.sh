@@ -19,6 +19,10 @@ for arg in "$@"; do
   esac
 done
 
+# A server run from source serves the new dist/web at once and is not one
+# --deploy restarts; refuse when it is behind the server-side source.
+pnpm exec tsx scripts/check-server-skew.ts
+
 # shellcheck source=scripts/build-lock.sh
 source "$PROJECT_DIR/scripts/build-lock.sh"
 acquire_lock

@@ -12,7 +12,7 @@ describe('provider capability contract', () => {
       approvals: 'interactive',
       goals: false,
       branching: 'history-copy',
-      modelSwitching: { model: true, reasoningEffort: false },
+      modelSwitching: { model: true, reasoningEffort: true },
     });
   });
 
@@ -26,5 +26,16 @@ describe('provider capability contract', () => {
       modelSwitching: { model: true, reasoningEffort: true },
     });
     expect(supportsAttachments('codex')).toBe(true);
+  });
+
+  it('describes Inkling as a local text model with bridged approvals', () => {
+    expect(getProviderCapabilities('inkling')).toEqual({
+      attachments: { image: false, text: true, pdf: false },
+      interactiveQuestions: false,
+      approvals: 'interactive',
+      goals: false,
+      branching: 'unsupported',
+      modelSwitching: { model: false, reasoningEffort: false },
+    });
   });
 });

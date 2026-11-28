@@ -51,6 +51,14 @@ describe('keys import', () => {
     expect(fs.existsSync(file)).toBe(false);
   });
 
+  it('saves a Slack user token under its own section, for Slack draft cards to post with', async () => {
+    fs.writeFileSync(file, JSON.stringify({ slack: 'xoxp-test-2222' }));
+    const sent: Record<string, { apiKey: string }>[] = [];
+
+    expect(await importKeyFile(file, savedAs(sent))).toEqual(['Slack user token']);
+    expect(sent).toEqual([{ slack: { apiKey: 'xoxp-test-2222' } }]);
+  });
+
   it('skips a key the file leaves out or leaves empty', async () => {
     fs.writeFileSync(file, JSON.stringify({ typesafe: TYPESAFE, anthropic: '' }));
     const sent: Record<string, { apiKey: string }>[] = [];

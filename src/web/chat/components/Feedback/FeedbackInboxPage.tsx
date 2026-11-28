@@ -173,8 +173,8 @@ function InboxItem({ item, onMark }: { item: FeedbackInboxItem; onMark: (changes
   );
 }
 
-/** The collector owner's feedback inbox: newest first, read and done kept locally. */
-export function FeedbackInboxPage({ sidebarOpen, onToggleSidebar }: { sidebarOpen: boolean; onToggleSidebar: () => void }): JSX.Element {
+/** The collector owner's feedback inbox content, shared by Inbox → Feedback and `/feedback`. */
+export function FeedbackInboxBody(): JSX.Element {
   const queryClient = useQueryClient();
   const [view, setView] = useState<FeedbackInboxView>('unread');
   const [refreshing, setRefreshing] = useState(false);
@@ -201,8 +201,65 @@ export function FeedbackInboxPage({ sidebarOpen, onToggleSidebar }: { sidebarOpe
     }
   };
 
-  const emptyText = view === 'unread' ? 'Nothing unread.' : view === 'flagged' ? 'Nothing flagged.' : 'No feedback yet.';
+  const emptyText = view === 'unread' ? 'Nothing unread' : view === 'flagged' ? 'Nothing flagged' : 'No feedback yet';
 
+  return (
+    <div className="flex-1 overflow-y-auto" data-testid="feedback-inbox-body">
+      <div className="max-w-3xl mx-auto">
+        <div className="flex items-center justify-between gap-2 px-4 pt-3 pb-2">
+          <div className="flex items-center gap-1" role="tablist" aria-label="Feedback filter">
+            {VIEWS.map(([key, label]) => (
+              <button
+                key={key}
+                type="button"
+                role="tab"
+                aria-selected={view === key}
+                onClick={() => setView(key)}
+                className={`flex items-center gap-1.5 px-3 py-1 text-[13px] rounded-md transition-colors cursor-pointer ${
+                  view === key ? 'bg-surface-2 text-fg' : 'text-fg-2 hover:text-fg'
+                }`}
+              >
+                <span>{label}</span>
+                {data && data.counts[key] > 0 && <span className="font-mono text-[11px] text-fg-3">{data.counts[key]}</span>}
+              </button>
+            ))}
+          </div>
+          <button
+            type="button"
+            onClick={() => void refresh()}
+            disabled={refreshing}
+            title="Check for new feedback"
+            aria-label="Check for new feedback"
+            className="p-1.5 ui-icon-btn text-fg-3 disabled:opacity-50"
+          >
+            <RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} />
+          </button>
+        </div>
+
+        {data?.refreshError && (
+          <div className="mx-4 mb-2 flex items-start gap-2 text-xs text-amber-300">
+            <AlertTriangle size={14} className="shrink-0 mt-px" />
+            <span>
+              Could not check for new feedback: {data.refreshError}
+              {data.lastRefreshAt ? ` Showing what arrived up to ${new Date(data.lastRefreshAt).toLocaleString()}.` : ''}
+            </span>
+          </div>
+        )}
+        {error && <p className="px-4 py-2 text-xs text-rose-300">{error instanceof Error ? error.message : String(error)}</p>}
+        {isLoading && <Loader2 size={16} className="mx-4 my-3 animate-spin text-fg-3" />}
+        {data && data.items.length === 0 && <p className="px-4 py-6 text-sm text-fg-3">{emptyText}</p>}
+        <div className="border-t border-line">
+          {data?.items.map((item) => (
+            <InboxItem key={item.id} item={item} onMark={(changes) => void mark(item.id, changes)} />
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** The collector owner's feedback inbox: newest first, read and done kept locally. */
+export function FeedbackInboxPage({ sidebarOpen, onToggleSidebar }: { sidebarOpen: boolean; onToggleSidebar: () => void }): JSX.Element {
   return (
     <div className={`flex-1 min-w-0 flex flex-col h-full overflow-hidden ${sidebarOpen ? 'hidden md:flex' : ''}`}>
       <div className="relative flex items-center justify-between gap-3 h-[52px] px-4 bg-bg border-b border-line flex-shrink-0">
@@ -223,50 +280,9 @@ export function FeedbackInboxPage({ sidebarOpen, onToggleSidebar }: { sidebarOpe
           )}
           <span className="text-sm text-fg-2">Feedback</span>
         </div>
-        <div className="flex items-center gap-2 text-[11px] text-fg-3">
-          {data?.lastRefreshAt && <span className="hidden sm:inline">Updated {ago(data.lastRefreshAt)}</span>}
-          <button onClick={() => void refresh()} disabled={refreshing} aria-label="Check for new feedback" className="p-1.5 ui-icon-btn disabled:opacity-50">
-            <RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} />
-          </button>
-        </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto">
-        <div className="max-w-3xl mx-auto">
-          <div className="flex items-center gap-1 px-4 pt-3 pb-2">
-            {VIEWS.map(([key, label]) => (
-              <button
-                key={key}
-                onClick={() => setView(key)}
-                className={`flex items-center gap-1.5 px-3 py-1 text-[13px] rounded-md transition-colors cursor-pointer ${
-                  view === key ? 'bg-surface-2 text-fg' : 'text-fg-2 hover:text-fg'
-                }`}
-              >
-                <span>{label}</span>
-                {data && <span className="font-mono text-[11px] text-fg-3">{data.counts[key]}</span>}
-              </button>
-            ))}
-          </div>
-
-          {data?.refreshError && (
-            <div className="mx-4 mb-2 flex items-start gap-2 text-xs text-amber-300">
-              <AlertTriangle size={14} className="shrink-0 mt-px" />
-              <span>
-                Could not check for new feedback: {data.refreshError}
-                {data.lastRefreshAt ? ` Showing what arrived up to ${new Date(data.lastRefreshAt).toLocaleString()}.` : ''}
-              </span>
-            </div>
-          )}
-          {error && <p className="px-4 py-2 text-xs text-rose-300">{error instanceof Error ? error.message : String(error)}</p>}
-          {isLoading && <Loader2 size={16} className="mx-4 my-3 animate-spin text-fg-3" />}
-          {data && data.items.length === 0 && <p className="px-4 py-6 text-sm text-fg-3">{emptyText}</p>}
-          <div className="border-t border-line">
-            {data?.items.map((item) => (
-              <InboxItem key={item.id} item={item} onMark={(changes) => void mark(item.id, changes)} />
-            ))}
-          </div>
-        </div>
-      </div>
+      <FeedbackInboxBody />
     </div>
   );
 }

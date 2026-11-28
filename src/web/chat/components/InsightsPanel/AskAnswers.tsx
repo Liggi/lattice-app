@@ -14,11 +14,14 @@ import { remarkSlackBullets } from '../../utils/slack-bullets';
 import { markdownComponents } from '../MessageList/MessageItem';
 import { askAnswers, type ParsedAsk } from '@/types/ask-text';
 
+const CYAN_SEND = 'rounded-md bg-cyan-400 px-3.5 py-1.5 text-[13px] font-medium text-stone-950 hover:bg-cyan-300 disabled:bg-white/[0.06] disabled:text-fg-3';
+
 const BOX = 'w-full resize-y rounded-md border border-white/[0.08] bg-bg/70 px-3 py-2 text-[13.5px] leading-[1.5] text-fg placeholder:text-fg-3 focus:border-cyan-400/50 focus:outline-none';
 
 /** The one action row: the ways out (Park, Dismiss) quiet on the left, Send on the right. */
-function SendRow({ footer, sending, disabled = false, label, onSend }: {
+function SendRow({ footer, sending, disabled = false, label, onSend, sendClassName = CYAN_SEND }: {
   footer?: React.ReactNode;
+  sendClassName?: string;
   sending: boolean;
   disabled?: boolean;
   label: string;
@@ -33,7 +36,7 @@ function SendRow({ footer, sending, disabled = false, label, onSend }: {
         data-testid="ask-send"
         disabled={sending || disabled}
         onClick={onSend}
-        className="rounded-md bg-cyan-400 px-3.5 py-1.5 text-[13px] font-medium text-stone-950 hover:bg-cyan-300 disabled:bg-white/[0.06] disabled:text-fg-3"
+        className={sendClassName}
       >
         {sending ? 'Sending' : label}
       </button>
@@ -42,8 +45,11 @@ function SendRow({ footer, sending, disabled = false, label, onSend }: {
 }
 
 /** An ask with no numbered questions: as written, and one box. */
-export function AskWords({ text, sending, onSend, footer }: {
+export function AskWords({ text, sending, onSend, footer, sendClassName, placeholder = 'Your answer' }: {
   text: string;
+  /** The Send button's classes, where the surface's primary action is not cyan. */
+  sendClassName?: string;
+  placeholder?: string;
   sending: boolean;
   onSend: (text: string) => void;
   footer?: React.ReactNode;
@@ -61,17 +67,19 @@ export function AskWords({ text, sending, onSend, footer }: {
         disabled={sending}
         onChange={(event) => setWords(event.target.value)}
         onKeyDown={(event) => { if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) send(); }}
-        placeholder="Your answer"
-        aria-label="Your answer"
+        placeholder={placeholder}
+        aria-label={placeholder}
         className={`${BOX} mt-4`}
       />
-      <SendRow footer={footer} sending={sending} disabled={!words.trim()} label="Send" onSend={send} />
+      <SendRow footer={footer} sending={sending} disabled={!words.trim()} label="Send" onSend={send} sendClassName={sendClassName} />
     </div>
   );
 }
 
-export function AskAnswers({ ask, sending, onSend, footer }: {
+export function AskAnswers({ ask, sending, onSend, footer, sendClassName }: {
   ask: ParsedAsk;
+  /** The Send button's classes, where the surface's primary action is not cyan. */
+  sendClassName?: string;
   sending: boolean;
   onSend: (text: string) => void;
   /** The ways out (Park, Dismiss), on Send's line. */
@@ -124,7 +132,7 @@ export function AskAnswers({ ask, sending, onSend, footer }: {
           );
         })}
       </ol>
-      <SendRow footer={footer} sending={sending} label="Send answers" onSend={() => onSend(askAnswers(ask.questions, answers))} />
+      <SendRow footer={footer} sending={sending} label="Send answers" onSend={() => onSend(askAnswers(ask.questions, answers))} sendClassName={sendClassName} />
     </div>
   );
 }

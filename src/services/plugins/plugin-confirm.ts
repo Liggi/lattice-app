@@ -19,7 +19,7 @@ export function askPluginConfirm(
     card.question,
     card.options.map((option) => ({ label: option.label, consequence: option.consequence, recommended: option.recommended === true })),
     undefined,
-    { detail: card.detail, action: { plugin, name: action.name, payload: action.payload, runs: card.runs } },
+    { detail: card.detail, view: card.view, action: { plugin, name: action.name, payload: action.payload, runs: card.runs } },
   );
   return { cardId: id, replaced: replaced !== null };
 }

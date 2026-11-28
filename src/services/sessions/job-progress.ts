@@ -53,7 +53,8 @@ export { PROCESS_ENDED_REASON };
 export type JobSource =
   | { kind: 'files'; glob: string }
   | { kind: 'lines'; file: string; match?: string }
-  | { kind: 'command'; command: string; cwd: string; every: number };
+  | { kind: 'command'; command: string; cwd: string; every: number }
+  | { kind: 'events'; file?: string };
 
 /** The count at a moment it changed. */
 export interface JobSample {
@@ -71,10 +72,30 @@ export interface JobProgress {
   /** The count as last read. */
   done: number;
   total: number;
+  /** Optional unit name ("conversations", "files", "examples"). */
+  unit?: string;
+  /** Items cleanly skipped or filtered out during the run. */
+  skipped?: number;
+  /** Per-item failures recorded during the run. */
+  failedCount?: number;
+  /** Current stage subtitle for multi-step jobs. */
+  stage?: string;
+  /** Latest plain status note from the job. */
+  message?: string;
   /** Where the total was measured, when it was ("lines in /x/input.jsonl"); absent when the agent stated it. */
   totalFrom?: string;
-  /** The process doing the work, when the agent named it. */
+  /** The process doing the work, when the agent named it or `lattice run` spawned it. */
   pid?: number;
+  /** Process group id owned by `lattice run`, for reliable Stop. */
+  pgid?: number;
+  /** True when launched and owned by `lattice run` (exact exit code + log tail + Stop). */
+  managed?: boolean;
+  /** Command string launched by `lattice run`. */
+  command?: string;
+  /** Exact exit code reported by `lattice run` when the process ended. */
+  exitCode?: number;
+  /** Rolling tail of stdout/stderr captured by `lattice run`. */
+  logTail?: string[];
   /** How long one item takes, as the agent said: how long "Starting" may last before it turns amber. */
   each?: number;
   /** When the job was started. */
@@ -85,13 +106,15 @@ export interface JobProgress {
   reportedAt: number;
   /** When the count last changed (the start, until it moves). */
   movedAt: number;
+  /** When a `lattice run` command last printed output or sent a stage or message; how a job without a count shows it is alive. */
+  lastOutputAt?: number;
   /** The start, then every move, oldest first; the rate comes from these. */
   samples?: JobSample[];
   /** Set while reads fail: the latest error in full, since when, and how many reads in a row. */
   readError?: { message: string; since: number; failures: number };
-  /** Set once the count reached the total. */
+  /** Set once the job completed cleanly (reached total, or exited 0 under `lattice run`). */
   finishedAt?: number;
-  /** Set when the job stopped without finishing, with why. */
+  /** Set when the job stopped or failed without completing cleanly, with why. */
   stopped?: string;
   /** Set with `stopped` when the server ended the job because its worker stopped working without ending it. */
   abandoned?: true;
@@ -102,9 +125,37 @@ export interface JobStart {
   label: string;
   source: JobSource;
   total: number;
+  unit?: string;
   totalFrom?: string;
   pid?: number;
+  pgid?: number;
+  managed?: boolean;
+  command?: string;
   each?: number;
+}
+
+export interface JobUpdatePatch {
+  done?: number;
+  total?: number;
+  skipped?: number;
+  failedCount?: number;
+  stage?: string;
+  message?: string;
+  logTail?: string[];
+  /** When the command last printed output, as `lattice run` saw it. */
+  outputAt?: number;
+}
+
+export interface JobFinishInput {
+  exitCode: number;
+  done?: number;
+  total?: number;
+  skipped?: number;
+  failedCount?: number;
+  stage?: string;
+  message?: string;
+  logTail?: string[];
+  reason?: string;
 }
 
 /** What one read of the count gave. */
@@ -143,9 +194,10 @@ export class JobProgressStore {
     const label = input.label.trim();
     if (!label) throw new ProgressError('A job needs a label.');
     if (label.length > MAX_LABEL) throw new ProgressError(`Keep the label under ${MAX_LABEL} characters; it is one line in a narrow panel.`);
-    if (!Number.isInteger(input.total) || input.total <= 0) throw new ProgressError('The total must be a whole number above 0.');
+    const indeterminate = input.managed === true && input.source.kind === 'events' && input.total === 0;
+    if (!indeterminate && (!Number.isInteger(input.total) || input.total <= 0)) throw new ProgressError('The total must be a whole number above 0.');
     if (input.each !== undefined && (!Number.isFinite(input.each) || input.each <= 0)) throw new ProgressError('--each needs a length of time, such as 25m.');
-    if (count >= input.total) throw new ProgressError(`The count is already ${count.toLocaleString('en-GB')} of ${input.total.toLocaleString('en-GB')}: there is nothing left to count, so this would not be a running job. Check the source and the total.`);
+    if (!indeterminate && count >= input.total) throw new ProgressError(`The count is already ${count.toLocaleString('en-GB')} of ${input.total.toLocaleString('en-GB')}: there is nothing left to count, so this would not be a running job. Check the source and the total.`);
     const jobs = this.read(now);
     const index = jobs.findIndex((job) => job.session === input.session && job.label === label);
     const previous = index >= 0 ? jobs[index] : undefined;
@@ -155,8 +207,12 @@ export class JobProgressStore {
     const fields = {
       source: input.source,
       total: input.total,
+      ...(input.unit ? { unit: input.unit } : {}),
       ...(input.totalFrom ? { totalFrom: input.totalFrom } : {}),
       ...(input.pid !== undefined ? { pid: input.pid } : {}),
+      ...(input.pgid !== undefined ? { pgid: input.pgid } : {}),
+      ...(input.managed ? { managed: true } : {}),
+      ...(input.command ? { command: input.command } : {}),
       ...(input.each !== undefined ? { each: input.each } : {}),
     };
     // A job the server ended under a worker that went quiet, started again,
@@ -169,6 +225,87 @@ export class JobProgressStore {
     this.write(jobs);
     this.changed(job);
     return job;
+  }
+
+  /**
+   * Push structured progress, stage, message, or log tail updates from a
+   * managed `lattice run` wrapper (or `lattice job update`).
+   */
+  update(session: string, label: string, patch: JobUpdatePatch, now = Date.now()): JobProgress | null {
+    const jobs = this.read(now);
+    const index = jobs.findIndex((job) => job.session === session && job.label === label.trim());
+    if (index < 0 || endedAt(jobs[index]) !== undefined) return null;
+    const previous = jobs[index];
+    const nextDone = patch.done !== undefined && Number.isFinite(patch.done) && patch.done >= 0 ? Math.floor(patch.done) : previous.done;
+    const nextTotal = patch.total !== undefined && Number.isInteger(patch.total) && patch.total >= 0 ? patch.total : previous.total;
+    const movePatch = nextDone !== previous.done ? moved(previous, nextDone, now) : {};
+    const { readError: _cleared, ...rest } = previous;
+    const outputAt = lastOutput(previous, patch, now);
+    const next: JobProgress = {
+      ...(nextDone !== previous.done ? rest : previous),
+      ...(outputAt !== undefined ? { lastOutputAt: outputAt } : {}),
+      ...movePatch,
+      total: nextTotal,
+      reportedAt: now,
+      ...(patch.skipped !== undefined ? { skipped: Math.max(0, Math.floor(patch.skipped)) } : {}),
+      ...(patch.failedCount !== undefined ? { failedCount: Math.max(0, Math.floor(patch.failedCount)) } : {}),
+      ...(patch.stage !== undefined ? { stage: patch.stage.trim() || undefined } : {}),
+      ...(patch.message !== undefined ? { message: patch.message.trim() || undefined } : {}),
+      ...(patch.logTail !== undefined ? { logTail: patch.logTail.slice(-40) } : {}),
+    };
+    // For non-managed jobs, reaching total finishes immediately; for `lattice run`
+    // managed jobs we wait for process exit so post-processing and exit code are truthful.
+    if (!next.managed && next.total > 0 && next.done >= next.total) {
+      next.finishedAt = now;
+    }
+    jobs[index] = next;
+    this.write(jobs);
+    const visualChange = next.done !== previous.done
+      || next.total !== previous.total
+      || next.skipped !== previous.skipped
+      || next.failedCount !== previous.failedCount
+      || next.stage !== previous.stage
+      || next.message !== previous.message
+      || endedAt(next) !== undefined;
+    if (visualChange) this.changed(next);
+    return next;
+  }
+
+  /**
+   * Record the exact exit outcome of a `lattice run` managed job.
+   * Exit code 0 always finishes cleanly (even when `done < total` due to
+   * skipped/filtered items); non-zero exit records a failure with exit code.
+   */
+  finish(session: string, label: string, outcome: JobFinishInput, now = Date.now()): JobProgress | null {
+    const jobs = this.read(now);
+    const index = jobs.findIndex((job) => job.session === session && job.label === label.trim());
+    if (index < 0 || endedAt(jobs[index]) !== undefined) return null;
+    const previous = jobs[index];
+    const nextDone = outcome.done !== undefined && Number.isFinite(outcome.done) && outcome.done >= 0 ? Math.floor(outcome.done) : previous.done;
+    const nextTotal = outcome.total !== undefined && Number.isInteger(outcome.total) && outcome.total >= 0 ? outcome.total : previous.total;
+    const movePatch = nextDone !== previous.done ? moved(previous, nextDone, now) : {};
+    const { readError: _cleared, ...rest } = previous;
+    const next: JobProgress = {
+      ...rest,
+      ...movePatch,
+      total: nextTotal,
+      reportedAt: now,
+      exitCode: outcome.exitCode,
+      ...(outcome.skipped !== undefined ? { skipped: Math.max(0, Math.floor(outcome.skipped)) } : {}),
+      ...(outcome.failedCount !== undefined ? { failedCount: Math.max(0, Math.floor(outcome.failedCount)) } : {}),
+      ...(outcome.stage !== undefined ? { stage: outcome.stage.trim() || undefined } : {}),
+      ...(outcome.message !== undefined ? { message: outcome.message.trim() || undefined } : {}),
+      ...(outcome.logTail !== undefined ? { logTail: outcome.logTail.slice(-40) } : {}),
+    };
+    if (outcome.exitCode === 0) {
+      next.finishedAt = now;
+    } else {
+      next.stopped = outcome.reason?.trim() || `Exited with code ${outcome.exitCode}`;
+    }
+    jobs[index] = next;
+    this.write(jobs);
+    this.changed(next);
+    return next;
   }
 
   /**
@@ -244,6 +381,16 @@ export class JobProgressStore {
     return this.read(now).filter((job) => job.source && endedAt(job) === undefined);
   }
 
+  /** All jobs (active and recently ended within the retention window), newest first. */
+  all(now = Date.now()): JobProgress[] {
+    return this.read(now).sort((a, b) => b.startedAt - a.startedAt);
+  }
+
+  /** Look up one job by session and label. */
+  get(session: string, label: string, now = Date.now()): JobProgress | undefined {
+    return this.read(now).find((job) => job.session === session && job.label === label);
+  }
+
   /**
    * When the server first runs with counted jobs: copy the file aside as it
    * was, once, so the hand-reported records outlive the week this file keeps
@@ -288,6 +435,14 @@ export class JobProgressStore {
 }
 
 export class ProgressError extends Error {}
+
+/** The job's last sign of output after this update: new output, or a stage or message, advance it; never past now. */
+function lastOutput(job: JobProgress, patch: JobUpdatePatch, now: number): number | undefined {
+  const reported = patch.outputAt !== undefined && Number.isFinite(patch.outputAt) ? Math.min(patch.outputAt, now) : undefined;
+  const signalled = patch.stage !== undefined || patch.message !== undefined ? now : undefined;
+  const latest = Math.max(job.lastOutputAt ?? 0, reported ?? 0, signalled ?? 0);
+  return latest > 0 ? latest : undefined;
+}
 
 /** The count and samples after a read of `count`. */
 function moved(job: JobProgress, count: number, now: number): Pick<JobProgress, 'done' | 'movedAt' | 'samples'> {

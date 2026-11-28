@@ -103,6 +103,8 @@ export interface ComposerRuntimeConfig {
   /** True when the serving model differs from the session's configured model
    *  (provider capacity fallback, e.g. Fable → Opus). */
   sessionModelFallback?: boolean;
+  /** How to name `sessionModel` when the badge is not a selector; defaults to the id with Claude's prefix and date dropped. */
+  sessionModelLabel?: string;
   /** Models the user may pick from. When non-empty and onModelChange is
    *  provided, the model badge becomes an interactive selector. */
   availableModels?: Array<{
@@ -118,6 +120,10 @@ export interface ComposerRuntimeConfig {
     group?: string;
     /** A faint second line under the label in the rail layout, such as the server's host. */
     detail?: string;
+    /** Effort levels this model supports (lowest → highest). When present on models in a group, the rail menu renders the 2D Model × Effort pad. */
+    efforts?: string[];
+    /** Default effort level id for this model (used by the 2D pad and badge). */
+    defaultEffort?: string;
   }>;
   /** 'rows' (the default) lists every model; 'rail' shows one group at a time beside a column of group marks. */
   modelMenuLayout?: 'rows' | 'rail';
@@ -134,11 +140,18 @@ export interface ComposerRuntimeConfig {
   /** Reasoning-effort levels the user may pick from (a second selectable
    *  dimension for providers that expose it). When non-empty and onModelChange
    *  is provided, the menu renders a second "Reasoning" radio section. */
-  availableEfforts?: Array<{ id: string; label: string; description?: string; isDefault?: boolean }>;
+  availableEfforts?: Array<{ id: string; label: string; shortLabel?: string; description?: string; isDefault?: boolean }>;
+  /** Rail layout: reasoning-effort levels per model group (keyed by `model.group`),
+   *  so switching tabs shows a group's Reasoning controls / 2D effort axis before
+   *  picking a model from it. */
+  availableEffortsByGroup?: Record<string, Array<{ id: string; label: string; shortLabel?: string; description?: string; isDefault?: boolean }>>;
   /** The effort id the user has chosen; null/undefined means "default". */
   selectedEffort?: string | null;
-  /** Called when the user picks an effort; null means "revert to default". */
-  onEffortChange?: (effortId: string | null) => void;
+  /** Called when the user picks an effort; null means "revert to default". In
+   *  the rail layout, the second argument names the viewed group. */
+  onEffortChange?: (effortId: string | null, group?: string) => void;
+  /** Atomic model + effort pick from the 2D pad. Falls back to onModelChange + onEffortChange when omitted. */
+  onModelAndEffortChange?: (modelId: string | null, effortId: string | null, meta: { optionId: string; group?: string }) => void;
 }
 
 export interface ComposerProps {

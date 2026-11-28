@@ -29,7 +29,7 @@
  */
 
 import { createLogger } from '../infrastructure/logger.js';
-import { cannotRead, hasStarted, needsLook } from '../../types/job-stall.js';
+import { cannotRead, hasStarted, isIndeterminateJob, needsLook, quietSince } from '../../types/job-stall.js';
 import { type JobProgress } from './job-progress.js';
 import { processAlive } from './job-count.js';
 import { jobWatch } from './job-watch.js';
@@ -57,8 +57,10 @@ export function jobStallLine(job: JobProgress, owner: JobOwner, now: number): st
   const error = cannotRead(job);
   const what = error !== null
     ? `"${job.label}" can't read its count: ${error}`
-    : !hasStarted(job)
-      ? `"${job.label}" has not finished its first item ${minutes(now - job.startedAt)} after it started${job.each ? ` (its agent said one takes about ${minutes(job.each)})` : ''}`
+    : isIndeterminateJob(job)
+      ? `"${job.label}" has produced no output for ${minutes(now - quietSince(job))}`
+      : !hasStarted(job)
+      ? `"${job.label}" has not finished its first item ${minutes(now - job.startedAt)} after it started${job.each ? ` (its agent said one takes about ${minutes(job.each)})` : ''}${job.lastOutputAt ? `, and its command has printed nothing for ${minutes(now - quietSince(job))}` : ''}`
       : `"${job.label}" is at ${count(job.done)} of ${count(job.total)} and has not moved for ${minutes(now - job.movedAt)}${rhythm(job)}`;
   if (owner.kind === 'coordinator') return `A job you started is stuck: ${what}.`;
   const whose = `A job in Running is stuck: ${what}. It was started by ${owner.worker} (${owner.task}).`;
@@ -152,7 +154,7 @@ export async function checkJobStalls(coordinator: string, now: number = Date.now
       sent.push(text);
     }
 
-    const live = running.filter((job) => !left.has(job) && needsLook(job, now) && now - job.movedAt < STALE_STALL_MS);
+    const live = running.filter((job) => !left.has(job) && needsLook(job, now) && now - quietSince(job) < STALE_STALL_MS);
     if (live.length === 0) {
       if (sent.length > 0) await drainInbox(coordinator);
       return sent;
@@ -178,14 +180,14 @@ export async function checkJobStalls(coordinator: string, now: number = Date.now
         if (!projectArchived && isArchived(state.worker)) continue;
         owner = { kind: 'worker', worker: state.worker, task: state.task, stopped: stoppedOf(state.worker) };
       }
-      // Keyed by the last move, or by when reads began failing, so each new stretch gets one line.
+      // Keyed by the last sign of life (move, or output for a job judged by output), or by when reads began failing, so each new stretch gets one line.
       const deliveryId = cannotRead(job) !== null
         ? `job-unreadable:${job.session}:${job.label}:${job.readError!.since}`
-        : `job-stall:${job.session}:${job.label}:${job.movedAt}`;
+        : `job-stall:${job.session}:${job.label}:${quietSince(job)}`;
       if (alreadyQueued(coordinator, deliveryId)) continue;
       const text = jobStallLine(job, owner, now);
       enqueueInboxItem({ sessionId: coordinator, source: 'agent', sender: SENDER, text, deliveryId });
-      logger.info('A job stalled; told its coordinator', { coordinator, session: job.session, label: job.label, movedAt: job.movedAt });
+      logger.info('A job stalled; told its coordinator', { coordinator, session: job.session, label: job.label, movedAt: job.movedAt, quietSince: quietSince(job) });
       sent.push(text);
     }
     if (sent.length > 0) await drainInbox(coordinator);

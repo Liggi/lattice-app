@@ -22,6 +22,10 @@ export interface DecisionCardProps {
    * not gone to the agent yet: the card shows it with Undo until it goes.
    */
   held?: { answer: string | null; onUndo: () => void | Promise<void> };
+  /** Drawn in place of the first question's detail, on the open and the answered card. */
+  body?: React.ReactNode;
+  /** Options that cannot be chosen now, by label, with why: shown on the option. */
+  blocked?: Record<string, string>;
 }
 
 const RECOMMENDED_SUFFIX = /\s*\(Recommended\)\s*$/i;
@@ -54,7 +58,7 @@ const PRIMARY_BTN = 'px-3 py-1.5 rounded-md bg-cyan-500/10 dark:bg-cyan-400/10 t
  * single-choice question sends on tap; several questions, or a multi-choice
  * one, are chosen first and sent together.
  */
-export function DecisionCard({ questions, answered, closed, onAnswer, canChange, onDismiss, held }: DecisionCardProps): React.JSX.Element {
+export function DecisionCard({ questions, answered, closed, onAnswer, canChange, onDismiss, held, body, blocked }: DecisionCardProps): React.JSX.Element {
   const [reopened, setReopened] = useState(false);
   const [chosen, setChosen] = useState<Record<number, string[]>>({});
   const [writing, setWriting] = useState<Record<number, boolean>>({});
@@ -95,7 +99,7 @@ export function DecisionCard({ questions, answered, closed, onAnswer, canChange,
               : <CheckCircle2 size={14} className="mt-[3px] shrink-0 text-emerald-600 dark:text-emerald-400" />}
             <div className="min-w-0 flex-1">
               <div className={tk.text.muted}>{q.question}</div>
-              {q.detail && <QuestionDetail text={q.detail} />}
+              {i === 0 && body ? <div className="mt-2">{body}</div> : q.detail && <QuestionDetail text={q.detail} />}
               {shown[q.question] && <div className={`${tk.text.heading} whitespace-pre-wrap break-words`}>{displayLabel(shown[q.question])}</div>}
               {i === questions.length - 1 && closed && <div className={`mt-0.5 text-[12px] ${tk.text.muted}`}>{closed}</div>}
             </div>
@@ -166,15 +170,18 @@ export function DecisionCard({ questions, answered, closed, onAnswer, canChange,
               </button>
             )}
           </div>
-          {q.detail && <QuestionDetail text={q.detail} />}
+          {i === 0 && body ? <div className="mt-2">{body}</div> : q.detail && <QuestionDetail text={q.detail} />}
           <div className="mt-2.5 flex flex-col gap-1.5">
             {q.options.map((option) => {
               const selected = !writing[i] && (chosen[i] ?? []).includes(option.label);
+              const blockedWhy = blocked?.[option.label];
+              const enabled = interactive && !blockedWhy;
               return (
                 <button
                   key={option.label}
                   type="button"
-                  disabled={!interactive}
+                  disabled={!enabled}
+                  title={blockedWhy}
                   onClick={() => pick(i, q, option.label)}
                   style={{ touchAction: 'manipulation' }}
                   data-testid="decision-card-option"
@@ -182,7 +189,7 @@ export function DecisionCard({ questions, answered, closed, onAnswer, canChange,
                     selected
                       ? 'border-cyan-500/50 bg-cyan-500/10 dark:border-cyan-400/50 dark:bg-cyan-400/10'
                       : 'border-parchment-200 bg-parchment-50 dark:border-white/[0.08] dark:bg-stone-900/50'
-                  } ${interactive ? 'cursor-pointer hover:border-cyan-500/50 hover:bg-cyan-500/10 dark:hover:border-cyan-400/50 dark:hover:bg-cyan-400/10' : 'opacity-60 cursor-not-allowed'}`}
+                  } ${enabled ? 'cursor-pointer hover:border-cyan-500/50 hover:bg-cyan-500/10 dark:hover:border-cyan-400/50 dark:hover:bg-cyan-400/10' : 'opacity-60 cursor-not-allowed'}`}
                 >
                   <span className="flex items-baseline gap-3">
                     {q.multiSelect && (
@@ -193,7 +200,7 @@ export function DecisionCard({ questions, answered, closed, onAnswer, canChange,
                     <span className={`min-w-0 flex-1 text-sm font-medium leading-[1.5] ${tk.text.heading}`}>{displayLabel(option.label)}</span>
                     {isRecommended(option) && <span className={`shrink-0 text-[11px] ${tk.text.muted}`}>Recommended</span>}
                   </span>
-                  {option.description && <span className={`mt-0.5 block text-[13px] leading-[1.5] ${tk.text.secondary}`}>{displayLabel(option.description)}</span>}
+                  {(blockedWhy ?? option.description) && <span className={`mt-0.5 block text-[13px] leading-[1.5] ${tk.text.secondary}`}>{blockedWhy ?? displayLabel(option.description ?? '')}</span>}
                 </button>
               );
             })}

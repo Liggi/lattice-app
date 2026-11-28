@@ -23,6 +23,7 @@ vi.mock('../../src/web/chat/contexts/ActivityStreamContext.js', () => ({
 
 const { NarrowPanel } = await import('../../src/web/chat/components/InsightsPanel/NarrowPanel.js');
 const { StateOfPlaySection } = await import('../../src/web/chat/components/InsightsPanel/StateOfPlaySection.js');
+const { jobStatus } = await import('../../src/web/chat/components/ConversationView/RunningJobsStrip.js');
 
 const MIN = 60_000;
 const now = Date.now();
@@ -85,6 +86,29 @@ describe('Running, counted from the work', () => {
     act(() => frame?.({ type: 'jobs-changed', sessionId: 'conv-elsewhere' }));
     act(() => frame?.({ type: 'jobs-changed', sessionId: 'conv-coord' }));
     await waitFor(() => expect(fetches).toBe(2));
+  });
+});
+
+describe('Running, for a lattice run job with no count', () => {
+  const sweep = (over: Partial<JobProgress>): JobProgress => ({
+    ...base, source: { kind: 'events' }, managed: true, label: 'Sweep finished', done: 0, total: 0,
+    startedAt: now - 24 * MIN, movedAt: now - 24 * MIN, samples: [{ at: now - 24 * MIN, done: 0 }], ...over,
+  });
+
+  it('reads Running while its command prints and No output once it goes silent, never Starting', async () => {
+    const served = [sweep({ lastOutputAt: now - MIN, stage: 'Run 2 of 3' }), sweep({ label: 'Quiet wait', lastOutputAt: now - 22 * MIN })];
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ jobs: served }), { status: 200 })));
+    draw();
+    const lines = await screen.findAllByTestId('panel-job-running');
+    expect(lines.map((line) => line.textContent)).toEqual(['Quiet wait: no output for 22\u00a0min', 'Running: Sweep finished, 24\u00a0min']);
+    expect(screen.getAllByTestId('panel-job').map((row) => row.getAttribute('data-job-state'))).toEqual(['silent', 'running']);
+    expect(screen.getByTestId('panel-job-stage').textContent).toBe('Run 2 of 3');
+    expect(screen.queryByTestId('panel-job-starting')).toBeNull();
+  });
+
+  it('says the same above the composer', () => {
+    expect(jobStatus(sweep({ lastOutputAt: now - MIN }), now)).toEqual({ kind: 'plain', text: 'running, 24\u00a0min' });
+    expect(jobStatus(sweep({ lastOutputAt: now - 22 * MIN }), now)).toEqual({ kind: 'caution', text: 'no output for 22\u00a0min' });
   });
 });
 

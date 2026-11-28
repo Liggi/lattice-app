@@ -15,9 +15,12 @@ import { AnnotatedMessageLab } from './components/MessageList/AnnotatedMessageLa
 import { GalleryLab } from './components/MessageList/GalleryLab';
 import { MapIndexPage } from './components/LearningMap/MapIndexPage';
 import { MapCanvasPage } from './components/LearningMap/MapCanvasPage';
-import { FeedbackInboxPage } from './components/Feedback/FeedbackInboxPage';
+import { InboxPage } from './components/Inbox/InboxPage';
+import { RunningPage } from './components/Running/RunningPage';
+import { RunningLab } from './components/Running/RunningLab';
 import { PluginsProvider } from './plugins/PluginsContext';
 import { PluginPageView } from './plugins/PluginPageView';
+import { CommandPaletteProvider } from './components/CommandPalette/CommandPalette';
 
 import { ConversationsProvider } from './contexts/ConversationsContext';
 import { ActivityStreamProvider } from './contexts/ActivityStreamContext';
@@ -188,7 +191,7 @@ function NewSessionWrapper(): JSX.Element {
   );
 }
 
-function FeedbackInboxWrapper(): JSX.Element {
+function InboxWrapper(): JSX.Element {
   useSessionTabNavigation(undefined);
 
   const { sidebarOpen, openSidebar, closeSidebar, toggleSidebar } = useSessionsSidebarState();
@@ -201,7 +204,25 @@ function FeedbackInboxWrapper(): JSX.Element {
         onClose={closeSidebar}
         onOpen={openSidebar}
       />
-      <FeedbackInboxPage sidebarOpen={sidebarOpen} onToggleSidebar={toggleSidebar} />
+      <InboxPage sidebarOpen={sidebarOpen} onToggleSidebar={toggleSidebar} />
+    </div>
+  );
+}
+
+function RunningWrapper(): JSX.Element {
+  useSessionTabNavigation(undefined);
+
+  const { sidebarOpen, openSidebar, closeSidebar, toggleSidebar } = useSessionsSidebarState();
+
+  return (
+    <div className="h-full flex overflow-hidden">
+      <CrossSessionSidebar
+        currentSessionId={undefined}
+        isOpen={sidebarOpen}
+        onClose={closeSidebar}
+        onOpen={openSidebar}
+      />
+      <RunningPage sidebarOpen={sidebarOpen} onToggleSidebar={toggleSidebar} />
     </div>
   );
 }
@@ -233,6 +254,7 @@ function ChatApp(): JSX.Element {
                   <TooltipProvider>
                   <ToastProvider>
                   <PluginsProvider>
+                  <CommandPaletteProvider>
                     <AttentionFaviconController />
                     <Routes>
                       {/* Home is the most recent session. */}
@@ -251,10 +273,24 @@ function ChatApp(): JSX.Element {
                           <NewSessionWrapper />
                         </Layout>
                       } />
-                      <Route path="/feedback" element={
+                      <Route path="/inbox" element={
                         <Layout>
-                          <FeedbackInboxWrapper />
+                          <InboxWrapper />
                         </Layout>
+                      } />
+                      <Route path="/running" element={
+                        <Layout>
+                          <RunningWrapper />
+                        </Layout>
+                      } />
+                      <Route path="/p/run-monitor" element={
+                        <Navigate to="/running" replace />
+                      } />
+                      <Route path="/p/run-monitor/*" element={
+                        <Navigate to="/running" replace />
+                      } />
+                      <Route path="/feedback" element={
+                        <Navigate to="/inbox?tab=feedback" replace />
                       } />
                       <Route path="/p/:pluginId/*" element={
                         <Layout>
@@ -287,6 +323,11 @@ function ChatApp(): JSX.Element {
                       <Route path="/lab/gallery" element={
                         <GalleryLab />
                       } />
+                      <Route path="/lab/running" element={
+                        <Layout>
+                          <RunningLab />
+                        </Layout>
+                      } />
                       {/* Learning map */}
                       <Route path="/map" element={
                         <MapIndexPage />
@@ -312,6 +353,7 @@ function ChatApp(): JSX.Element {
                         </div>
                       } />
                     </Routes>
+                  </CommandPaletteProvider>
                   </PluginsProvider>
                   </ToastProvider>
                   </TooltipProvider>

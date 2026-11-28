@@ -168,8 +168,8 @@ test.describe('Compact History Replay', () => {
     await expect(contextDetails).toContainText('Current context');
     await contextDetails.getByTestId('compact-now-button').click();
 
-    await expect(page.getByTestId('compaction-divider')).toContainText(
-      'Context Compacted · Manual · 42K → 13K · 2s',
+    await expect(page.getByTestId('compaction-divider').locator('span > span')).toHaveText(
+      ['Context compacted', 'Manual', '42K → 13K', '2s'],
       { timeout: 15000 },
     );
     // The composer's status bar is the one place that names the state — the

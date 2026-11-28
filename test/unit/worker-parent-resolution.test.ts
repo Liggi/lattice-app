@@ -24,6 +24,7 @@ import {
   resolveIsArchived,
   resolveIsCoordinator,
   resolveParentConversationId,
+  resolveSessionTitle,
 } from '../../src/web/chat/utils/session-identity.js';
 
 // The details route reads messages; these conversations have none, and the
@@ -174,5 +175,24 @@ describe('resolveIsArchived', () => {
   it('is false when neither source says anything', () => {
     expect(resolveIsArchived(undefined, undefined)).toBe(false);
     expect(resolveIsArchived({}, {})).toBe(false);
+  });
+});
+
+describe('resolveSessionTitle', () => {
+  it('prefers the list row title when the row exists', () => {
+    expect(resolveSessionTitle('Row title', { sessionInfo: { custom_name: 'Named' } }, 'Task')).toBe('Row title');
+  });
+
+  it('gives a worker with no list row its dispatched task', () => {
+    expect(resolveSessionTitle(null, { sessionInfo: { custom_name: '', project_name: null } }, 'Fix mobile regressions')).toBe('Fix mobile regressions');
+  });
+
+  it('uses a name set on the session before the task', () => {
+    expect(resolveSessionTitle(null, { sessionInfo: { custom_name: 'Renamed' } }, 'Task')).toBe('Renamed');
+  });
+
+  it('is null when nothing names the session', () => {
+    expect(resolveSessionTitle(null, undefined, null)).toBeNull();
+    expect(resolveSessionTitle('  ', { sessionInfo: { custom_name: '' } }, '')).toBeNull();
   });
 });

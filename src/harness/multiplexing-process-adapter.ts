@@ -3,6 +3,7 @@ import { DaemonProcessAdapter } from './daemon-process-adapter.js';
 import { CodexProcessAdapter } from './codex-process-adapter.js';
 import { OpencodeProcessAdapter } from './opencode-process-adapter.js';
 import { AntigravityProcessAdapter } from './antigravity-process-adapter.js';
+import { InklingProcessAdapter } from './inkling-process-adapter.js';
 import {
   createProviderDriver,
   type ProviderDriver,
@@ -16,17 +17,20 @@ export class MultiplexingProcessAdapter implements ProcessAdapter {
   private readonly codexDriver: ProviderDriver;
   private readonly opencodeDriver: ProviderDriver;
   private readonly antigravityDriver: ProviderDriver;
+  private readonly inklingDriver: ProviderDriver;
 
   constructor(
     private readonly claudeAdapter: DaemonProcessAdapter,
     private readonly codexAdapter: CodexProcessAdapter,
     private readonly opencodeAdapter: OpencodeProcessAdapter,
     antigravityAdapter: AntigravityProcessAdapter = new AntigravityProcessAdapter(),
+    inklingAdapter: InklingProcessAdapter = new InklingProcessAdapter(),
   ) {
     this.claudeDriver = createProviderDriver('claude', 'claude-daemon', claudeAdapter);
     this.codexDriver = createProviderDriver('codex', 'codex-app-server', codexAdapter);
     this.opencodeDriver = createProviderDriver('opencode', 'opencode-server', opencodeAdapter);
     this.antigravityDriver = createProviderDriver('antigravity', 'antigravity-cli', antigravityAdapter);
+    this.inklingDriver = createProviderDriver('inkling', 'inkling-cli', inklingAdapter);
   }
 
   async spawn(config: SpawnConfig): Promise<ProcessHandle> {
@@ -60,6 +64,8 @@ export class MultiplexingProcessAdapter implements ProcessAdapter {
         return this.opencodeDriver;
       case 'antigravity':
         return this.antigravityDriver;
+      case 'inkling':
+        return this.inklingDriver;
       case 'claude':
         return this.claudeDriver;
     }
@@ -75,6 +81,7 @@ export class MultiplexingProcessAdapter implements ProcessAdapter {
     if (provider === 'codex') return this.codexDriver;
     if (provider === 'opencode') return this.opencodeDriver;
     if (provider === 'antigravity') return this.antigravityDriver;
+    if (provider === 'inkling') return this.inklingDriver;
     return this.claudeDriver;
   }
 }

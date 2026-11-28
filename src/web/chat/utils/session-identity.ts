@@ -64,3 +64,25 @@ export function resolveIsArchived(
 ): boolean {
   return summary?.archived ?? details?.sessionInfo?.archived ?? false;
 }
+
+interface TitleDetails {
+  sessionInfo?: { custom_name?: string | null; project_name?: string | null };
+}
+
+/**
+ * The header's title. The list row's title wins when the row exists; an
+ * archived or still-loading worker has none, so a name set on the session
+ * comes next, then the task its project dispatched it with. Null only when
+ * none of these is known.
+ */
+export function resolveSessionTitle(
+  summaryTitle: string | null | undefined,
+  details: TitleDetails | null | undefined,
+  workerTask: string | null | undefined,
+): string | null {
+  return summaryTitle?.trim()
+    || details?.sessionInfo?.custom_name?.trim()
+    || details?.sessionInfo?.project_name?.trim()
+    || workerTask?.trim()
+    || null;
+}

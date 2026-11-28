@@ -2,7 +2,7 @@
 import { NoteMarkdown } from '../LearningMap/article/ArticleMarkdown';
 import React, { type JSX, useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import { SkillHeading } from './SkillHeading';
-import { Code, Lightbulb, AlertTriangle, Copy, Check, FileText, Image, Loader2, ExternalLink, FlaskConical, LayoutDashboard, MessageCircle, Wrench, Brain } from 'lucide-react';
+import { Code, Lightbulb, AlertTriangle, Copy, Check, FileText, Image, Loader2, ExternalLink, FlaskConical, LayoutDashboard, MessageCircle, Wrench } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { remarkSlackBullets } from '../../utils/slack-bullets';
@@ -13,14 +13,16 @@ import { LazyCodeHighlight, MAX_COLLAPSED_LINES } from '../CodeHighlight';
 import { CodeCopyButton } from './CodeCopyButton';
 import { cn } from '@/web/chat/lib/utils';
 import { ViewableImage } from './ImageViewer';
+import { MissingImage } from './MissingImage';
 import { DiagramBlock, DiagramStreamingContext } from './DiagramBlock';
 import type { ChatMessage, ToolResult, QuestionRequest, DisplayContentBlock } from '../../types';
-import { preserveThinkingBreaks } from '../../utils/thinking-text';
+import { ThinkingRow } from './ThinkingRow';
 import { AddReactionButton, AgentReactionChips, ReactionChips, firstLine, useRegisterMessageActions, type ReactionTarget } from '../MessageReactions/MessageReactions';
 import { copyText } from '../../utils/copy-text';
 import { parseAnnotatedMessage } from '../../utils/annotations-format';
 import { parseScreenshotQuote } from '../../utils/image-note-crop';
 import { GalleryBlock } from './GalleryBlock';
+import { MarkdownTable } from './MarkdownTable';
 import { hasVisibleText } from '../../utils/blank-text';
 import { AnnotatedUserMessage } from './AnnotatedUserMessage';
 import { UserText } from './UserText';
@@ -503,21 +505,11 @@ export const markdownComponents: Record<string, React.ComponentType<MarkdownComp
     );
   },
   table({ children }: MarkdownComponentProps) {
-    return (
-      <div data-md-table className="my-3 not-prose">
-        <div className="border border-line rounded-lg overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              {children}
-            </table>
-          </div>
-        </div>
-      </div>
-    );
+    return <MarkdownTable>{children}</MarkdownTable>;
   },
   thead({ children }: MarkdownComponentProps) {
     return (
-      <thead className="bg-surface border-b border-line">
+      <thead className="border-b border-line-2">
         {children}
       </thead>
     );
@@ -526,18 +518,18 @@ export const markdownComponents: Record<string, React.ComponentType<MarkdownComp
     return <tbody className="divide-y divide-line">{children}</tbody>;
   },
   tr({ children }: MarkdownComponentProps) {
-    return <tr className="hover:bg-surface transition-colors">{children}</tr>;
+    return <tr>{children}</tr>;
   },
-  th({ children }: MarkdownComponentProps) {
+  th({ children, style }: MarkdownComponentProps) {
     return (
-      <th className="px-3 py-2 text-left text-xs font-medium text-fg-2">
+      <th style={style as React.CSSProperties | undefined} className="py-1.5 pr-4 last:pr-0 text-left align-bottom text-[12.5px] font-normal text-fg-3">
         {children}
       </th>
     );
   },
-  td({ children }: MarkdownComponentProps) {
+  td({ children, style }: MarkdownComponentProps) {
     return (
-      <td className="px-3 py-2 text-fg">
+      <td style={style as React.CSSProperties | undefined} className="py-[7px] pr-4 last:pr-0 align-top text-fg-2 first:whitespace-nowrap first:text-fg">
         {children}
       </td>
     );
@@ -610,25 +602,31 @@ export const markdownComponents: Record<string, React.ComponentType<MarkdownComp
     );
   },
   img({ src, alt }: MarkdownComponentProps & { src?: string; alt?: string }) {
-    // eslint-disable-next-line react-hooks/rules-of-hooks -- react-markdown renders these as components
-    const url = localImageUrl(src, React.useContext(ImageVersionContext));
-    return (
-      <ViewableImage src={url} alt={alt ?? ''} className="not-prose inline-block my-1 max-w-full cursor-zoom-in">
-        <picture>
-          {url?.startsWith('/api/images?') && /\.png$/i.test(src ?? '') && (
-            <source media="(max-width: 639px)" srcSet={`${url}&variant=phone`} />
-          )}
-          <img
-            src={url}
-            alt={alt ?? ''}
-            loading="lazy"
-            className="block max-w-full h-auto max-h-[70vh] rounded-md border border-line"
-          />
-        </picture>
-      </ViewableImage>
-    );
+    return <MarkdownImage src={src} alt={alt} />;
   }
 };
+
+function MarkdownImage({ src, alt }: { src?: string; alt?: string }): JSX.Element {
+  const url = localImageUrl(src, React.useContext(ImageVersionContext));
+  const [failed, setFailed] = useState(false);
+  if (failed) return <MissingImage alt={alt} />;
+  return (
+    <ViewableImage src={url} alt={alt ?? ''} className="not-prose inline-block my-1 max-w-full cursor-zoom-in">
+      <picture>
+        {url?.startsWith('/api/images?') && /\.png$/i.test(src ?? '') && (
+          <source media="(max-width: 639px)" srcSet={`${url}&variant=phone`} />
+        )}
+        <img
+          src={url}
+          alt={alt ?? ''}
+          loading="lazy"
+          onError={() => setFailed(true)}
+          className="block max-w-full h-auto max-h-[70vh] rounded-md border border-line"
+        />
+      </picture>
+    </ViewableImage>
+  );
+}
 
 /**
  * On a narrow screen a PNG is asked for with variant=phone: the image route then
@@ -640,9 +638,11 @@ export const markdownComponents: Record<string, React.ComponentType<MarkdownComp
  * browser, including a phone. URLs and relative paths are left alone.
  */
 export function localImageUrl(src: string | undefined, version?: string): string | undefined {
-  if (!src || !src.startsWith('/') || src.startsWith('//') || src.startsWith('/api/')) return src;
-  let decoded = src;
-  try { decoded = decodeURI(src); } catch { /* keep as written */ }
+  if (!src) return src;
+  const normalized = src.startsWith('file:///') ? src.slice('file://'.length) : src;
+  if (!normalized.startsWith('/') || normalized.startsWith('//') || normalized.startsWith('/api/')) return src;
+  let decoded = normalized;
+  try { decoded = decodeURI(normalized); } catch { /* keep as written */ }
   return `/api/images?path=${encodeURIComponent(decoded)}${version ? `&v=${encodeURIComponent(version)}` : ''}`;
 }
 
@@ -850,20 +850,7 @@ export function MessageItem({
             // than an empty card. Fable subagent thinking has text and stays.
             const thinkingText = typeof block.thinking === 'string' ? block.thinking : '';
             if (!thinkingText.trim()) return;
-            const blockLabel = 'Thinking';
-            elements.push(
-              <div key={blockId} className="max-w-[68ch]" data-testid="thinking-block">
-                <div className="border border-line rounded-lg overflow-hidden">
-                  <div className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-fg-3">
-                    <Brain size={12} className="flex-shrink-0" />
-                    {blockLabel}
-                  </div>
-                  <div className="px-3 pb-2.5 prose max-w-none text-[13px] leading-relaxed text-fg-2 dark:prose-invert [&_p]:text-fg-2">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{preserveThinkingBreaks(thinkingText)}</ReactMarkdown>
-                  </div>
-                </div>
-              </div>
-            );
+            elements.push(<ThinkingRow key={blockId} text={thinkingText} components={markdownComponents} />);
             return;
           }
 

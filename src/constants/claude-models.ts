@@ -9,9 +9,29 @@ export interface ClaudeModelEntry {
   supersededBy?: string;
 }
 
-// In the order the Claude CLI lists them, with its descriptions, so the list
-// shown when the CLI can't be asked matches what it would have said.
+// Ordered by capability (Fable → Opus → Sonnet → Haiku), newest first within
+// each family, matching the 2D Model × Effort pad.
 export const CLAUDE_MODELS: ClaudeModelEntry[] = [
+  {
+    id: 'claude-fable-5-2',
+    label: 'Fable 5.2',
+    description: 'For your toughest challenges',
+    composerSelectable: true,
+  },
+  {
+    id: 'claude-fable-5-1',
+    label: 'Fable 5.1',
+    description: 'For your toughest challenges',
+    composerSelectable: true,
+    other: true,
+  },
+  {
+    id: 'claude-fable-5',
+    label: 'Fable 5',
+    description: 'Superseded, kept so older runs show their model',
+    composerSelectable: false,
+    supersededBy: 'claude-fable-5-1',
+  },
   {
     id: 'claude-opus-5-5',
     label: 'Opus 5.5',
@@ -47,26 +67,6 @@ export const CLAUDE_MODELS: ClaudeModelEntry[] = [
     supersededBy: 'claude-opus-5-5',
   },
   {
-    id: 'claude-fable-5-2',
-    label: 'Fable 5.2',
-    description: 'For your toughest challenges',
-    composerSelectable: true,
-  },
-  {
-    id: 'claude-fable-5-1',
-    label: 'Fable 5.1',
-    description: 'For your toughest challenges',
-    composerSelectable: true,
-    other: true,
-  },
-  {
-    id: 'claude-fable-5',
-    label: 'Fable 5',
-    description: 'Superseded, kept so older runs show their model',
-    composerSelectable: false,
-    supersededBy: 'claude-fable-5-1',
-  },
-  {
     id: 'claude-sonnet-5-5',
     label: 'Sonnet 5.5',
     description: 'Most efficient for simpler tasks',
@@ -93,6 +93,38 @@ export const CLAUDE_MODELS: ClaudeModelEntry[] = [
     composerSelectable: true,
   },
 ];
+
+export interface ClaudeEffortEntry {
+  id: string;
+  label: string;
+  shortLabel?: string;
+  description: string;
+  isDefault?: boolean;
+}
+
+export const CLAUDE_EFFORTS: ClaudeEffortEntry[] = [
+  { id: 'default', label: 'Default', shortLabel: 'Default', description: 'Claude CLI default reasoning effort', isDefault: true },
+  { id: 'low', label: 'Low', shortLabel: 'Low', description: 'Fast responses with minimal thinking' },
+  { id: 'medium', label: 'Medium', shortLabel: 'Med', description: 'Balanced reasoning for everyday tasks' },
+  { id: 'high', label: 'High', shortLabel: 'High', description: 'Deeper reasoning for complex problems' },
+  { id: 'xhigh', label: 'Extra high', shortLabel: 'X-high', description: 'Extended reasoning for demanding work' },
+  { id: 'max', label: 'Max', shortLabel: 'Max', description: 'Maximum reasoning depth' },
+];
+
+export const DEFAULT_CLAUDE_EFFORT = 'default';
+
+/** Effort levels a Claude model supports, matching `claude --effort`. */
+export function effortsForClaudeModel(id: string): string[] {
+  const lower = id.toLowerCase();
+  if (lower.includes('haiku')) return ['default'];
+  if (/sonnet-5($|-\d|\[)/.test(lower) && !lower.includes('sonnet-5-5')) {
+    return ['default', 'low', 'medium', 'high'];
+  }
+  if (lower.includes('sonnet')) {
+    return ['default', 'low', 'medium', 'high', 'xhigh'];
+  }
+  return ['default', 'low', 'medium', 'high', 'xhigh', 'max'];
+}
 
 export function getClaudeModel(id: string): ClaudeModelEntry | undefined {
   return CLAUDE_MODELS.find((model) => model.id === id);

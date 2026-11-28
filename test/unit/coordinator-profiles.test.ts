@@ -19,6 +19,13 @@ vi.mock('../../src/session-history/repository.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   ...(await import('./fake-event-reads.js')).fakeEventReads((conversationId) => storedEvents.get(conversationId) ?? []),
 }));
+vi.mock('../../src/harness/harness-custom-events.js', () => ({
+  appendCustomHarnessEvent: (_manager: unknown, conversationId: string, type: string, data: unknown) => {
+    const seq = (storedEvents.get(conversationId)?.length ?? 0) + 100;
+    push(conversationId, type, data, seq);
+    return null;
+  },
+}));
 vi.mock('../../src/services/sessions/coordinator-defaults.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   coordinatorProfileSettings: () => config,
@@ -33,6 +40,7 @@ const { effortProblem, findProfile, profileForNewCoordinator, profileForRecorded
   await import('../../src/constants/coordinator-profiles.js');
 const { DaemonProcessAdapter } = await import('../../src/harness/daemon-process-adapter.js');
 const { ProcessDaemon } = await import('../../src/process-daemon/process-daemon.js');
+const { changeCoordinatorProfile } = await import('../../src/services/sessions/coordinator-profile-change.js');
 
 const NEON_FRONT: CoordinatorProfile = {
   front: { provider: 'antigravity', model: 'agy:gemini-4-neon-high' },
@@ -181,5 +189,113 @@ describe('Claude effort', () => {
     const resume = daemon.buildResumeArgs({ sessionId: 's', message: 'hi', streamingId: 'x', model: 'claude-fable-5-2', effort: 'high' });
     expect(resume.slice(resume.indexOf('--effort'), resume.indexOf('--effort') + 2)).toEqual(['--effort', 'high']);
     expect(daemon.buildStartArgs({ workingDirectory: '/tmp', initialPrompt: 'hi', model: 'claude-opus-5-5' })).not.toContain('--effort');
+  });
+});
+
+describe('moving a running coordinator onto a profile', () => {
+  let status = 'idle';
+  const switches: Array<{ provider: string; model: string }> = [];
+  const deps = () => ({
+    sessionManager: { hasSession: () => true, recoverFromStorage: () => null, inspect: () => ({ status }) } as never,
+    conversationService: ConversationService.getInstance(),
+    settings: config,
+    switchTo: async (target: { provider: string; model: string }) => {
+      switches.push(target);
+      return { status: 'switched', conversationId: 'x', from: target, to: target, segmentId: 's', reply: 'ok' } as never;
+    },
+  });
+  const coordinator = (provider: string, model: string): string => {
+    const id = ConversationService.getInstance().createConversation({
+      workingDirectory: '/tmp', provider: provider as never, providerSessionId: `p-${provider}`, coordinator: true, model,
+    }).conversationId;
+    push(id, 'input:sent', { text: 'go' }, 1);
+    push(id, 'turn:end', {}, 2);
+    return id;
+  };
+  beforeEach(() => { status = 'idle'; switches.length = 0; });
+
+  it('records the profile, keeps a front already on its model, and gives front the new routing on its next input only', async () => {
+    const front = coordinator('antigravity', 'agy:gemini-4-neon-high');
+    expect(await changeCoordinatorProfile(front, { profile: 'neon-front' }, deps())).toMatchObject({ status: 'changed', from: 'opus', to: 'neon-front' });
+    expect(switches).toEqual([]);
+    expect(ConversationService.getInstance().getProfile(front)).toBe('neon-front');
+    const next = buildCoordinatorRestore(front);
+    expect(next).toContain('moved from the "opus" profile to "neon-front"');
+    expect(next).toContain(`session consult --from ${front}`);
+    expect(next).not.toContain(FIXED_ROUTING);
+    push(front, 'input:sent', { text: next + 'hello' }, 200);
+    expect(buildCoordinatorRestore(front)).toBe('');
+  });
+
+  it('reverts to exactly what was there, the model included when the change moved it', async () => {
+    const front = coordinator('claude', 'claude-opus-5-5');
+    await changeCoordinatorProfile(front, { profile: 'neon-front' }, deps());
+    expect(switches).toEqual([{ provider: 'antigravity', model: 'agy:gemini-4-neon-high' }]);
+    expect(await changeCoordinatorProfile(front, { revert: true }, deps())).toMatchObject({ status: 'changed', from: 'neon-front', to: 'opus' });
+    expect(switches[1]).toEqual({ provider: 'claude', model: 'claude-opus-5-5' });
+    expect(ConversationService.getInstance().getProfile(front)).toBeNull();
+    expect(await changeCoordinatorProfile(front, { revert: true }, deps())).toMatchObject({ status: 'refused', code: 'nothing-to-revert' });
+  });
+
+  it('waits for front to be between turns, and refuses a profile nobody defined', async () => {
+    const front = coordinator('antigravity', 'agy:gemini-4-neon-high');
+    status = 'streaming';
+    expect(await changeCoordinatorProfile(front, { profile: 'neon-front' }, deps())).toMatchObject({ status: 'refused', code: 'not-idle' });
+    status = 'idle';
+    expect(await changeCoordinatorProfile(front, { profile: 'fable-front' }, deps())).toMatchObject({ status: 'refused', code: 'unknown-profile' });
+    expect(ConversationService.getInstance().getProfile(front)).toBeNull();
+  });
+});
+
+describe('profile roster for the project panel', () => {
+  const neon: CoordinatorProfile = {
+    chiefOfStaff: { provider: 'claude', model: 'claude-fable-5-2', label: 'Fable 5.2' },
+    workers: [
+      { label: 'Opus', provider: 'claude', model: 'claude-opus-5-5', when: 'usually' },
+      { label: 'Fable', provider: 'claude', model: 'claude-fable-5-2', when: 'rarely' },
+    ],
+  };
+  const workers = [
+    { worker: 'conv-opus', provider: 'claude', model: 'claude-opus-5-5' },
+    { worker: 'conv-chief', provider: 'claude', model: 'claude-fable-5-2' },
+    { worker: 'conv-fable', provider: 'claude', model: 'claude-fable-5-2' },
+    { worker: 'conv-codex', provider: 'codex', model: 'gpt-6.1-sol' },
+  ];
+  const roleOf = (worker: string) => (worker === 'conv-chief' ? 'chief-of-staff' : null);
+
+  it('labels the chief of staff and the unusual worker roles, not the usual one', async () => {
+    const { profileRoster } = await import('../../src/services/sessions/coordinator-profile-roster.js');
+    const { roster, roles } = profileRoster({ name: 'neon-front', profile: neon }, workers, roleOf);
+    expect(roster?.roles.map((role) => [role.label, role.workers])).toEqual([
+      ['Chief of staff', ['conv-chief']],
+      ['Opus', ['conv-opus']],
+      ['Fable', ['conv-fable']],
+    ]);
+    expect(Object.fromEntries(roles)).toEqual({
+      'conv-chief': { label: 'Chief of staff', chiefOfStaff: true },
+      'conv-fable': { label: 'Fable', chiefOfStaff: false },
+    });
+  });
+
+  it('counts every message the coordinator sent its chief of staff as a consult', async () => {
+    const { profileRoster } = await import('../../src/services/sessions/coordinator-profile-roster.js');
+    const history = [
+      { worker: 'conv-chief', tag: 'dispatch' as const },
+      { worker: 'conv-chief', tag: 'report' as const },
+      { worker: 'conv-chief', tag: 'answer' as const },
+      { worker: 'conv-chief', tag: 'relay' as const },
+      { worker: 'conv-opus', tag: 'answer' as const },
+    ];
+    const { roster } = profileRoster({ name: 'neon-front', profile: neon }, workers, roleOf, history);
+    expect(roster?.roles.find((role) => role.chiefOfStaff)?.consults).toBe(3);
+    const { roster: unused } = profileRoster({ name: 'neon-front', profile: neon }, workers.filter((w) => w.worker !== 'conv-chief'), () => null);
+    expect(unused?.roles.find((role) => role.chiefOfStaff)?.consults).toBe(0);
+  });
+
+  it('gives a coordinator on the built-in profile no roster and no labels', async () => {
+    const { profileRoster } = await import('../../src/services/sessions/coordinator-profile-roster.js');
+    const { roster, roles } = profileRoster({ name: 'opus', profile: {} }, workers, roleOf);
+    expect(roster).toBeNull();
+    expect(roles.size).toBe(0);
   });
 });

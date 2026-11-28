@@ -38,8 +38,9 @@ export function CompactionDivider({
 
   return (
     <div data-testid="compaction-divider" className="flex items-center gap-3 my-4 px-4 text-[12.5px] text-fg-3 before:h-px before:flex-1 before:bg-line after:h-px after:flex-1 after:bg-line">
-      <span className="text-center">
-        Context Compacted{details.length > 0 ? ` · ${details.join(' · ')}` : ''}
+      <span className="flex flex-wrap items-baseline justify-center gap-x-3 text-center">
+        <span>Context compacted</span>
+        {details.map((detail) => <span key={detail} className="tabular-nums text-fg-3/80">{detail}</span>)}
       </span>
     </div>
   );

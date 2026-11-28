@@ -35,8 +35,8 @@ import { readWorkerStates } from './worker-events.js';
 
 const logger = createLogger('AskDecayWatch');
 
-/** How long an ask can go unanswered before it moves to the backlog. */
-export const ASK_DECAY_MS = 3 * 60 * 60 * 1000;
+/** How long an ask can go unanswered before it moves to the backlog (Priority for 24h, All until 72h). */
+export const ASK_DECAY_MS = 72 * 60 * 60 * 1000;
 
 const SENDER = 'the server';
 
@@ -56,7 +56,13 @@ export function decayingAsks(input: {
   now: number;
 }): DecayingAsk[] {
   const { state, liveWorkers, card, repliedAt, now } = input;
-  const worked = new Set(liveWorkers.map((worker) => threadOfWorker(worker, state.open)));
+  // A worker that already reported and stayed idle is no longer actively held up on the thread
+  // (if it explicitly reported waiting on the thread, `waitedOn` below still keeps the ask alive).
+  const worked = new Set(
+    liveWorkers
+      .filter((worker) => worker.phase !== 'reported' || Boolean(worker.workedSinceReport))
+      .map((worker) => threadOfWorker(worker, state.open)),
+  );
   return state.open.flatMap((thread) => {
     if (!isNeedsYou(thread) || worked.has(thread.seq) || waitedOn(thread, state.open, liveWorkers)) return [];
     const since = Math.max(thread.waitingSince, card?.asked.thread === thread.seq ? card.shownAt : 0);
@@ -115,7 +121,7 @@ export function checkAskDecay(coordinator: string, now: number = Date.now()): nu
     for (const { thread, since } of due) {
       const seq = appendProjectNote(coordinator, {
         kind: 'park',
-        text: 'Unanswered for 3 hours',
+        text: 'Unanswered for 72 hours',
         by: 'coordinator',
         ref: thread.seq,
         decayed: true,

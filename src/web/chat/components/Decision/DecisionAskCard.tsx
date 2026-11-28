@@ -1,6 +1,8 @@
-import { type JSX, createContext, useContext, useEffect, useRef, type ReactNode } from 'react';
+import { type JSX, createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { DecisionCard } from '@liggi/agent-ui-toolkit';
 import { isOpenDecision, type DecisionAskedData, type DecisionState, type ThreadDecisions } from '@/types/decisions';
+import { usePlugins } from '../../plugins/PluginsContext';
+import { ErrorBoundary } from '../ErrorBoundary';
 
 /** Told whether an open card is in sight in the chat, so its question can be kept in reach when it is not. */
 type OnCardInSight = (decisionId: string, inSight: boolean) => void;
@@ -51,11 +53,11 @@ export function useWithdrawnAnswers(): ReadonlySet<string> {
   return useContext(DecisionsContext)?.decisions.withdrawnAnswers ?? NONE;
 }
 
-async function postAnswer(sessionId: string, decisionId: string, answer: string): Promise<void> {
+async function postAnswer(sessionId: string, decisionId: string, answer: string, edit?: string): Promise<void> {
   const response = await fetch(`/api/harness/${encodeURIComponent(sessionId)}/decisions/${encodeURIComponent(decisionId)}/answer`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ answer }),
+    body: JSON.stringify(edit === undefined ? { answer } : { answer, edit }),
   });
   if (response.ok) return;
   const body = await response.json().catch(() => null) as { error?: string } | null;
@@ -103,11 +105,23 @@ export function DecisionAskCard({ decision }: { decision: DecisionAskedData }): 
     options: decision.options.map((option) => ({ label: option.label, description: option.consequence, recommended: option.recommended })),
   }];
   const sessionId = context?.sessionId;
+  const open = Boolean(state && isOpenDecision(state));
+
+  // A plugin's own view of the card, with the text the user edited in it and anything stopping its action.
+  const View = usePlugins().cardViews.get(decision.action && decision.view ? `${decision.action.plugin}:${decision.view}` : '');
+  const edit = useRef<string | undefined>(undefined);
+  const [blockedWhy, setBlockedWhy] = useState<string | null>(null);
+  const setEdit = useCallback((value: string | undefined) => { edit.current = value; }, []);
+  const blockRuns = useCallback((reason: string | null) => setBlockedWhy(reason), []);
+  const runs = decision.action?.runs;
+
   const onAnswer = sessionId
-    ? (answers: Record<string, string>) => postAnswer(sessionId, decision.id, answers[decision.question] ?? '')
+    ? (answers: Record<string, string>) => {
+      const answer = answers[decision.question] ?? '';
+      return postAnswer(sessionId, decision.id, answer, View && answer === runs ? edit.current : undefined);
+    }
     : undefined;
 
-  const open = Boolean(state && isOpenDecision(state));
   const sightRef = useCardSight(decision.id, open, context?.onCardInSight);
   const onDismiss = sessionId && open
     ? () => dismissQuestion(sessionId, decision.id).catch((err: unknown) => console.error('Dismissing the question failed:', err))
@@ -123,6 +137,23 @@ export function DecisionAskCard({ decision }: { decision: DecisionAskedData }): 
         onAnswer={onAnswer}
         onDismiss={onDismiss}
         held={state?.held && sessionId ? { answer: state.held.answer, onUndo: () => undoHeld(sessionId, state.held!.id) } : undefined}
+        blocked={View && open && runs && blockedWhy ? { [runs]: blockedWhy } : undefined}
+        body={View && decision.action ? (
+          <ErrorBoundary name={`plugin card ${decision.action.plugin}:${decision.view}`}>
+            <div data-lattice-plugin={decision.action.plugin}>
+              <View
+                cardId={decision.id}
+                conversationId={sessionId ?? ''}
+                payload={decision.action.payload}
+                open={open}
+                answer={state?.answer ?? null}
+                actionRan={state?.actionRan ?? false}
+                setEdit={setEdit}
+                blockRuns={blockRuns}
+              />
+            </div>
+          </ErrorBoundary>
+        ) : undefined}
       />
     </div>
   );

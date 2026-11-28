@@ -20,6 +20,8 @@ import path from 'path';
 import { pathToFileURL } from 'url';
 import { Router } from 'express';
 import type {
+  LatticeConfirmContext,
+  LatticeJobProvider,
   LatticePluginCommandInput,
   LatticePluginHost,
   LatticePluginManifest,
@@ -31,6 +33,7 @@ import { latticeCli } from '@/services/sessions/pickup-prompts.js';
 import { SHIPPED_SKILL_NAMES, type PluginSkill } from '@/services/infrastructure/agent-skills.js';
 import { askPluginConfirm } from './plugin-confirm.js';
 import { createPluginSession } from './plugin-sessions.js';
+import { savedKey } from './plugin-keys.js';
 
 const logger = createLogger('Plugins');
 
@@ -38,7 +41,7 @@ export const PLUGIN_API_VERSION = 1;
 const ID_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
 
 type CommandHandler = (input: LatticePluginCommandInput) => string | Promise<string>;
-type ConfirmHandler = (payload: unknown, context: { conversationId: string; cardId: string }) => string | Promise<string>;
+type ConfirmHandler = (payload: unknown, context: LatticeConfirmContext) => string | Promise<string>;
 
 /** What Settings and the web app are told about a plugin. */
 export interface PluginInfo {
@@ -59,6 +62,7 @@ interface LoadedPlugin {
   router: Router;
   commands: Map<string, CommandHandler>;
   confirmHandlers: Map<string, ConfirmHandler>;
+  jobProviders: LatticeJobProvider[];
   skills: PluginSkill[];
   stoppers: Array<() => void | Promise<void>>;
 }
@@ -136,6 +140,12 @@ function makeHost(plugin: LoadedPlugin, id: string): LatticePluginHost {
       ask: (conversationId, card, action) => askPluginConfirm(id, conversationId, card, action),
       handle: (name, fn) => { plugin.confirmHandlers.set(name, fn); },
     },
+    keys: { get: (name) => savedKey(name) },
+    jobs: {
+      registerProvider: (provider) => {
+        plugin.jobProviders.push(provider);
+      },
+    },
   };
 }
 
@@ -147,6 +157,7 @@ async function loadOne(name: string): Promise<LoadedPlugin> {
     router: Router(),
     commands: new Map(),
     confirmHandlers: new Map(),
+    jobProviders: [],
     skills: [],
     stoppers: [],
   };
@@ -205,6 +216,11 @@ export function pluginSkills(): PluginSkill[] {
 
 export function pluginConfirmHandler(id: string, name: string): ConfirmHandler | undefined {
   return plugins.get(id)?.confirmHandlers.get(name);
+}
+
+/** All job providers registered by loaded plugins, in load order. */
+export function pluginJobProviders(): LatticeJobProvider[] {
+  return [...plugins.values()].flatMap((plugin) => plugin.jobProviders);
 }
 
 export async function stopPlugins(): Promise<void> {

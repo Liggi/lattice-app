@@ -12,23 +12,43 @@ export interface StateIconState {
   strength?: number;
 }
 
+/**
+ * A worker's kind, drawn in the cube's place, and animated for its state the
+ * same way the cube is. The ordinary worker is the cube, a block of work; a
+ * worker on Fable is the same cube upgraded, a violet chevron at its corner;
+ * the chief of staff is a lightbulb, there with ideas rather than to do a task.
+ */
+export interface WorkerGlyph {
+  shape: 'cube' | 'upgraded-cube' | 'bulb';
+}
+
 interface SessionStateIconProps {
   state: StateIconState;
   variant: StateIconVariant;
   size?: number;
+  glyph?: WorkerGlyph;
 }
 
 /** A sidebar row's state: what it is doing, drawn and animated in the icon slot. */
-export function SessionStateIcon({ state, variant, size = 22 }: SessionStateIconProps): JSX.Element {
-  const Draw = variant === 'project' ? Lattice : Cube;
+export function SessionStateIcon({ state, variant, size = 22, glyph }: SessionStateIconProps): JSX.Element {
+  const props = { kind: state.kind, level: state.level ?? 1, strength: state.strength ?? 1 };
+  if (variant === 'project') {
+    return <svg className="ssi" width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true"><Lattice {...props} /></svg>;
+  }
+  const geometry = GEOMETRY[glyph?.shape ?? 'cube'];
   return (
     <svg className="ssi" width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <Draw kind={state.kind} level={state.level ?? 1} strength={state.strength ?? 1} />
+      <Cube {...props} geometry={geometry} />
+      {geometry.badge && (
+        <path d={geometry.badge} stroke="var(--v)" strokeWidth={1.4} strokeLinecap="round" strokeLinejoin="round" />
+      )}
     </svg>
   );
 }
 
 interface DrawProps { kind: SessionActivityKind; level: WorkingLevel; strength: number }
+
+interface Geometry { outline: string; inner: string; top: string; left: string; right: string; badge?: string }
 
 /**
  * Needs you's brightness and pulse from its strength: at full it is solid and
@@ -60,7 +80,25 @@ const FACE_TOP = 'M12 3.5 L19.4 7.75 L12 12 L4.6 7.75 Z';
 const FACE_LEFT = 'M4.6 7.75 L12 12 L12 20.5 L4.6 16.25 Z';
 const FACE_RIGHT = 'M12 12 L19.4 7.75 L19.4 16.25 L12 20.5 Z';
 
-function Cube({ kind, level, strength }: DrawProps): JSX.Element {
+// Two stacked chevrons, a rank mark, in the empty corner above the cube's
+// top-right edge; the cube itself stays the ordinary worker's, unmoved.
+const UPGRADE_MARK = 'M18.6 3.2 L20.7 1.1 L22.8 3.2 M18.6 5.9 L20.7 3.8 L22.8 5.9';
+
+const GEOMETRY: Record<WorkerGlyph['shape'], Geometry> = {
+  cube: { outline: CUBE_OUTLINE, inner: CUBE_INNER, top: FACE_TOP, left: FACE_LEFT, right: FACE_RIGHT },
+  'upgraded-cube': { outline: CUBE_OUTLINE, inner: CUBE_INNER, top: FACE_TOP, left: FACE_LEFT, right: FACE_RIGHT, badge: UPGRADE_MARK },
+  // A bulb with its filament and base; the glass above the filament is its "top" face.
+  bulb: {
+    outline: 'M8.6 16.4 V14.5 A6.3 6.3 0 1 1 15.4 14.5 V16.4 Z',
+    inner: 'M9.4 19 H14.6 M10.5 21.3 H13.5 M12 16.4 V11.6 M10.3 10.2 L12 11.6 L13.7 10.2',
+    top: 'M5.9 9.1 A6.3 6.3 0 0 1 18.1 9.1 Z',
+    left: 'M5.9 9.1 H12 V16.4 H8.6 V14.5 A6.3 6.3 0 0 1 5.9 9.1 Z',
+    right: 'M12 9.1 H18.1 A6.3 6.3 0 0 1 15.4 14.5 V16.4 H12 Z',
+  },
+};
+
+function Cube({ kind, level, strength, geometry }: DrawProps & { geometry: Geometry }): JSX.Element {
+  const { outline: CUBE_OUTLINE, inner: CUBE_INNER, top: FACE_TOP, left: FACE_LEFT, right: FACE_RIGHT } = geometry;
   const edge = { strokeWidth: 1.3, strokeLinejoin: 'round' as const, strokeLinecap: 'round' as const };
   switch (kind) {
     case 'idle':

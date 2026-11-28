@@ -37,6 +37,7 @@
 import { INBOX_READ_EVENT, INBOX_WITHDRAWN_EVENT } from './inbox.js';
 import { EXPLAIN_ASKED_EVENT } from './explain.js';
 import { REPLY_HELD_EVENT, REPLY_SENT_EVENT, REPLY_UNDONE_EVENT, type ReplyHeldData } from './held-replies.js';
+import type { InboxArtifact, InboxMetric, InboxRequestKind } from './inbox-feed.js';
 
 export const DECISION_ASKED_EVENT = 'decision:asked';
 export const DECISION_ANSWERED_EVENT = 'decision:answered';
@@ -46,6 +47,26 @@ export const DECISION_DISMISSED_EVENT = 'decision:dismissed';
 export const DECISION_WITHDRAWN_EVENT = 'decision:withdrawn';
 /** A plugin's confirm action ran after its option was chosen; it does not run again. */
 export const DECISION_ACTION_RAN_EVENT = 'decision:action-ran';
+/** The cold-read judge read an agent's ask: what it said, what it cost, and whether the ask went up. */
+export const DECISION_JUDGED_EVENT = 'decision:judged';
+
+export interface DecisionJudgedData {
+  question: string;
+  /** passed; bounced back to the agent; let through as the retry after a bounce; or let through because the judge failed. */
+  outcome: 'passed' | 'bounced' | 'let-through' | 'judge-error';
+  /** This ask came within the retry window after a bounce. */
+  secondTry: boolean;
+  pass?: boolean;
+  knowledgeLevel?: string;
+  /** Items the judge answered "no". */
+  failed?: string[];
+  model?: string;
+  effort?: string;
+  costUsd?: number;
+  ms?: number;
+  imagesSent?: number;
+  error?: string;
+}
 
 export const DECISION_MIN_OPTIONS = 2;
 export const DECISION_MAX_OPTIONS = 4;
@@ -78,6 +99,20 @@ export interface DecisionAskedData {
   detail?: string;
   /** A plugin's server action, run when the user chooses `runs` (`services/plugins/plugin-confirm.ts`). */
   action?: DecisionActionData;
+  /** A card view the action's plugin draws in place of `detail` (`web.cardView`). */
+  view?: string;
+  /** What the human has to supply (`go-ahead`, `decision`, `review`, `access`, `info`). */
+  requestKind?: InboxRequestKind;
+  /** Short cost-of-waiting line shown beside the kind (e.g. "Holding up release notes"). */
+  priorityReason?: string;
+  /** Self-contained cold-read context bullets so the question makes sense in the Inbox without chat history. */
+  context?: string[];
+  /** Compact aligned metric deltas so numbers do not live in prose. */
+  metrics?: InboxMetric[];
+  /** Inline draft message, snippet, table, or image previews to judge in place. */
+  artifact?: InboxArtifact;
+  /** What happens and when if left unanswered. */
+  ifUnanswered?: string;
 }
 
 export interface DecisionActionData {

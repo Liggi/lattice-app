@@ -389,3 +389,84 @@ body {
   from { transform: scaleX(1); }
   to { transform: scaleX(0); }
 }
+
+/* Markdown tables in messages (MarkdownTable). A short cell with no spaces (an
+   id, a model name, a number) stays on one line; only a word longer than its
+   column, such as a long path or URL, breaks. */
+.md-table th,
+.md-table td {
+  overflow-wrap: normal;
+  word-break: normal;
+}
+.md-table td[data-long-word] {
+  overflow-wrap: anywhere;
+}
+.md-table td[data-token],
+.md-table code[data-short] {
+  white-space: nowrap;
+}
+.md-table code {
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+.md-table[data-more-right] {
+  -webkit-mask-image: linear-gradient(to left, transparent, #000 2.5rem);
+  mask-image: linear-gradient(to left, transparent, #000 2.5rem);
+}
+@media (max-width: 639px) {
+  .md-table th:not(:last-child),
+  .md-table td:not(:last-child) {
+    padding-right: 0.75rem;
+  }
+}
+
+/* Too wide for a narrow column: each row becomes a block, its first cell the
+   block's title and every other value set beside its header's name. */
+.md-table[data-stacked] {
+  overflow-x: visible;
+}
+.md-table[data-stacked] table,
+.md-table[data-stacked] tbody,
+.md-table[data-stacked] tr,
+.md-table[data-stacked] td {
+  display: block;
+  width: 100%;
+}
+.md-table[data-stacked] thead {
+  display: none;
+}
+.md-table[data-stacked] tr {
+  padding: 10px 0 12px;
+}
+.md-table[data-stacked] tr:first-child {
+  border-top: 1px solid var(--color-line);
+}
+.md-table[data-stacked] tr:last-child {
+  border-bottom: 1px solid var(--color-line);
+}
+.md-table[data-stacked] td {
+  position: relative;
+  text-align: left !important; /* markdown column alignment arrives as an inline style */
+  min-height: calc(1lh + 6px); /* an empty value still holds its label's line */
+  padding: 3px 0 3px 7.5rem;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.md-table[data-stacked] td::before {
+  content: attr(data-label);
+  position: absolute;
+  left: 0;
+  top: 3px;
+  width: 6.75rem;
+  font-size: 12.5px;
+  line-height: inherit;
+  color: var(--color-fg-3);
+}
+.md-table[data-stacked] td:first-child {
+  padding: 0 0 4px;
+  color: var(--color-fg);
+  font-weight: 500;
+}
+.md-table[data-stacked] td:first-child::before {
+  content: none;
+}

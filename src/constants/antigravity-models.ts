@@ -20,9 +20,10 @@ export interface AntigravityModelEntry {
 
 export const ANTIGRAVITY_MODEL_PREFIX = 'agy:';
 
+// Ordered by capability (top = strongest, bottom = fastest).
 export const ANTIGRAVITY_MODELS: AntigravityModelEntry[] = [
-  { id: 'agy:gemini-4-neon', label: 'Gemini 4 Neon', description: 'Strong all-round model for coding and agent work', efforts: ['low', 'medium', 'high', 'xhigh'], defaultEffort: 'high' },
   { id: 'agy:gemini-4-carbon', label: 'Gemini 4 Carbon', description: 'Most capable, for the hardest work', efforts: ['low', 'medium', 'high'], defaultEffort: 'high' },
+  { id: 'agy:gemini-4-neon', label: 'Gemini 4 Neon', description: 'Strong all-round model for coding and agent work', efforts: ['low', 'medium', 'high', 'xhigh'], defaultEffort: 'high' },
   { id: 'agy:gemini-4-hydrogen', label: 'Gemini 4 Hydrogen', description: 'Faster and cheaper than Neon', efforts: ['low', 'medium', 'high', 'xhigh'], defaultEffort: 'high' },
   { id: 'agy:gemini-3.8-flash', label: 'Gemini 3.8 Flash', description: 'Fastest; works without a paid plan', efforts: ['low', 'medium', 'high'], defaultEffort: 'high' },
 ];
@@ -44,6 +45,15 @@ export const DEFAULT_ANTIGRAVITY_MODEL_ID = 'agy:gemini-4-neon-high';
 export function antigravityModelEntry(model: string | null | undefined): AntigravityModelEntry | undefined {
   if (!model) return undefined;
   return ANTIGRAVITY_MODELS.find((m) => model === m.id || m.efforts.some((e) => model === `${m.id}-${e}`));
+}
+
+/** The thinking level encoded in a full Antigravity model id (or the model's default for a level-less id). */
+export function antigravityModelEffort(model: string | null | undefined): string | null {
+  const entry = antigravityModelEntry(model);
+  if (!entry || !model) return null;
+  if (model === entry.id) return entry.defaultEffort;
+  const suffix = model.slice(entry.id.length + 1);
+  return entry.efforts.includes(suffix) ? suffix : null;
 }
 
 /** The full id for a picker row and a thinking level; a level the model lacks falls to its default. */

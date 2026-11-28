@@ -48,6 +48,7 @@ export class JobCounter {
   async count(key: string, source: JobSource): Promise<number> {
     if (source.kind === 'files') return countFiles(source.glob);
     if (source.kind === 'lines') return this.countLines(key, source.file, source.match);
+    if (source.kind === 'events') return 0;
     return runCountCommand(source.command, source.cwd);
   }
 
@@ -163,5 +164,6 @@ export function processAlive(pid: number): boolean {
 export function describeSource(source: JobSource): string {
   if (source.kind === 'files') return `files matching ${source.glob}`;
   if (source.kind === 'lines') return source.match === undefined ? `lines in ${source.file}` : `lines matching /${source.match}/ in ${source.file}`;
+  if (source.kind === 'events') return source.file ? `events in ${source.file}` : 'events from process';
   return `the number \`${source.command}\` prints (run in ${source.cwd})`;
 }

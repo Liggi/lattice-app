@@ -11,7 +11,7 @@ import { act, cleanup, fireEvent, render } from '@testing-library/react';
 import { extractFrame, lintFrame, textSizes } from '../../src/cli/frame-command';
 import { frameGuidance } from '../../src/services/sessions/frame-guidance';
 import { galleryGuidance } from '../../src/services/sessions/gallery-guidance';
-import { noteBoxFraction, parseGalleryBlock } from '../../src/web/chat/utils/gallery-block';
+import { noteBoxFraction, parseGalleryBlock } from '../../src/utils/gallery-block';
 import { modelReadsImages } from '../../src/constants/claude-endpoint';
 import { ViewableImage } from '../../src/web/chat/components/MessageList/ImageViewer';
 

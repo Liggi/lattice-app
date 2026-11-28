@@ -10,7 +10,7 @@
 // PROVIDER IDENTIFICATION
 // =============================================================================
 
-export type Provider = 'claude' | 'codex' | 'opencode' | 'antigravity';
+export type Provider = 'claude' | 'codex' | 'opencode' | 'antigravity' | 'inkling';
 
 // =============================================================================
 // UNIFIED CONTENT BLOCKS

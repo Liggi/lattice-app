@@ -13,6 +13,9 @@ import { CodexProcessAdapter } from './codex-process-adapter.js';
 import { OpencodeProcessAdapter } from './opencode-process-adapter.js';
 import { MultiplexingProcessAdapter } from './multiplexing-process-adapter.js';
 import { AntigravityProcessAdapter } from './antigravity-process-adapter.js';
+import { DENY_ALL_BRIDGE, InklingProcessAdapter } from './inkling-process-adapter.js';
+import { createInklingPermissionBridge } from '../services/inkling-permission-bridge.js';
+import type { PermissionTracker } from '../services/permission-tracker.js';
 import { ConfigService } from '../services/infrastructure/config-service.js';
 import { appendCustomHarnessEvent } from './harness-custom-events.js';
 import { createHarnessRoutes } from './routes.js';
@@ -52,6 +55,8 @@ export interface HarnessSetupDeps {
   pendingQuestionService?: PendingQuestionService;
   /** Processes a previous server left running in the daemon, to take over (adopt-running-processes.ts). */
   adoptable?: readonly ActiveSession[];
+  /** Raises Inkling's approval cards. Without it, Inkling's side-effecting tools are refused. */
+  permissionTracker?: PermissionTracker;
 }
 
 export interface HarnessRuntime {
@@ -126,11 +131,18 @@ export function setupHarness(deps: HarnessSetupDeps): HarnessRuntime {
     sessionId.startsWith('conv-') ? ConversationService.getInstance().getServiceTier(sessionId) : null
   ), isCoordinator);
   const opencodeAdapter = new OpencodeProcessAdapter();
+  let inklingBridge: ReturnType<typeof createInklingPermissionBridge> | undefined;
   const adapter = new MultiplexingProcessAdapter(
     claudeAdapter,
     codexAdapter,
     opencodeAdapter,
     new AntigravityProcessAdapter(() => ConfigService.getInstance().getConfig().antigravity),
+    new InklingProcessAdapter(() => (deps.permissionTracker
+      ? inklingBridge ??= createInklingPermissionBridge(
+        deps.permissionTracker,
+        (conversationId) => SessionInfoService.getInstance().getSessionInfoSync(conversationId)?.permission_mode,
+      )
+      : DENY_ALL_BRIDGE)),
   );
 
   // Persistent event storage — events survive restarts and in-memory eviction
@@ -139,6 +151,51 @@ export function setupHarness(deps: HarnessSetupDeps): HarnessRuntime {
   initEventMessageReader(eventStorage);
 
   const registry = deps.activeConversationRegistry;
+
+  // Registers a conversation whose process the harness started without the
+  // conversation routes, from its latest segment. register() pushes
+  // session-started; until a conversation is registered, every later
+  // start/idle push for it is dropped and the sidebar learns of each turn
+  // only from the 30s status poll.
+  const seedRegistry = (
+    sessionId: string,
+    processId: string | undefined,
+    transitionReason: 'conversation_start' | 'resume',
+    model?: string,
+    permissionMode?: string,
+  ): void => {
+    const conversationService = ConversationService.getInstance();
+    const conversation = conversationService.getConversation(sessionId);
+    const latest = conversation?.segments[conversation.segments.length - 1];
+    if (!conversation || !latest) {
+      logger.warn('Harness-started process has no conversation segment for registry seed', {
+        sessionId,
+        hasConversation: Boolean(conversation),
+      });
+      return;
+    }
+    if (processId) conversationService.updateSegmentStreamingId(latest.segmentId, processId);
+    registry.register({
+      conversationId: sessionId,
+      segment: {
+        segmentId: latest.segmentId,
+        provider: latest.provider,
+        providerSessionId: latest.providerSessionId,
+        model: model ?? latest.model ?? undefined,
+        transitionReason,
+      },
+      run: processId ? {
+        streamingId: processId,
+        runVersion: registry.allocateRunVersion(sessionId),
+        startedAt: new Date().toISOString(),
+      } : null,
+      workingDirectory: conversation.workingDirectory,
+      permissionMode: permissionMode
+        ?? SessionInfoService.getInstance().getSessionInfoSync(sessionId)?.permission_mode
+        ?? 'default',
+    });
+  };
+
   onTurnStarted((sessionId) => {
     SessionInfoService.getInstance().wakeFromSleep(sessionId);
     registry.notifyActive(sessionId);
@@ -167,7 +224,13 @@ export function setupHarness(deps: HarnessSetupDeps): HarnessRuntime {
       }
       const existing = registry.get(sessionId);
       if (!existing) {
-        logger.warn('Follow-up spawn for conversation not in registry', { sessionId });
+        // A process that exited before a server restart is not taken over,
+        // so the first turn the server starts for it afterwards (a worker
+        // report, an inbox drain, a wake-up) arrives here unregistered.
+        if (sessionId.startsWith('conv-')) {
+          seedRegistry(sessionId, processId, 'resume');
+          logger.info('Registered conversation on follow-up spawn', { sessionId, streamingId: processId.slice(0, 8) });
+        }
         return;
       }
       registry.updateRun(sessionId, {
@@ -210,38 +273,7 @@ export function setupHarness(deps: HarnessSetupDeps): HarnessRuntime {
     classifyResumeTranscript: deps.classifyResumeTranscript,
     onSessionStarted: ({ sessionId, processId, model, permissionMode }) => {
       if (!sessionId.startsWith('conv-') || registry.has(sessionId)) return;
-
-      const conversation = conversationService.getConversation(sessionId);
-      const latest = conversation?.segments[conversation.segments.length - 1];
-      if (!conversation || !latest) {
-        logger.warn('Direct harness start has no conversation segment for registry seed', {
-          sessionId,
-          hasConversation: Boolean(conversation),
-        });
-        return;
-      }
-
-      if (processId) {
-        conversationService.updateSegmentStreamingId(latest.segmentId, processId);
-      }
-
-      registry.register({
-        conversationId: sessionId,
-        segment: {
-          segmentId: latest.segmentId,
-          provider: latest.provider,
-          providerSessionId: latest.providerSessionId,
-          model: model ?? latest.model ?? undefined,
-          transitionReason: 'conversation_start',
-        },
-        run: processId ? {
-          streamingId: processId,
-          runVersion: registry.allocateRunVersion(sessionId),
-          startedAt: new Date().toISOString(),
-        } : null,
-        workingDirectory: conversation.workingDirectory,
-        permissionMode: permissionMode ?? 'default',
-      });
+      seedRegistry(sessionId, processId, 'conversation_start', model, permissionMode);
     },
   });
   deps.app.use('/api/harness', router);

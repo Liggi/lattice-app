@@ -14,6 +14,7 @@ import { useConversations } from '../../contexts/ConversationsContext';
 import { deriveSessionActivity, describeSessionActivity, lastUsedAt } from '../../utils/session-activity';
 import { SessionStateIcon } from './session-state-icon/SessionStateIcon';
 import { SessionStateTooltip } from './session-state-icon/SessionStateTooltip';
+import { StateGlyph } from './StateGlyph';
 import type { TeamRuntimeStatus } from '../../hooks/useTeamStatus';
 import type { AmbientRead } from '../AmbientPortfolio/ambient-types';
 import { ARROW_PRESENTATION, resolveCardOrientation, resolveCardTitle } from './session-card-orientation';
@@ -211,9 +212,8 @@ export function SessionCard({
   const staleOpacity = isCurrent || activity.kind === 'needs-you'
     ? 1
     : Math.max(0.6, 1 - Math.max(0, staleHours - 6) * (0.4 / 42));
-  // Every sleeping row carries its age, so rows in a Sleeping group compare; an
-  // awake row shows one only once it has been quiet for 6h (a waiting session).
-  const staleAgeLabel = activity.kind === 'sleeping' || staleHours >= 6 ? formatRelativeTime(lastActivityTs) : null;
+  // Every row carries its compact age on the right, so rows compare at a glance.
+  const ageLabel = formatRelativeTime(lastActivityTs);
   const isCardInteractive = Boolean(!isInlineRenaming && onClick);
   const handleCardKeyDown = React.useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
     if (!isCardInteractive || !onClick) return;
@@ -311,14 +311,17 @@ export function SessionCard({
                   setIsInlineRenaming(true);
                 } : undefined}
                 title={onRenameSessionName ? 'Double-click to rename' : undefined}
-                className={`text-sm leading-snug ${isCurrent ? 'text-fg' : 'text-fg-2'} ${isShowingRawPrompt ? 'line-clamp-1' : 'line-clamp-2'}`}
+                className={`text-sm leading-snug ${isCurrent ? 'text-fg' : 'text-fg-2'} ${isShowingRawPrompt ? 'line-clamp-2' : 'break-words'}`}
               >
                 {sessionName}
               </div>
             )}
           </div>
-          {staleAgeLabel && !isInlineRenaming && (
-            <span className="shrink-0 text-xs text-fg-3 tabular-nums">{staleAgeLabel}</span>
+          {activity.kind === 'failed' && !isInlineRenaming && (
+            <span className="shrink-0 self-start pt-[3px]" data-testid="session-failed-mark"><StateGlyph kind="failed" size={13} /></span>
+          )}
+          {!isInlineRenaming && (
+            <span className="shrink-0 text-xs text-fg-3 tabular-nums" data-testid="session-age">{ageLabel}</span>
           )}
         </div>
 

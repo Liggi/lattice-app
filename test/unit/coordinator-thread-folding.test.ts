@@ -68,9 +68,11 @@ describe('foldCoordinatorMachinery', () => {
       assistant('a3', [text('NO_REPLY')]),
       assistant('a4', [bash('pwd'), text('\n`NO_REPLY`\n')]),
       assistant('a5', [text('The worker wrote NO_REPLY by mistake; here is what it found.')]),
+      assistant('a6', [text('NO_REPLY\n\nNO_REPLY')]),
+      assistant('a7', [text('NO_REPLYCP'), bash('ls')]),
     ];
     const folded = foldCoordinatorMachinery(items, false);
-    expect(folded.map((i) => (i.kind === 'message' ? i.message.id : i.summary))).toEqual(['a1', 'Ran 2 commands', 'a5']);
+    expect(folded.map((i) => (i.kind === 'message' ? i.message.id : i.summary))).toEqual(['a1', 'Ran 2 commands', 'a5', 'Ran 1 command']);
   });
 
   it('marks a trailing fold active while streaming and says what is running', () => {

@@ -16,7 +16,9 @@ interface ComposerContextControlProps {
   onCompact: () => Promise<void>;
 }
 
-function contextTokens(usage: TurnUsage): number {
+/** Null when a compaction left the size unknown; the turn's totals would show the size before it. */
+function contextTokens(usage: TurnUsage): number | null {
+  if (usage.contextTokens === null) return null;
   return usage.contextTokens
     ?? usage.inputTokens + usage.cacheCreationInputTokens + usage.cacheReadInputTokens;
 }

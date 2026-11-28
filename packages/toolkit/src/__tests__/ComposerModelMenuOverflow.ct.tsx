@@ -39,6 +39,29 @@ for (const viewport of [{ width: 1280, height: 850 }, { width: 390, height: 844 
   });
 }
 
+test('a menu with no room above opens below, inside the clipping area', async ({ mount, page }) => {
+  await page.setViewportSize({ width: 1280, height: 600 });
+  const component = await mount(
+    <div style={{ position: 'fixed', top: 60, bottom: 0, left: 0, right: 0, overflow: 'hidden' }}>
+      <div style={{ position: 'absolute', top: 80, left: 16, right: 16 }}>
+        <Composer
+          core={{ onSubmit: () => {} }}
+          runtimeConfig={{
+            sessionModel: 'model-1',
+            availableModels: Array.from({ length: 10 }, (_, i) => ({ id: `model-${i}`, label: `Model ${i}`, group: i < 6 ? 'A' : 'B' })),
+            onModelChange: () => {},
+          }}
+        />
+      </div>
+    </div>,
+  );
+  await component.getByTestId('session-model').click();
+  const box = (await component.getByTestId('model-menu').boundingBox())!;
+  const trigger = (await component.getByTestId('session-model').boundingBox())!;
+  expect(box.y).toBeGreaterThan(trigger.y);
+  expect(box.y + box.height).toBeLessThanOrEqual(600);
+});
+
 test('older models wait behind Other models, which opens and closes in place', async ({ mount }) => {
   const models = [
     { id: 'new-a', label: 'New A' },

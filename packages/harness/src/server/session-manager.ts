@@ -328,35 +328,52 @@ export class SessionManager {
     // Cancel any pending scheduled wakeup — user is taking over
     this.cancelWakeup(session, sessionId)
 
-    // Mid-session model switch: a live process cannot change model, so a send
-    // carrying a different extra.model forces the respawn-with-resume path
+    // Mid-session model / Claude effort switch: a live Claude process cannot
+    // change model or `--effort`, so a send carrying a different extra.model
+    // or an explicit extra.claudeEffort forces the respawn-with-resume path
     // (start() gracefully retires an idle keep-alive process first). Only an
     // idle session switches — a mid-turn send still goes to stdin, and the
     // switch lands on a later idle send because clients keep sending the
-    // selection until the serving model confirms it.
+    // selection until the serving state confirms it.
     const requestedModel = typeof extra?.model === 'string' ? extra.model : undefined
     const modelChanged = Boolean(
       requestedModel && session.lastConfig && requestedModel !== configModel(session.lastConfig),
     )
+    const requestedClaudeEffort = typeof extra?.claudeEffort === 'string' ? extra.claudeEffort : undefined
+    const effortChanged = Boolean(requestedClaudeEffort !== undefined && session.lastConfig)
 
-    if (status === 'idle' && (!session.process?.alive || modelChanged)) {
+    if (status === 'idle' && (!session.process?.alive || modelChanged || effortChanged)) {
       if (!session.lastConfig) {
         throw new Error('Session config not available')
       }
       this.logger.info(
-        modelChanged ? 'Respawning run for model switch' : 'Spawning new run for follow-up',
-        { sessionId, ...(modelChanged ? { model: requestedModel } : {}) },
+        modelChanged || effortChanged ? 'Respawning run for model/effort switch' : 'Spawning new run for follow-up',
+        {
+          sessionId,
+          ...(modelChanged ? { model: requestedModel } : {}),
+          ...(effortChanged ? { effort: requestedClaudeEffort || 'default' } : {}),
+        },
       )
+      const mergedExtra = extra ? { ...session.lastConfig.extra, ...extra } : session.lastConfig.extra
+      if (mergedExtra && 'claudeEffort' in mergedExtra) {
+        delete mergedExtra.claudeEffort
+      }
       const config: StartConfig = {
         ...session.lastConfig,
         prompt: input,
         ...(session.resumeId ? { resume: session.resumeId } : {}),
-        ...(extra ? { extra: { ...session.lastConfig.extra, ...extra } } : {}),
+        ...(mergedExtra ? { extra: mergedExtra } : {}),
       }
       if (modelChanged && requestedModel) {
         config.args = [
           ...(config.args ?? []).filter((arg) => !arg.startsWith('--model=')),
           `--model=${requestedModel}`,
+        ]
+      }
+      if (effortChanged && requestedClaudeEffort !== undefined) {
+        config.args = [
+          ...(config.args ?? []).filter((arg) => !arg.startsWith('--effort=')),
+          `--effort=${requestedClaudeEffort}`,
         ]
       }
       const result = await this.start(sessionId, config)

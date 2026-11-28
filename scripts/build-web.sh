@@ -17,6 +17,10 @@ cd "$PROJECT_DIR"
 STAGING="dist/web-staging"
 OLD="dist/web-old"
 
+# A server started before server-side code changed would be sent a client
+# that may read fields it lacks; refuse unless LATTICE_ALLOW_STALE_SERVER=1.
+pnpm exec tsx scripts/check-server-skew.ts
+
 # shellcheck source=scripts/build-lock.sh
 source "$PROJECT_DIR/scripts/build-lock.sh"
 acquire_lock

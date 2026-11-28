@@ -6,7 +6,7 @@ const QUIET_BTN = 'flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-[13px
 /** "3 restarted", "Nothing to restart", with sessions left running after it. */
 function resultText(restarted: number, kept: number): string {
   const done = restarted ? `${restarted} restarted` : 'Nothing to restart';
-  return kept ? `${done} · ${kept} busy, left running` : done;
+  return kept ? `${done}. ${kept} busy, left running.` : done;
 }
 
 /** Ends idle sessions' Claude Code and Codex processes so each starts fresh on its next message. */

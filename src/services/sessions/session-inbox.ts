@@ -76,6 +76,16 @@ import { latticeCli } from './pickup-prompts.js';
 import { withTurnAdmission, type TurnAdmission } from './turn-admission.js';
 import { userName, UserName } from '../user-profile.js';
 import { reportThreadPrompt } from './project-state.js';
+import { iterateEventsNewestFirst } from '../../session-history/repository.js';
+import {
+  openCircuitFromNewestFirst,
+  RETRY_CIRCUIT_CLOSED_EVENT,
+  RETRY_CIRCUIT_OPEN_EVENT,
+  RetryCircuitBreaker,
+  type CircuitState,
+  type RetryCircuitClosedData,
+  type RetryCircuitOpenData,
+} from './retry-circuit-breaker.js';
 
 const logger = createLogger('SessionInbox');
 
@@ -730,6 +740,12 @@ export type DrainResult =
  * find nothing left to send.
  */
 export async function drainInbox(sessionId: string): Promise<void> {
+  // A failing run is retried on its own backoff, or not at all once its circuit is open.
+  if (delayedDrains.has(sessionId)) return;
+  if (isRetryCircuitOpen(sessionId)) {
+    logger.info('Retry circuit open; inbox waits for Retry, a message or a healthy turn', { sessionId });
+    return;
+  }
   try {
     await withTurnAdmission(sessionId, 'drain', (admission) => drainHeld(sessionId, admission));
   } catch (err) {
@@ -853,8 +869,95 @@ async function drainOnce(sessionId: string, admission: TurnAdmission): Promise<D
 }
 
 function surfaceUndeliverable(sessionId: string, ids: string[], error: string): void {
+  noteDeliveryFailure(sessionId, error);
   db().prepare(`UPDATE session_inbox SET last_error = ? WHERE id IN (${ids.map(() => '?').join(', ')})`).run(error, ...ids);
   logger.error('Inbox drain failed; items stay unread', { sessionId, items: ids.length, error });
   const manager = getHarnessSessionManager();
   if (manager) appendCustomHarnessEvent(manager, sessionId, INBOX_UNDELIVERABLE_EVENT, { ids, error } satisfies InboxUndeliverableData);
+}
+
+// ---------------------------------------------------------------------------
+// Retry circuit (retry-circuit-breaker.ts): a run that keeps failing is not
+// fed the same batch again and again.
+
+const retryCircuit = new RetryCircuitBreaker();
+const delayedDrains = new Map<string, ReturnType<typeof setTimeout>>();
+
+function circuitOpenInLog(sessionId: string): (RetryCircuitOpenData & { at: number }) | null {
+  try {
+    return openCircuitFromNewestFirst(iterateEventsNewestFirst(sessionId, [RETRY_CIRCUIT_OPEN_EVENT, RETRY_CIRCUIT_CLOSED_EVENT]));
+  } catch {
+    return null;
+  }
+}
+
+/** Automatic drains into this session are stopped; read back from its log after a restart. */
+export function isRetryCircuitOpen(sessionId: string): boolean {
+  if (retryCircuit.isOpen(sessionId)) return true;
+  const logged = circuitOpenInLog(sessionId);
+  if (logged) retryCircuit.restoreOpen(sessionId, logged.reason, logged.at);
+  return Boolean(logged);
+}
+
+export function retryCircuitState(sessionId: string): CircuitState | null {
+  isRetryCircuitOpen(sessionId);
+  return retryCircuit.state(sessionId);
+}
+
+/** A run or a delivery into it failed; the third inside the window opens the circuit. */
+function noteDeliveryFailure(sessionId: string, reason: string): ReturnType<RetryCircuitBreaker['noteFailure']> {
+  if (!retryCircuit.isOpen(sessionId)) isRetryCircuitOpen(sessionId);
+  const verdict = retryCircuit.noteFailure(sessionId, reason);
+  if (verdict.tripped) {
+    cancelDelayedDrain(sessionId);
+    const failures = retryCircuit.state(sessionId)?.failures ?? 0;
+    logger.warn('Retry circuit opened; automatic inbox drains stopped', { sessionId, failures, reason });
+    const manager = getHarnessSessionManager();
+    if (manager) appendCustomHarnessEvent(manager, sessionId, RETRY_CIRCUIT_OPEN_EVENT, { reason, failures } satisfies RetryCircuitOpenData);
+  }
+  return verdict;
+}
+
+/** After a `run:error`: drain again after the backoff, or not at all once the circuit is open. */
+export function drainAfterRunFailure(sessionId: string, reason: string): void {
+  const verdict = noteDeliveryFailure(sessionId, reason);
+  if (verdict.open || delayedDrains.has(sessionId)) return;
+  const timer = setTimeout(() => {
+    delayedDrains.delete(sessionId);
+    void drainInbox(sessionId);
+  }, verdict.delayMs);
+  timer.unref?.();
+  delayedDrains.set(sessionId, timer);
+}
+
+function cancelDelayedDrain(sessionId: string): void {
+  const timer = delayedDrains.get(sessionId);
+  if (timer) clearTimeout(timer);
+  delayedDrains.delete(sessionId);
+}
+
+/** Clears the session's failures and, if the circuit was open, records it closed. Returns whether it was open. */
+export function resetRetryCircuit(sessionId: string, why: RetryCircuitClosedData['why']): boolean {
+  const wasOpen = retryCircuit.reset(sessionId) || circuitOpenInLog(sessionId) !== null;
+  if (why !== 'turn-succeeded') cancelDelayedDrain(sessionId);
+  if (wasOpen) {
+    logger.info('Retry circuit closed', { sessionId, why });
+    const manager = getHarnessSessionManager();
+    if (manager) appendCustomHarnessEvent(manager, sessionId, RETRY_CIRCUIT_CLOSED_EVENT, { why } satisfies RetryCircuitClosedData);
+  }
+  return wasOpen;
+}
+
+/** Retry: closes the circuit and makes one drain now. `retried` is whether there was anything to send. */
+export async function retryInbox(sessionId: string): Promise<{ wasOpen: boolean; retried: boolean }> {
+  const wasOpen = resetRetryCircuit(sessionId, 'retry');
+  const retried = hasUnreadInboxItems(sessionId);
+  if (retried) await drainInbox(sessionId);
+  return { wasOpen, retried };
+}
+
+/** Test seam: the circuit is module-level. */
+export function __resetRetryCircuitForTests(): void {
+  for (const sessionId of [...delayedDrains.keys()]) cancelDelayedDrain(sessionId);
+  retryCircuit.clear();
 }

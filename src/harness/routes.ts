@@ -18,6 +18,7 @@ import { PASTES_EXTRA_KEY, parsePastedSpans } from '@liggi/agent-ui-harness/prot
 import { createLogger } from '../services/infrastructure/logger.js';
 import { CODEX_MODELS, DEFAULT_CODEX_MODEL_ID } from '../constants/codex-models.js';
 import { CLAUDE_MODELS } from '../constants/claude-models.js';
+import { effortProblem } from '../constants/coordinator-profiles.js';
 import { supersededModelRefusal } from '../constants/superseded-models.js';
 import { unfinishedSwitchRefusal } from '../services/sessions/coordinator-switch-state.js';
 import { currentResumeModel } from '../services/sessions/resume-model.js';
@@ -38,6 +39,7 @@ import {
   drainInbox,
   enqueueInboxItem,
   hasUnreadInboxItems,
+  resetRetryCircuit,
   type DrainResult,
 } from '../services/sessions/session-inbox.js';
 import { admitTurn, isAdmissionToken, type TurnAdmission } from '../services/sessions/turn-admission.js';
@@ -49,7 +51,7 @@ import {
   type ImmediateDeliveryResult,
 } from '../services/sessions/immediate-delivery.js';
 import { agentReact, reactToMessage } from '../services/sessions/message-reactions.js';
-import { answerDecision, askDecision, DecisionError, dismissDecision, settleOpenDecision, withdrawDecision } from '../services/sessions/decisions.js';
+import { answerDecision, askAgentDecision, DecisionError, dismissDecision, settleOpenDecision, withdrawDecision } from '../services/sessions/decisions.js';
 import { askExplain, checkExplain, disputeIdea, ExplainError, explainTimeline, finishExplain, noteHintOpened, type ExplainRubric } from '../services/sessions/explain-back.js';
 import { isFromLatticePage } from '../middleware/trusted-origin.js';
 import { isSingleEmoji } from '../types/message-reactions.js';
@@ -581,6 +583,8 @@ export function createHarnessRoutes(sessionManager: SessionManager, resolvers: H
     if (!fromAgent && !inboxIds) {
       settleOpenDecision(sessionManager, sessionId);
       noteUserSent(sessionManager, sessionId);
+      // The user writing again is a retry of whatever had stopped (retry-circuit-breaker.ts).
+      resetRetryCircuit(sessionId, 'user-send');
     }
 
     const admissionToken = typeof body.admission === 'string' ? body.admission : undefined;
@@ -612,6 +616,21 @@ export function createHarnessRoutes(sessionManager: SessionManager, resolvers: H
     // exit; `admission` is null only for the drain's own request, which takes
     // none of the paths that need it.
     try {
+      let claudeEffortChange: { next: string | null } | null = null;
+      if (provider === 'claude' && reasoningEffort !== undefined) {
+        if (reasoningEffort !== 'default') {
+          const problem = effortProblem('claude', reasoningEffort);
+          if (problem) {
+            res.status(400).json({ error: problem });
+            return;
+          }
+        }
+        const nextEffort = reasoningEffort === 'default' ? null : reasoningEffort;
+        const currentClaudeEffort = ConversationService.getInstance().getLatestSegment(sessionId)?.reasoningEffort ?? null;
+        if (nextEffort !== currentClaudeEffort) {
+          claudeEffortChange = { next: nextEffort };
+        }
+      }
       // A new assignment is not sent into a worker's running turn: it would
       // put the work in hand on hold without anyone deciding to (2026-09-23).
       // Read under the admission, so a drain cannot open a turn after it.
@@ -852,12 +871,18 @@ export function createHarnessRoutes(sessionManager: SessionManager, resolvers: H
       const outgoing = restore + orientation + drift + nudge + staleLine + (input ?? '');
 
 
-      const sendExtra = attachments.length > 0 || pastes.length > 0 || model || knownEffort
+      const claudeEffortExtra = claudeEffortChange ? (claudeEffortChange.next ?? '') : undefined;
+      if (claudeEffortChange && !isMidTurn(diagnostics)) {
+        ConversationService.getInstance().updateLatestSegmentReasoningEffort(sessionId, claudeEffortChange.next);
+      }
+
+      const sendExtra = attachments.length > 0 || pastes.length > 0 || model || knownEffort || claudeEffortExtra !== undefined
         ? {
             ...(attachments.length > 0 ? { attachments } : {}),
             ...(pastes.length > 0 ? { [PASTES_EXTRA_KEY]: pastes } : {}),
             ...(model ? { model } : {}),
             ...(knownEffort ? { reasoningEffort: knownEffort } : {}),
+            ...(claudeEffortExtra !== undefined ? { claudeEffort: claudeEffortExtra } : {}),
           }
         : undefined;
 
@@ -1004,7 +1029,17 @@ export function createHarnessRoutes(sessionManager: SessionManager, resolvers: H
   // An agent's question to the user, as a card in its own thread (`lattice ask`).
   router.post('/:sessionId/decisions', asyncHandler(async (req, res) => {
     const { sessionId } = req.params;
-    const body = (req.body ?? {}) as { question?: unknown; options?: unknown; thread?: unknown };
+    const body = (req.body ?? {}) as {
+      question?: unknown;
+      options?: unknown;
+      thread?: unknown;
+      requestKind?: unknown;
+      priorityReason?: unknown;
+      context?: unknown;
+      metrics?: unknown;
+      artifact?: unknown;
+      ifUnanswered?: unknown;
+    };
     const raw: unknown[] = Array.isArray(body.options) ? body.options : [];
     const options = raw.map((o) => (o ?? {}) as { label?: unknown; consequence?: unknown; recommended?: unknown });
     if (typeof body.question !== 'string' || options.some((o) => typeof o.label !== 'string' || typeof o.consequence !== 'string')) {
@@ -1015,8 +1050,26 @@ export function createHarnessRoutes(sessionManager: SessionManager, resolvers: H
       res.status(400).json({ error: 'thread is the id of the project thread the question is about' });
       return;
     }
+    if (body.context !== undefined && (!Array.isArray(body.context) || body.context.some((c) => typeof c !== 'string'))) {
+      res.status(400).json({ error: 'context must be an array of short strings' });
+      return;
+    }
+    const meta = {
+      ...(typeof body.requestKind === 'string' ? { requestKind: body.requestKind as import('../types/inbox-feed.js').InboxRequestKind } : {}),
+      ...(typeof body.priorityReason === 'string' ? { priorityReason: body.priorityReason } : {}),
+      ...(Array.isArray(body.context) ? { context: body.context as string[] } : {}),
+      ...(Array.isArray(body.metrics) ? { metrics: body.metrics as import('../types/inbox-feed.js').InboxMetric[] } : {}),
+      ...(body.artifact && typeof body.artifact === 'object' ? { artifact: body.artifact as import('../types/inbox-feed.js').InboxArtifact } : {}),
+      ...(typeof body.ifUnanswered === 'string' ? { ifUnanswered: body.ifUnanswered } : {}),
+    };
     try {
-      const asked = askDecision(sessionId, body.question, options.map((o) => ({ label: o.label as string, consequence: o.consequence as string, recommended: o.recommended === true })), body.thread as number | undefined);
+      const asked = await askAgentDecision(
+        sessionId,
+        body.question,
+        options.map((o) => ({ label: o.label as string, consequence: o.consequence as string, recommended: o.recommended === true })),
+        body.thread as number | undefined,
+        Object.keys(meta).length > 0 ? meta : undefined,
+      );
       res.json(asked);
     } catch (err) {
       if (!(err instanceof DecisionError)) throw err;
@@ -1053,9 +1106,9 @@ export function createHarnessRoutes(sessionManager: SessionManager, resolvers: H
       return;
     }
     const { sessionId, decisionId } = req.params;
-    const { answer } = (req.body ?? {}) as { answer?: unknown };
+    const { answer, edit } = (req.body ?? {}) as { answer?: unknown; edit?: unknown };
     try {
-      res.json(await answerDecision(sessionId, decisionId, typeof answer === 'string' ? answer : ''));
+      res.json(await answerDecision(sessionId, decisionId, typeof answer === 'string' ? answer : '', typeof edit === 'string' ? edit : undefined));
     } catch (err) {
       if (!(err instanceof DecisionError)) throw err;
       res.status(err.status).json({ error: err.message });

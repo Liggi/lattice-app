@@ -11,7 +11,8 @@ import React, { type JSX, createContext, useContext, useEffect, useRef, useState
 import * as ReactDOM from 'react-dom';
 import * as jsxRuntime from 'react/jsx-runtime';
 import { useNavigate } from 'react-router-dom';
-import type { LatticeIcon, LatticeWebHost } from '@liggi/lattice-plugin-kit';
+import type { LatticeCardViewProps, LatticeIcon, LatticeJobDetailViewProps, LatticeWebHost } from '@liggi/lattice-plugin-kit';
+import type { PluginSidebarSection } from './plugin-sidebar-placement';
 
 export interface PluginInfo {
   name: string;
@@ -34,6 +35,7 @@ export interface PluginLink {
   path: string;
   icon?: LatticeIcon;
   useBadge?: () => string | null;
+  section?: PluginSidebarSection;
 }
 
 interface PluginsState {
@@ -41,13 +43,17 @@ interface PluginsState {
   /** Keyed by `/p/<id><path>`. */
   pages: ReadonlyMap<string, PluginPage>;
   links: PluginLink[];
+  /** Plugins' confirm-card views, keyed by `<plugin id>:<view name>`. */
+  cardViews: ReadonlyMap<string, ComponentType<LatticeCardViewProps>>;
+  /** Plugins' Running now job detail views, keyed by `<plugin id>:<view name>`. */
+  jobDetailViews: ReadonlyMap<string, ComponentType<LatticeJobDetailViewProps>>;
   /** Why a plugin's web entry did not load, by plugin id. */
   webErrors: ReadonlyMap<string, string>;
   /** False until every web entry has been imported or has failed. */
   ready: boolean;
 }
 
-const EMPTY: PluginsState = { plugins: [], pages: new Map(), links: [], webErrors: new Map(), ready: false };
+const EMPTY: PluginsState = { plugins: [], pages: new Map(), links: [], cardViews: new Map(), jobDetailViews: new Map(), webErrors: new Map(), ready: false };
 const PluginsContext = createContext<PluginsState>(EMPTY);
 
 declare global {
@@ -97,6 +103,8 @@ export function PluginsProvider({ children }: { children: ReactNode }): JSX.Elem
       }
       const pages = new Map<string, PluginPage>();
       const links: PluginLink[] = [];
+      const cardViews = new Map<string, ComponentType<LatticeCardViewProps>>();
+      const jobDetailViews = new Map<string, ComponentType<LatticeJobDetailViewProps>>();
       const webErrors = new Map<string, string>();
       globalThis.__latticePluginHost = { React, ReactDOM, jsxRuntime };
       for (const plugin of plugins) {
@@ -107,6 +115,8 @@ export function PluginsProvider({ children }: { children: ReactNode }): JSX.Elem
           id,
           page: (path, component, opts) => { pages.set(pluginPagePath(id, path), { component, title: opts.title }); },
           sidebarLink: (link) => { links.push({ pluginId: id, ...link }); },
+          cardView: (name, component) => { cardViews.set(`${id}:${name}`, component); },
+          jobDetailView: (name, component) => { jobDetailViews.set(`${id}:${name}`, component); },
           api: {
             get: (path) => pluginRequest(id, 'GET', path),
             post: (path, body) => pluginRequest(id, 'POST', path, body ?? {}),
@@ -123,7 +133,7 @@ export function PluginsProvider({ children }: { children: ReactNode }): JSX.Elem
           webErrors.set(id, error instanceof Error ? error.message : String(error));
         }
       }
-      if (!cancelled) setState({ plugins, pages, links, webErrors, ready: true });
+      if (!cancelled) setState({ plugins, pages, links, cardViews, jobDetailViews, webErrors, ready: true });
     })();
     return () => { cancelled = true; };
   }, []);

@@ -158,6 +158,7 @@ export class ConversationService {
     addConversationIdToSession: Statement;
     insertArchivedSessionRow: Statement;
     getCreatedHidden: Statement;
+    listWorkingDirectories: Statement;
   };
 
   // Singleton
@@ -449,6 +450,11 @@ export class ConversationService {
         LIMIT 1
       `),
 
+      listWorkingDirectories: this.db.prepare(`
+        SELECT DISTINCT working_directory FROM conversations
+        WHERE working_directory != ''
+      `),
+
     };
   }
 
@@ -652,13 +658,11 @@ export class ConversationService {
   }
 
   /**
-   * Record the reasoning effort a Codex thread or turn was actually started
-   * with, on the latest segment. Called from the applied-setting callback, not
-   * when an effort is merely queued or requested — the point of the column is
-   * that it answers "what is this conversation running at", which only an
-   * applied setting can. Returns true if the stored effort changed.
+   * Record the reasoning effort a thread or turn was actually started with,
+   * on the latest segment. Pass `null` to clear back to the provider's default.
+   * Returns true if the stored effort changed.
    */
-  updateLatestSegmentReasoningEffort(conversationId: string, reasoningEffort: string): boolean {
+  updateLatestSegmentReasoningEffort(conversationId: string, reasoningEffort: string | null): boolean {
     const result = this.db.prepare(
       `UPDATE conversation_segments
        SET reasoning_effort = ?
@@ -668,7 +672,7 @@ export class ConversationService {
          ORDER BY sequence_number DESC
          LIMIT 1
        )
-         AND (reasoning_effort IS NULL OR reasoning_effort != ?)`
+         AND reasoning_effort IS NOT ?`
     ).run(reasoningEffort, conversationId, reasoningEffort);
     return result.changes > 0;
   }
@@ -698,6 +702,11 @@ export class ConversationService {
     const row = this.db.prepare('SELECT profile FROM conversations WHERE conversation_id = ?')
       .get(conversationId) as { profile: string | null } | undefined;
     return row?.profile ?? null;
+  }
+
+  /** Record the profile a coordinator is on; null puts it back on the built-in one. */
+  setProfile(conversationId: string, profile: string | null): void {
+    this.db.prepare('UPDATE conversations SET profile = ? WHERE conversation_id = ?').run(profile, conversationId);
   }
 
   /** The role a worker was created for, or null for an ordinary worker. */
@@ -907,6 +916,12 @@ export class ConversationService {
     });
 
     return { conversationId, created: true };
+  }
+
+  listWorkingDirectories(): string[] {
+    if (!this.initialized) return [];
+    const rows = this.stmts.listWorkingDirectories.all() as Array<{ working_directory: string }>;
+    return rows.map((r) => r.working_directory);
   }
 
   // --- Helpers ---

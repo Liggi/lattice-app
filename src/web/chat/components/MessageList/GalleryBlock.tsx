@@ -1,6 +1,7 @@
-import React, { type JSX } from 'react';
-import { parseGalleryBlock } from '../../utils/gallery-block';
+import { type JSX, useState } from 'react';
+import { parseGalleryBlock, type GalleryImage as GalleryImageData } from '@/utils/gallery-block';
 import { ViewableImage } from './ImageViewer';
+import { MissingImage } from './MissingImage';
 
 /**
  * A ```lattice-gallery fence: the agent's screenshots as a series, each with
@@ -24,23 +25,32 @@ export function GalleryBlock({ source, imageUrl }: { source: string; imageUrl: (
         const count = image.notes.length;
         return (
           <figure key={`${i}-${image.path}`} className="m-0 flex flex-col gap-1.5">
-            <ViewableImage src={url} alt={image.caption} notes={image.notes} size={image.size} className="inline-block max-w-full cursor-zoom-in">
-              <img
-                src={url}
-                alt={image.caption}
-                loading="lazy"
-                className="block max-w-full h-auto max-h-[70vh] rounded-md border border-line"
-              />
-            </ViewableImage>
+            <GalleryImage url={url} image={image} />
             {(image.caption || count > 0) && (
               <figcaption className="text-[13px] leading-snug text-fg-2">
                 {image.caption}
-                {count > 0 && <span className="text-fg-3">{image.caption ? ' · ' : ''}{count === 1 ? '1 note' : `${count} notes`}</span>}
+                {count > 0 && <span className={`text-fg-3 ${image.caption ? 'ml-2.5' : ''}`}>{count === 1 ? '1 note' : `${count} notes`}</span>}
               </figcaption>
             )}
           </figure>
         );
       })}
     </div>
+  );
+}
+
+function GalleryImage({ url, image }: { url: string | undefined; image: GalleryImageData }): JSX.Element {
+  const [failed, setFailed] = useState(false);
+  if (failed) return <MissingImage alt={image.caption} />;
+  return (
+    <ViewableImage src={url} alt={image.caption} notes={image.notes} size={image.size} className="inline-block max-w-full cursor-zoom-in">
+      <img
+        src={url}
+        alt={image.caption}
+        loading="lazy"
+        onError={() => setFailed(true)}
+        className="block max-w-full h-auto max-h-[70vh] rounded-md border border-line"
+      />
+    </ViewableImage>
   );
 }

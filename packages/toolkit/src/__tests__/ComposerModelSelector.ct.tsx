@@ -169,19 +169,18 @@ test.describe('Composer model selector', () => {
     await expect(component.getByTestId('submitted-effort')).toHaveText('high');
   });
 
-  test('badge shows "<model> · <effort>" when a non-default effort is selected', async ({
+  test('badge shows the effort after the model when a non-default effort is selected', async ({
     mount,
   }) => {
     const component = await mount(<EffortModelHarness />);
 
     const badge = component.getByTestId('session-model');
-    // Default effort: model label only, no interpunct.
-    await expect(badge).not.toContainText('·');
+    // Default effort: model label only.
+    await expect(badge).not.toContainText('XHigh');
 
     await badge.click();
     await component.getByTestId('effort-option-xhigh').click();
 
-    await expect(badge).toContainText('·');
     await expect(badge).toContainText('XHigh');
   });
 });

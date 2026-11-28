@@ -2,16 +2,28 @@
 import React, { type JSX, useCallback, useMemo, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useLocation, useNavigate } from 'react-router-dom';
+import { ErrorBoundary } from '../ErrorBoundary';
 import {
+  Activity,
+  AlertTriangle,
   PanelLeft,
+  Play,
   Plus,
   ChevronDown, ChevronRight,
   Inbox,
   Moon,
+  Search,
+  XCircle,
 } from 'lucide-react';
+import { useCommandPalette } from '../CommandPalette/CommandPalette';
+import { isApplePlatform, Kbd } from '../shared/StateGlyph';
 import { useFeedbackInboxUnread, useFeedbackStatus } from '../../hooks/useFeedback';
+import { useInboxFeed } from '../../hooks/useInboxFeed';
+import { useJobsFeed } from '../../hooks/useJobsFeed';
 import { SessionCard } from '../shared/SessionCard';
-import { PluginSidebarLinks } from '../../plugins/PluginSidebarLinks';
+import { PluginBadgeWatcher, PluginSidebarLinks } from '../../plugins/PluginSidebarLinks';
+import { pluginPagePath, usePlugins } from '../../plugins/PluginsContext';
+import { partitionPluginLinks } from '../../plugins/plugin-sidebar-placement';
 import { LatticeLogo } from '../shared/LatticeLogo';
 
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip';
@@ -30,10 +42,6 @@ import { parseJson } from '../../../../utils/json.js';
 
 
 const COLLAPSED_KEY = 'lattice-sidebar-collapsed';
-
-/** A thin ring in the row's background (`--row-bg`) round the Feedback count, cutting it out of the icon's lines it crosses. */
-const COUNT_OUTLINE = [[-1, -1], [1, -1], [-1, 1], [1, 1], [0, -1.5], [0, 1.5], [-1.5, 0], [1.5, 0]]
-  .map(([x, y]) => `${x}px ${y}px 0 var(--row-bg)`).join(', ');
 
 function loadCollapsed(): Record<string, boolean> {
   try {
@@ -73,11 +81,13 @@ function CollapsibleGroup({
       <button
         onClick={onToggle}
         aria-expanded={!isCollapsed}
-        className="group/sec w-full flex items-center gap-1.5 px-2 py-1 mb-0.5 rounded-sm text-xs font-medium text-fg-3 hover:text-fg-2 cursor-pointer"
+        className={`group/sec w-full flex items-center gap-1.5 px-2 py-1 mb-0.5 rounded-sm text-xs font-medium cursor-pointer transition-colors ${
+          isCollapsed ? 'text-fg-3 hover:text-fg-2' : 'text-fg-2 hover:text-fg'
+        }`}
       >
         <span>{title}</span>
         {count !== undefined && <span className="tabular-nums">{count}</span>}
-        <span className="opacity-0 group-hover/sec:opacity-100 transition-opacity">
+        <span className="opacity-60 group-hover/sec:opacity-100 transition-opacity">
           {isCollapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
         </span>
         {headerRight && <span className="ml-auto">{headerRight}</span>}
@@ -128,7 +138,12 @@ interface CrossSessionSidebarProps {
   onOpen: () => void;
 }
 
-export function CrossSessionSidebar({
+/** The sessions sidebar; one that throws shows a retry line, not the App error page. */
+export function CrossSessionSidebar(props: CrossSessionSidebarProps): JSX.Element {
+  return <ErrorBoundary name="Sessions sidebar" inline><CrossSessionSidebarContent {...props} /></ErrorBoundary>;
+}
+
+function CrossSessionSidebarContent({
   currentSessionId,
   isOpen,
   onClose,
@@ -136,10 +151,32 @@ export function CrossSessionSidebar({
 }: CrossSessionSidebarProps): JSX.Element | null {
   const navigate = useNavigate();
   const location = useLocation();
-  const onFeedbackPage = location.pathname === '/feedback';
+  const { links: pluginLinks } = usePlugins();
+  const pluginSections = useMemo(() => partitionPluginLinks(pluginLinks), [pluginLinks]);
+  const [inboxPluginCounts, setInboxPluginCounts] = useState<Record<string, number>>({});
+  const handleInboxPluginCount = useCallback((id: string, count: number) => {
+    setInboxPluginCounts((prev) => (prev[id] === count ? prev : { ...prev, [id]: count }));
+  }, []);
+  const onInboxPage = location.pathname === '/inbox'
+    || location.pathname === '/feedback'
+    || pluginSections.inbox.some((link) => location.pathname === pluginPagePath(link.pluginId, link.path));
+  const onRunningPage = location.pathname === '/running' || location.pathname === '/lab/running';
+  const { data: inboxFeed } = useInboxFeed();
+  const { data: jobsFeed } = useJobsFeed({ active: false });
+  const runningActive = jobsFeed?.activeCount ?? 0;
+  const runningStalled = jobsFeed?.stalledCount ?? 0;
+  const runningFailed = jobsFeed?.failedCount ?? 0;
+  const runningHealthy = Math.max(0, runningActive - runningStalled);
+  const inboxPriority = inboxFeed?.priorityCount ?? 0;
   const feedbackInbox = useFeedbackStatus()?.inbox === true;
   const feedbackUnread = useFeedbackInboxUnread(feedbackInbox);
+  const inboxPluginTotal = useMemo(
+    () => Object.values(inboxPluginCounts).reduce((sum, n) => sum + n, 0),
+    [inboxPluginCounts]
+  );
+  const inboxTotal = inboxPriority + (feedbackUnread ?? 0) + inboxPluginTotal;
   const queryClient = useQueryClient();
+  const palette = useCommandPalette();
   const { loading, recentActions, invalidateConversations, recentlyCompletedSessions } = useConversations();
 
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>(loadCollapsed);
@@ -167,6 +204,8 @@ export function CrossSessionSidebar({
   );
   const sleepingProjectsCollapsed = collapsed.sleepingProjects ?? true;
   const sleepingSessionsCollapsed = collapsed.sleepingSessions ?? true;
+  const toolsCollapsed = collapsed.tools ?? true;
+  const experimentalCollapsed = collapsed.experimental ?? true;
   const archivedCollapsed = collapsed.archived ?? true;
   const { archivedSessions, isLoading: archivedLoading } = useArchivedSidebarSessions({
     enabled: isOpen && !archivedCollapsed,
@@ -290,44 +329,84 @@ export function CrossSessionSidebar({
 
       {/* Session list */}
       <div className="relative flex-1 overflow-y-auto px-3 pt-2 pb-3 flex flex-col gap-5">
-        {/* Plugin links and Feedback stack as one group of rows, spaced like the project rows below. */}
-        <div className="flex flex-col gap-px empty:hidden">
-          <PluginSidebarLinks onNavigate={() => { if (window.innerWidth < 768) onClose(); }} />
-
-          {feedbackInbox && (
-            <button
-              onClick={() => {
-                void navigate('/feedback');
-                if (window.innerWidth < 768) onClose();
-              }}
-              data-testid="sidebar-feedback-inbox"
-              aria-label={feedbackUnread ? `Feedback, ${feedbackUnread} unread` : 'Feedback'}
-              className={`flex items-center gap-2 px-2 py-1.5 rounded-sm text-sm transition-colors cursor-pointer ${
-                onFeedbackPage ? 'bg-surface-2 text-fg [--row-bg:var(--color-surface-2)]' : `${feedbackUnread ? 'text-fg' : 'text-fg-2 hover:text-fg'} hover:bg-surface [--row-bg:var(--color-bg-2)] hover:[--row-bg:var(--color-surface)]`
-              }`}
-            >
-              {/* The icon sits in the cards' 28px icon column, so it and the label line up with the rows below.
-                  Unread turns the icon cyan and the label bright, with the count at the icon's bottom-right
-                  corner, growing away from the icon and outlined in the row's own background. */}
-              <span className="flex items-center gap-2.5">
-                <span className="flex w-7 shrink-0 justify-center">
-                  <span className="relative flex">
-                    <Inbox size={16} className={feedbackUnread ? 'text-accent' : 'text-fg-3'} />
-                    {feedbackUnread ? (
-                      <span
-                        className="absolute left-[calc(100%-3px)] -bottom-[5px] text-[10px] font-semibold leading-none text-accent transition-[text-shadow]"
-                        style={{ textShadow: COUNT_OUTLINE }}
-                        aria-hidden="true"
-                      >
-                        {feedbackUnread}
-                      </span>
-                    ) : null}
-                  </span>
+        {/* Search and Inbox sit at the top rail; Messages and Feedback consolidate inside Inbox. */}
+        <div className="flex flex-col gap-px pb-1 empty:hidden">
+          <PluginBadgeWatcher links={pluginSections.inbox} onCount={handleInboxPluginCount} />
+          <button
+            type="button"
+            onClick={() => {
+              if (window.innerWidth < 768) onClose();
+              palette.open();
+            }}
+            data-testid="sidebar-search"
+            className="flex items-center gap-2.5 px-2 py-1.5 rounded-sm text-sm text-fg-2 hover:text-fg hover:bg-surface transition-colors cursor-pointer"
+          >
+            <span className="flex w-7 shrink-0 justify-center"><Search size={16} className="text-fg-3" /></span>
+            <span className="flex-1 text-left">Search</span>
+            <span className="hidden md:flex gap-1" aria-hidden="true">
+              <Kbd>{isApplePlatform() ? '⌘' : 'Ctrl'}</Kbd><Kbd>K</Kbd>
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              void navigate('/inbox');
+              if (window.innerWidth < 768) onClose();
+            }}
+            data-testid="sidebar-inbox"
+            aria-label={inboxTotal ? `Inbox, ${inboxTotal} waiting` : 'Inbox'}
+            aria-current={onInboxPage ? 'page' : undefined}
+            className={`flex items-center gap-2.5 px-2 py-1.5 rounded-sm text-sm transition-colors cursor-pointer ${
+              onInboxPage ? 'bg-surface-2 text-fg' : 'text-fg-2 hover:text-fg hover:bg-surface'
+            }`}
+          >
+            <span className="flex w-7 shrink-0 justify-center"><Inbox size={16} className={onInboxPage ? 'text-fg-2' : 'text-fg-3'} /></span>
+            <span className="flex-1 text-left">Inbox</span>
+            {inboxTotal > 0 && <span className="text-xs tabular-nums text-fg-3" aria-hidden="true">{inboxTotal}</span>}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              void navigate('/running');
+              if (window.innerWidth < 768) onClose();
+            }}
+            data-testid="sidebar-running"
+            aria-label={runningActive || runningFailed ? `Jobs, ${runningActive} active` : 'Jobs'}
+            aria-current={onRunningPage ? 'page' : undefined}
+            className={`flex items-center gap-2.5 px-2 py-1.5 rounded-sm text-sm transition-colors cursor-pointer ${
+              onRunningPage ? 'bg-surface-2 text-fg' : 'text-fg-2 hover:text-fg hover:bg-surface'
+            }`}
+          >
+            <span className="flex w-7 shrink-0 justify-center">
+              <Activity size={16} className={onRunningPage ? 'text-fg-2' : 'text-fg-3'} />
+            </span>
+            <span className="flex-1 text-left">Jobs</span>
+            <span className="flex items-center gap-2.5 tabular-nums text-xs" aria-hidden="true">
+              {runningStalled > 0 && (
+                <span className="inline-flex items-center gap-1 text-amber-400">
+                  <AlertTriangle size={11} strokeWidth={2.2} />
+                  {runningStalled}
                 </span>
-                <span>Feedback</span>
-              </span>
-            </button>
-          )}
+              )}
+              {runningFailed > 0 && (
+                <span className="inline-flex items-center gap-1 text-rose-400">
+                  <XCircle size={11} strokeWidth={2.2} />
+                  {runningFailed}
+                </span>
+              )}
+              {runningHealthy > 0 && (
+                runningStalled > 0 || runningFailed > 0 ? (
+                  <span className="inline-flex items-center gap-1 text-fg-3">
+                    <Play size={9} strokeWidth={2.2} />
+                    {runningHealthy}
+                  </span>
+                ) : (
+                  <span className="text-fg-3">{runningHealthy}</span>
+                )
+              )}
+            </span>
+          </button>
+          <PluginSidebarLinks links={pluginSections.top} onNavigate={() => { if (window.innerWidth < 768) onClose(); }} />
         </div>
 
         <div data-testid="projects-section">
@@ -409,7 +488,7 @@ export function CrossSessionSidebar({
               {/* Pinned sessions sit above the rest */}
               {pinnedSessions.length > 0 && (
                 <CollapsibleGroup
-                  title="Pinned" count={pinnedSessions.length}
+                  title="Pinned"
                   isCollapsed={collapsed.pinned} onToggle={() => toggleCollapse('pinned')}
                 >
                   {pinnedSessions.map(session => renderCard(session, true))}
@@ -433,20 +512,54 @@ export function CrossSessionSidebar({
           )}
         </div>
 
-        {!loading && (
-          <CollapsibleGroup
-            title="Archived"
-            isCollapsed={archivedCollapsed}
-            onToggle={() => toggleCollapse('archived', true)}
-          >
-            <ArchivedSessionList
-              archivedSessions={workspaceArchivedSessions}
-              currentSessionId={currentSessionId}
-              isLoading={archivedLoading}
-              onSelectSession={handleSessionClick}
-              onRestoreSession={handleRestoreArchivedSession}
-            />
-          </CollapsibleGroup>
+        {(pluginSections.tools.length > 0 || pluginSections.experimental.length > 0 || !loading) && (
+          <div className="border-t border-line/70 pt-3 flex flex-col gap-1.5" data-testid="sidebar-utility-footer">
+            {pluginSections.tools.length > 0 && (
+              <div data-testid="sidebar-tools-section">
+                <CollapsibleGroup
+                  title="Tools"
+                  isCollapsed={toolsCollapsed}
+                  onToggle={() => toggleCollapse('tools', true)}
+                >
+                  <PluginSidebarLinks
+                    links={pluginSections.tools}
+                    onNavigate={() => { if (window.innerWidth < 768) onClose(); }}
+                  />
+                </CollapsibleGroup>
+              </div>
+            )}
+
+            {pluginSections.experimental.length > 0 && (
+              <div data-testid="sidebar-experimental-section">
+                <CollapsibleGroup
+                  title="Experimental"
+                  isCollapsed={experimentalCollapsed}
+                  onToggle={() => toggleCollapse('experimental', true)}
+                >
+                  <PluginSidebarLinks
+                    links={pluginSections.experimental}
+                    onNavigate={() => { if (window.innerWidth < 768) onClose(); }}
+                  />
+                </CollapsibleGroup>
+              </div>
+            )}
+
+            {!loading && (
+              <CollapsibleGroup
+                title="Archived"
+                isCollapsed={archivedCollapsed}
+                onToggle={() => toggleCollapse('archived', true)}
+              >
+                <ArchivedSessionList
+                  archivedSessions={workspaceArchivedSessions}
+                  currentSessionId={currentSessionId}
+                  isLoading={archivedLoading}
+                  onSelectSession={handleSessionClick}
+                  onRestoreSession={handleRestoreArchivedSession}
+                />
+              </CollapsibleGroup>
+            )}
+          </div>
         )}
       </div>
 

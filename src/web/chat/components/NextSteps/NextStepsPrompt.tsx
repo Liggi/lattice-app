@@ -10,7 +10,6 @@ import {
   RefreshCw,
   Rocket,
   Search,
-  Sparkles,
   TestTube,
   Wrench,
   X,
@@ -38,7 +37,6 @@ const NEXT_STEP_ICONS: Record<string, IconComponent> = {
   RefreshCw,
   Rocket,
   Search,
-  Sparkles,
   TestTube,
   Wrench,
 };

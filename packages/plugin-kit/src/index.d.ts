@@ -69,6 +69,87 @@ export interface LatticeConfirmCard {
   options: LatticeConfirmOption[];
   /** The label of the option whose choice runs the action. */
   runs: string;
+  /**
+   * A card view the plugin's web entry registers (`web.cardView`), drawn in
+   * place of `detail` on the open and the answered card. `detail` is still
+   * what the agent and the panel read.
+   */
+  view?: string;
+}
+
+/** What a confirm handler is told besides the payload. */
+export interface LatticeConfirmContext {
+  conversationId: string;
+  cardId: string;
+  /** Text the user edited in the card's view (`setEdit`) before choosing `runs`; absent when unedited. */
+  edit?: string;
+}
+
+/** Keys the user saved with `lattice keys import` or in Settings that a plugin may read. */
+export type LatticeKeyName = 'slack';
+
+export type LatticeJobState =
+  | 'starting'
+  | 'working'
+  | 'waiting'
+  | 'stalled'
+  | 'completed'
+  | 'failed'
+  | 'cancelled';
+
+export interface LatticeJobRecord {
+  id: string;
+  provider: string;
+  providerLabel: string;
+  label: string;
+  state: LatticeJobState;
+  stateReason?: string | null;
+  session?: string | null;
+  project?: { id: string; name: string } | null;
+  done: number;
+  total: number | null;
+  unit?: string;
+  skipped?: number;
+  failedCount?: number;
+  stage?: string | null;
+  stages?: Array<{ name: string; status: 'done' | 'active' | 'pending' }>;
+  message?: string | null;
+  startedAt: number;
+  movedAt: number;
+  updatedAt: number;
+  endedAt?: number | null;
+  ratePerMin?: number | null;
+  etaAt?: number | null;
+  etaGuess?: boolean;
+  provenance?: string | null;
+  command?: string | null;
+  pid?: number | null;
+  exitCode?: number | null;
+  logTail?: string[];
+  canStop?: boolean;
+  externalUrl?: string | null;
+  detailView?: { pluginId: string; view: string; payload?: unknown } | null;
+}
+
+export interface LatticeJobProviderSnapshot {
+  jobs: LatticeJobRecord[];
+  warning?: string | null;
+}
+
+export interface LatticeJobProvider {
+  /** Short stable id, e.g. `'ci-runner'`. */
+  id: string;
+  /** Plain-English name shown in Running now (`CI runner`). */
+  label: string;
+  list(): Promise<LatticeJobProviderSnapshot>;
+  stop?(jobId: string): Promise<void>;
+  /** Optional push subscription: call `onChange` whenever this provider's jobs change; returns unsubscribe. */
+  subscribe?(onChange: () => void): () => void;
+}
+
+export interface LatticeJobDetailViewProps {
+  job: LatticeJobRecord;
+  payload: unknown;
 }
 
 export interface LatticePluginHost {
@@ -120,7 +201,15 @@ export interface LatticePluginHost {
      * the answer. A thrown error tells the agent it failed, and the action can
      * run again from a new card.
      */
-    handle(name: string, fn: (payload: unknown, context: { conversationId: string; cardId: string }) => string | Promise<string>): void;
+    handle(name: string, fn: (payload: unknown, context: LatticeConfirmContext) => string | Promise<string>): void;
+  };
+  keys: {
+    /** The saved key, read fresh on each call, or null when none is saved. Never log or print it. */
+    get(name: LatticeKeyName): string | null;
+  };
+  /** Feed external long-running jobs into Lattice's core Running now view. */
+  jobs?: {
+    registerProvider(provider: LatticeJobProvider): void;
   };
 }
 
@@ -129,12 +218,43 @@ export type LatticePluginActivate = (host: LatticePluginHost) => void | Promise<
 /** Lucide icons fit. */
 export type LatticeIcon = ComponentType<{ size?: number | string; className?: string }>;
 
+/** What a card view (`web.cardView`) is drawn with. */
+export interface LatticeCardViewProps {
+  cardId: string;
+  conversationId: string;
+  /** The payload the server put on the card with `confirm.ask`. */
+  payload: unknown;
+  /** The card still takes an answer. */
+  open: boolean;
+  /** The option the user chose, or null. */
+  answer: string | null;
+  /** The action has run, and cannot run again. */
+  actionRan: boolean;
+  /** While open: text sent to the action as `context.edit` when the user chooses `runs`; undefined sends none. */
+  setEdit(edit: string | undefined): void;
+  /** While open: stops `runs` being chosen, with why, shown on the option; null allows it again. */
+  blockRuns(reason: string | null): void;
+}
+
+/** Where a plugin's sidebar link sits: top rail, inside Inbox, collapsed under Tools or Experimental, or hidden. */
+export type LatticeSidebarSection = 'top' | 'inbox' | 'tools' | 'experimental' | 'hidden';
+
 export interface LatticeWebHost {
   readonly id: string;
   /** A page at `/p/<id><path>`; Lattice draws the sidebar and a header titled `title`. */
   page(path: string, component: ComponentType, opts: { title: string }): void;
-  /** A link at the top of the sidebar. `useBadge` is a hook, called on every render. */
-  sidebarLink(link: { label: string; path: string; icon?: LatticeIcon; useBadge?: () => string | null }): void;
+  /** A link in the sidebar. `useBadge` is a hook, called on every render. */
+  sidebarLink(link: { label: string; path: string; icon?: LatticeIcon; useBadge?: () => string | null; section?: LatticeSidebarSection }): void;
+  /**
+   * Draws the body of the plugin's confirm cards that name `name` as their
+   * `view`, in the conversation, with the plugin's stylesheet applied.
+   */
+  cardView(name: string, component: ComponentType<LatticeCardViewProps>): void;
+  /**
+   * Draws an extra detail section inside Lattice's core Running now detail pane
+   * for jobs whose `detailView` names this plugin and `name`.
+   */
+  jobDetailView?(name: string, component: ComponentType<LatticeJobDetailViewProps>): void;
   /** Requests to the plugin's own routes, `/api/plugins/<id><path>`; a non-2xx answer throws its `error`. */
   api: {
     get<T>(path: string): Promise<T>;

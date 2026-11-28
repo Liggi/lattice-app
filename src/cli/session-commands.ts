@@ -1143,6 +1143,46 @@ async function cmdSwitch(cmd: ParsedCommand): Promise<void> {
   if (!response.ok) process.exitCode = 1;
 }
 
+async function cmdProfile(cmd: ParsedCommand): Promise<void> {
+  const conv = cmd.named.conv;
+  const name = cmd.named.name;
+  const revert = bool(cmd, 'revert');
+  if (revert === Boolean(name)) fail('profile takes a profile name or --revert, not both');
+  const address = readServerAddress();
+  const host = str(cmd, 'host') ?? address.host;
+  const port = int(cmd, 'port') ?? address.port;
+  let response: Response;
+  try {
+    response = await fetch(`http://${host}:${port}/api/conv/${encodeURIComponent(conv)}/profile`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...serverAuthHeaders() },
+      body: JSON.stringify(revert ? { revert: true } : { profile: name }),
+    });
+  } catch (err) {
+    fail(`could not reach the Lattice server at ${host}:${port} (${err instanceof Error ? err.message : String(err)})`);
+  }
+  const text = await response.text();
+  let payload: Record<string, unknown>;
+  try {
+    payload = parseJson(text) as Record<string, unknown>;
+  } catch {
+    fail(`server answered HTTP ${response.status}: ${text}`);
+  }
+  if (isJson(cmd)) {
+    emitJson(payload);
+  } else if (payload.status === 'changed') {
+    const switched = payload.switched as { to: { provider: string; model: string } } | undefined;
+    process.stdout.write(`${conv} moved from "${String(payload.from)}" to "${String(payload.to)}"${switched ? `, front now on ${switched.to.provider} ${switched.to.model}` : ', front\'s model unchanged'}. Its next input carries the new routing.\n`);
+  } else if (payload.status === 'unchanged') {
+    process.stdout.write(`${conv} is already on "${String(payload.profile)}"; nothing changed.\n`);
+  } else if (payload.status === 'refused') {
+    process.stderr.write(`profile change refused (${String(payload.code)}): ${String(payload.reason)}\n`);
+  } else {
+    process.stderr.write(`server answered HTTP ${response.status}: ${text}\n`);
+  }
+  if (!response.ok) process.exitCode = 1;
+}
+
 // ---------------------------------------------------------------------------
 // compact
 
@@ -1328,6 +1368,7 @@ const HANDLERS = new Map<string, (cmd: ParsedCommand) => void | Promise<void>>([
   ['state', cmdState],
   ['workers', cmdWorkers],
   ['switch', cmdSwitch],
+  ['profile', cmdProfile],
   ['move-worker', cmdMoveWorker],
   ['move-thread', cmdMoveThread],
   ['compact', cmdCompact],
@@ -1336,7 +1377,7 @@ const HANDLERS = new Map<string, (cmd: ParsedCommand) => void | Promise<void>>([
 ]);
 
 /** Verbs that are pure HTTP clients to the running server and open no SQLite connection. */
-const HTTP_VERBS = new Set(['new', 'consult', 'note', 'state', 'workers', 'switch', 'move-worker', 'move-thread', 'compact', 'react', 'permission']);
+const HTTP_VERBS = new Set(['new', 'consult', 'note', 'state', 'workers', 'switch', 'profile', 'move-worker', 'move-thread', 'compact', 'react', 'permission']);
 
 /** Verbs that only read, and so can open SQLite read-only. */
 const MUTATING_VERBS = new Set(['archive', 'unarchive']);

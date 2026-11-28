@@ -16,6 +16,7 @@ const current = {
   anthropic: { apiKey: SAVED_KEY, models: { generation: 'claude-sonnet-5' } },
   gemini: { apiKey: 'MARKER-gemini' },
   typesafe: { apiKey: 'MARKER-typesafe', apiKeyFile: '/keys/typesafe' },
+  slack: { apiKey: 'xoxp-MARKER-slack' },
   claudeEndpoints: [{ id: 'ep-a', baseUrl: 'http://127.0.0.1:8080', model: 'qwen3-coder', apiKey: 'MARKER-endpoint' }],
 } as unknown as LatticeConfig;
 
@@ -27,6 +28,7 @@ describe('config secrets', () => {
     expect(parsed.anthropic).toEqual({ apiKeyConfigured: true, models: { generation: 'claude-sonnet-5' } });
     expect(parsed.gemini).toEqual({ apiKeyConfigured: true });
     expect((parsed as unknown as { typesafe: unknown }).typesafe).toEqual({ apiKeyConfigured: true, apiKeyFile: '/keys/typesafe' });
+    expect((parsed as unknown as { slack: unknown }).slack).toEqual({ apiKeyConfigured: true });
     expect(parsed.server.claudeAuthMode).toBe('cli');
     expect('authToken' in parsed.server).toBe(false);
     expect(publicConfig({ ...current, anthropic: {} } as LatticeConfig).anthropic).toEqual({ apiKeyConfigured: false });

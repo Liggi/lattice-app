@@ -5,7 +5,7 @@ import * as path from 'path';
 import type { Server } from 'http';
 import type { AddressInfo } from 'net';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createImageRoutes } from '../../src/routes/system/image.routes.js';
+import { createImageRoutes, defaultAgentImageRoots } from '../../src/routes/system/image.routes.js';
 import { errorHandler } from '../../src/middleware/error-handler.js';
 import { localImageUrl } from '../../src/web/chat/components/MessageList/MessageItem.js';
 
@@ -17,6 +17,8 @@ describe('GET /api/images', () => {
   let baseUrl: string;
   let tmp: string;
   let workDir: string;
+  let agentRootParent: string;
+  let agentRoot: string;
   let outside: string;
 
   beforeAll(async () => {
@@ -24,12 +26,18 @@ describe('GET /api/images', () => {
     fs.writeFileSync(path.join(tmp, 'shot.png'), PNG);
     fs.writeFileSync(path.join(tmp, 'secret.png'), 'not really a png');
     fs.writeFileSync(path.join(tmp, 'notes.txt'), 'hello');
-    // Session working dirs and "outside" live under $HOME, away from temp roots.
+    // Session working dirs, agent artifact roots, and "outside" live under $HOME, away from temp roots.
     workDir = fs.mkdtempSync(path.join(os.homedir(), '.img-route-work-'));
+    agentRootParent = fs.mkdtempSync(path.join(os.homedir(), '.img-route-agent-'));
+    agentRoot = path.join(agentRootParent, 'brain');
+    fs.mkdirSync(path.join(agentRoot, 'conv-1', 'scratch'), { recursive: true });
     outside = fs.mkdtempSync(path.join(os.homedir(), '.img-route-outside-'));
     fs.writeFileSync(path.join(workDir, 'repo-shot.png'), PNG);
+    fs.writeFileSync(path.join(agentRoot, 'conv-1', 'scratch', 'artifact.png'), PNG);
+    fs.writeFileSync(path.join(agentRootParent, 'sibling-secret.png'), PNG);
     fs.writeFileSync(path.join(outside, 'private.png'), PNG);
     fs.symlinkSync(path.join(outside, 'private.png'), path.join(tmp, 'link.png'));
+    fs.symlinkSync(path.join(outside, 'private.png'), path.join(agentRoot, 'escape.png'));
     // figkit writes the figure, then its phone layout; an older figure has only an inline preview, -phone.png.
     const past = new Date(Date.now() - 60_000);
     fs.writeFileSync(path.join(tmp, 'fig.png'), PNG);
@@ -42,7 +50,10 @@ describe('GET /api/images', () => {
     fs.writeFileSync(path.join(tmp, 'redrawn.png'), PNG);
 
     const app = express();
-    app.use('/api/images', createImageRoutes({ listWorkingDirectories: async () => [workDir] }));
+    app.use('/api/images', createImageRoutes({
+      listWorkingDirectories: async () => [workDir],
+      listAgentImageRoots: () => [agentRoot],
+    }));
     app.use(errorHandler);
     server = await new Promise<Server>((resolve) => {
       const s = app.listen(0, '127.0.0.1', () => resolve(s));
@@ -52,13 +63,17 @@ describe('GET /api/images', () => {
 
   afterAll(async () => {
     await new Promise<void>((resolve) => server.close(() => resolve()));
-    for (const d of [tmp, workDir, outside]) fs.rmSync(d, { recursive: true, force: true });
+    for (const d of [tmp, workDir, agentRootParent, outside]) fs.rmSync(d, { recursive: true, force: true });
   });
 
   const get = (p: string) => fetch(baseUrl + encodeURIComponent(p));
 
-  it('serves a PNG from a temp directory and from a session working directory', async () => {
-    for (const p of [path.join(tmp, 'shot.png'), path.join(workDir, 'repo-shot.png')]) {
+  it('serves a PNG from a temp directory, session working directory, and agent output directory', async () => {
+    for (const p of [
+      path.join(tmp, 'shot.png'),
+      path.join(workDir, 'repo-shot.png'),
+      path.join(agentRoot, 'conv-1', 'scratch', 'artifact.png'),
+    ]) {
       const res = await get(p);
       expect(res.status).toBe(200);
       expect(res.headers.get('content-type')).toBe('image/png');
@@ -66,9 +81,11 @@ describe('GET /api/images', () => {
     }
   });
 
-  it('refuses files outside the allowed roots, including through a symlink', async () => {
+  it('refuses files outside the allowed roots, including siblings and symlinks', async () => {
     expect((await get(path.join(outside, 'private.png'))).status).toBe(403);
+    expect((await get(path.join(agentRootParent, 'sibling-secret.png'))).status).toBe(403);
     expect((await get(path.join(tmp, 'link.png'))).status).toBe(403);
+    expect((await get(path.join(agentRoot, 'escape.png'))).status).toBe(403);
   });
 
   it('serves the stacked phone layout for variant=phone only when it is figkit\'s and at least as new as the figure', async () => {
@@ -88,9 +105,26 @@ describe('GET /api/images', () => {
   });
 });
 
+describe('defaultAgentImageRoots', () => {
+  it('scopes to agent output subdirectories rather than top-level config homes', () => {
+    const home = os.homedir();
+    const roots = defaultAgentImageRoots();
+    expect(roots).toContain(path.join(home, '.gemini', 'antigravity-cli', 'brain'));
+    expect(roots).toContain(path.join(home, '.gemini', 'antigravity', 'brain'));
+    expect(roots).toContain(path.join(home, '.codex', 'generated_images'));
+    expect(roots).toContain(path.join(home, '.claude', 'projects'));
+    expect(roots).not.toContain(path.join(home, '.gemini'));
+    expect(roots).not.toContain(path.join(home, '.gemini', 'antigravity-cli'));
+    expect(roots).not.toContain(path.join(home, '.claude'));
+    expect(roots).not.toContain(path.join(home, '.codex'));
+  });
+});
+
 describe('localImageUrl', () => {
-  it('routes absolute host paths through the image route and leaves URLs alone', () => {
+  it('routes absolute host paths and file:/// URLs through the image route and leaves web URLs alone', () => {
     expect(localImageUrl('/tmp/a%20b.png')).toBe('/api/images?path=%2Ftmp%2Fa%20b.png');
+    expect(localImageUrl('file:///tmp/a%20b.png')).toBe('/api/images?path=%2Ftmp%2Fa%20b.png');
+    expect(localImageUrl('file://remote-host/share/x.png')).toBe('file://remote-host/share/x.png');
     expect(localImageUrl('https://example.com/x.png')).toBe('https://example.com/x.png');
     expect(localImageUrl('/api/images?path=x')).toBe('/api/images?path=x');
     expect(localImageUrl('//cdn.example.com/x.png')).toBe('//cdn.example.com/x.png');

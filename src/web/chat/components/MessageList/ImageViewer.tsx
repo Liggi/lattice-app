@@ -2,7 +2,7 @@ import React, { type JSX, useCallback, useEffect, useLayoutEffect, useRef, useSt
 import { createPortal } from 'react-dom';
 import { ChevronLeft, ChevronRight, Eye, EyeOff, MessageSquarePlus, X } from 'lucide-react';
 import { parseJson } from '../../../../utils/json.js';
-import { noteBoxFraction, type AgentImageNote } from '../../utils/gallery-block';
+import { noteBoxFraction, type AgentImageNote } from '@/utils/gallery-block';
 import { NoteMarks, NotesList, type Mark } from './NoteMarks';
 import type { ImageBox } from '../../utils/annotations-format';
 import { imagePath, useImageNotes } from './image-notes-context';
@@ -71,6 +71,9 @@ function seriesFor(anchor: HTMLElement): Series {
  * images in its message. A modified click (Cmd/Ctrl/middle) still opens the
  * file in a new tab.
  */
+// Global CSS draws links cyan and underlined; an image link, or an image that fails, should not look like one.
+const PLAIN_LINK: React.CSSProperties = { textDecoration: 'none', color: 'inherit' };
+
 export function ViewableImage({ src, alt, children, className, notes, size }: {
   src?: string;
   alt: string;
@@ -89,6 +92,7 @@ export function ViewableImage({ src, alt, children, className, notes, size }: {
         target="_blank"
         rel="noopener noreferrer"
         className={className}
+        style={PLAIN_LINK}
         data-viewable-image
         data-image-alt={alt}
         data-agent-notes={notes && notes.length > 0 ? JSON.stringify({ notes, ...(size ? { size } : {}) }) : undefined}

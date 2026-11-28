@@ -1,1 +1,1 @@
-export { ErrorBoundary, AppErrorFallback } from './ErrorBoundary';
+export { ErrorBoundary, AppErrorFallback, Contained } from './ErrorBoundary';

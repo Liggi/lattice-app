@@ -15,6 +15,7 @@
 import { deriveStatus, deriveProcessAlive } from '@liggi/agent-ui-harness/protocol';
 import type { RunEndData, RunErrorData, SessionEvent, TurnEndData } from '@liggi/agent-ui-harness/protocol';
 import { derivePendingWork, type PendingWork } from './derive-pending-work.js';
+import { RETRY_CIRCUIT_CLOSED_EVENT, RETRY_CIRCUIT_OPEN_EVENT, type RetryCircuitOpenData } from '../services/sessions/retry-circuit-breaker.js';
 
 export type EndpointStatus = 'ongoing' | 'idle' | 'stopping' | 'completed';
 
@@ -39,6 +40,8 @@ export interface RunFailure {
   message: string;
   /** When it failed, epoch ms. */
   at: number;
+  /** Automatic retries stopped after repeated failures (retry-circuit-breaker.ts); only Retry, a message or a healthy turn resumes them. */
+  circuitBroken?: boolean;
 }
 
 /**
@@ -47,14 +50,16 @@ export interface RunFailure {
  * that could not start, or a process that exited mid-turn. A Stop during the
  * turn is the user's doing, not a failure. Restarts end runs as
  * `server_restart` or `process_lost`, which the carry-on resumes, so they are
- * not failures either. The next input or run clears it.
+ * not failures either. The next input or run clears it. An open retry
+ * circuit is a failure until the circuit closes or the next input.
  */
 export function deriveRunFailure(events: readonly SessionEvent[]): RunFailure | null {
   let failure: RunFailure | null = null;
   let inTurn = false;
   let stopped = false;
   for (const event of events) {
-    switch (event.type) {
+    // The circuit's own events are Lattice's, not the harness protocol's.
+    switch (event.type as string) {
       case 'input:sent':
       case 'run:start':
         failure = null;
@@ -74,6 +79,14 @@ export function deriveRunFailure(events: readonly SessionEvent[]): RunFailure | 
       case 'run:error':
         failure = { message: (event.data as RunErrorData | undefined)?.message ?? 'The session could not start', at: event.timestamp };
         inTurn = false;
+        break;
+      case RETRY_CIRCUIT_OPEN_EVENT: {
+        const data = event.data as Partial<RetryCircuitOpenData> | undefined;
+        failure = { message: data?.reason ?? 'Repeated failures', at: event.timestamp, circuitBroken: true };
+        break;
+      }
+      case RETRY_CIRCUIT_CLOSED_EVENT:
+        if (failure?.circuitBroken) failure = { message: failure.message, at: failure.at };
         break;
       case 'run:end': {
         const data = event.data as RunEndData | undefined;

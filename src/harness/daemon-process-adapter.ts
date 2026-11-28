@@ -40,14 +40,22 @@ export class DaemonProcessAdapter implements ProcessAdapter {
       ...(config.env ? { envOverrides: config.env } : {}),
     };
 
-    // Pass through extra args as model/permissionMode if present
+    // Pass through extra args as model/permissionMode/effort if present.
+    // An explicit `--effort=` (empty value) resets to CLI default instead of
+    // re-reading a previous segment effort.
     const extra = config.args ?? [];
+    let explicitEffortArg = false;
     for (const arg of extra) {
       if (arg.startsWith('--model=')) {
         daemonConfig.model = arg.slice('--model='.length);
       }
       if (arg.startsWith('--permission-mode=')) {
         daemonConfig.permissionMode = arg.slice('--permission-mode='.length);
+      }
+      if (arg.startsWith('--effort=')) {
+        explicitEffortArg = true;
+        const effortVal = arg.slice('--effort='.length);
+        if (effortVal) daemonConfig.effort = effortVal;
       }
     }
 
@@ -59,8 +67,10 @@ export class DaemonProcessAdapter implements ProcessAdapter {
     if (typeof conversationId === 'string') {
       daemonConfig.conversationId = conversationId;
       if (this.isCoordinator(conversationId)) daemonConfig.coordinator = true;
-      const effort = this.claudeEffort(conversationId);
-      if (effort) daemonConfig.effort = effort;
+      if (!explicitEffortArg) {
+        const effort = this.claudeEffort(conversationId);
+        if (effort) daemonConfig.effort = effort;
+      }
     }
     // Spawn-time attachments reach the daemon as ConversationConfig.initialContent,
     // which process-daemon merges into the CLI's first stdin message. Callers spell

@@ -15,8 +15,11 @@ import { ComposerContextControl } from '@/web/chat/components/Composer/ComposerC
 import { ComposerGoalControl } from '@/web/chat/components/Composer/ComposerGoalControl';
 import { NextStepsPrompt } from '../NextSteps';
 import { ConversationHeader } from '../ConversationHeader/ConversationHeader';
+import { ErrorBoundary } from '../ErrorBoundary';
 import { InsightsPanel, type SyncState } from '../InsightsPanel';
 import { CoordinatorPanel } from '../InsightsPanel/CoordinatorPanel';
+import { extractOutputs, mergeOutputs, type ProjectOutputs } from '../InsightsPanel/project-outputs';
+import { conversationTitle as titleOf } from '../CommandPalette/command-palette-search';
 import { PermissionBanner, PermissionWaitingLine } from '../PermissionBanner';
 import { AnnotationSelectionLayer, AnnotationSpanIcons, AnnotationStatusBadge } from '../MessageAnnotations';
 import { SideQuestions } from '../MessageAnnotations/SideQuestions';
@@ -30,7 +33,7 @@ import { api } from '../../services/api';
 import { useHarnessSession } from '../../hooks/useHarnessSession';
 import { useWorkers } from '../../hooks/useWorkers';
 import { useConversationSendMessage } from './use-conversation-send-message';
-import { resolveIsArchived, resolveIsCoordinator, resolveParentConversationId } from '../../utils/session-identity';
+import { resolveIsArchived, resolveIsCoordinator, resolveParentConversationId, resolveSessionTitle } from '../../utils/session-identity';
 import { useDuplicateMessageDetector } from '../../hooks/useDuplicateMessageDetector';
 import { usePermissions } from '../../hooks/usePermissions';
 import { conversationKeys, useConversations } from '../../contexts/ConversationsContext';
@@ -75,10 +78,20 @@ import { shouldRefetchOnCompletion } from './session-active-state';
 import { setBrowserIncidentContext, clearBrowserIncidentContext } from '../../services/browser-incidents';
 import type { Provider } from '@/types/unified-messages';
 import { useClaudeModels } from '../../hooks/useClaudeModels';
+import { CLAUDE_EFFORTS, DEFAULT_CLAUDE_EFFORT, effortsForClaudeModel } from '@/constants/claude-models';
 import { endpointModelOption } from '@/constants/claude-endpoint';
 import { ModelMark } from '../Composer/ModelMark';
-import { antigravityFullModels } from '@/constants/antigravity-models.js';
+import {
+  ANTIGRAVITY_EFFORT_LABELS,
+  ANTIGRAVITY_MODELS,
+  DEFAULT_ANTIGRAVITY_PICKER_ID,
+  antigravityModelEffort,
+  antigravityModelEntry,
+  antigravityModelId,
+} from '@/constants/antigravity-models.js';
+import { inklingModelEntry } from '@/constants/inkling-models.js';
 import { RunningJobsStrip } from './RunningJobsStrip';
+import { WorkersByIdContext } from '../shared/session-state-icon/worker-glyph';
 import {
   CODEX_EFFORTS,
   CODEX_MODELS,
@@ -227,7 +240,8 @@ export function ConversationView({ sidebarOpen, onToggleSidebar, conversationId:
     }
     return [...ids].sort().join(',');
   }, [harnessMessages, harnessPendingMessages]);
-  const { workers, project, senders, references: sessionReferences, repliedAt: serverRepliedAt } = useWorkers(conversationId ?? null, lastWorkerEventSeq, harnessStatus, seenSenders, lastEventSeq);
+  const { workers, project, senders, references: sessionReferences, repliedAt: serverRepliedAt, profile: profileRoster } = useWorkers(conversationId ?? null, lastWorkerEventSeq, harnessStatus, seenSenders, lastEventSeq);
+  const workersById = useMemo(() => new Map(workers.map((worker) => [worker.worker, worker])), [workers]);
   // The page's own events say when a reply has just gone; the server's read
   // reaches back past what the page has loaded.
   const repliedAt = useMemo(() => {
@@ -284,6 +298,8 @@ export function ConversationView({ sidebarOpen, onToggleSidebar, conversationId:
         other: m.other,
         icon: <ModelMark kind="claude" />,
         group: 'Claude',
+        efforts: effortsForClaudeModel(m.id),
+        defaultEffort: DEFAULT_CLAUDE_EFFORT,
       })),
       ...claudeEndpoints.map((endpoint) => ({
         ...endpointModelOption(endpoint),
@@ -300,22 +316,49 @@ export function ConversationView({ sidebarOpen, onToggleSidebar, conversationId:
       label: model.label,
       description: model.description,
       isDefault: false,
+      other: model.other,
       icon: <ModelMark kind="openai" />,
       group: 'OpenAI',
+      efforts: model.efforts,
+      defaultEffort: model.efforts.includes(DEFAULT_CODEX_EFFORT) ? DEFAULT_CODEX_EFFORT : model.efforts[model.efforts.length - 1],
     })),
     [],
   );
 
   const switchableAntigravityModels = useMemo(
-    () => antigravityFullModels().map((model) => ({
+    () => ANTIGRAVITY_MODELS.map((model) => ({
       id: model.id,
       label: model.label,
+      description: model.description,
       isDefault: false,
       icon: <ModelMark kind="antigravity" />,
       group: 'Google',
+      efforts: model.efforts,
+      defaultEffort: model.defaultEffort,
     })),
     [],
   );
+
+  const switchableEffortsByGroup = useMemo(() => ({
+    Claude: CLAUDE_EFFORTS,
+    OpenAI: CODEX_EFFORTS.map((effort) => ({
+      id: effort.id,
+      label: effort.label,
+      description: effort.description,
+      isDefault: effort.id === DEFAULT_CODEX_EFFORT,
+    })),
+    Google: (['low', 'medium', 'high', 'xhigh'] as const).map((effortId) => ({
+      id: effortId,
+      label: ANTIGRAVITY_EFFORT_LABELS[effortId] ?? effortId,
+      isDefault: effortId === 'high',
+    })),
+  }), []);
+
+  const switchableClaudeEfforts = useMemo(() => {
+    const model = pendingModel ?? harnessSessionModel ?? '';
+    const allowed = new Set(effortsForClaudeModel(model));
+    return CLAUDE_EFFORTS.filter((effort) => allowed.has(effort.id));
+  }, [harnessSessionModel, pendingModel]);
 
   const switchableCodexEfforts = useMemo(() => {
     const model = pendingModel ?? harnessSessionModel ?? DEFAULT_CODEX_MODEL_ID;
@@ -328,6 +371,15 @@ export function ConversationView({ sidebarOpen, onToggleSidebar, conversationId:
         isDefault: effortId === DEFAULT_CODEX_EFFORT,
       };
     });
+  }, [harnessSessionModel, pendingModel]);
+
+  const switchableAntigravityEfforts = useMemo(() => {
+    const entry = antigravityModelEntry(pendingModel ?? harnessSessionModel ?? DEFAULT_ANTIGRAVITY_PICKER_ID);
+    return (entry?.efforts ?? []).map((effortId) => ({
+      id: effortId,
+      label: ANTIGRAVITY_EFFORT_LABELS[effortId] ?? effortId,
+      isDefault: effortId === entry?.defaultEffort,
+    }));
   }, [harnessSessionModel, pendingModel]);
 
   // Derived state
@@ -551,6 +603,8 @@ export function ConversationView({ sidebarOpen, onToggleSidebar, conversationId:
     if (prevSessionIdRef.current === conversationId) return;
     prevSessionIdRef.current = conversationId;
     setIsStopRequested(false);
+    setPendingModel(null);
+    setPendingReasoningEffort(null);
 
     if (conversationId) {
       // Force fresh conversation details on session switch. The details query
@@ -611,19 +665,107 @@ export function ConversationView({ sidebarOpen, onToggleSidebar, conversationId:
     retryDelay: (attemptIndex) => Math.min(500 * 2 ** attemptIndex, 3000),
   });
 
-  // The effort the conversation is recorded as running at, from the segment.
-  // Shown when the user has not picked anything, so the control tells the
-  // truth about a coordinator instead of falling back to the default entry.
+  // The effort the conversation is recorded as running at, from the segment
+  // (Codex) or encoded in the serving model id (Antigravity). Shown when the
+  // user has not picked anything, so the control tells the truth instead of
+  // falling back to the default entry.
   const savedReasoningEffort = conversationDetails?.reasoningEffort ?? null;
+  const currentAntigravityModel = activeProvider === 'antigravity'
+    ? (antigravityModelEntry(harnessSessionModel)?.id ?? harnessSessionModel)
+    : null;
+  const currentAntigravityEffort = activeProvider === 'antigravity'
+    ? antigravityModelEffort(harnessSessionModel)
+    : null;
+  const effectiveAntigravityEffort = useMemo(() => {
+    if (activeProvider !== 'antigravity') return null;
+    const entry = antigravityModelEntry(pendingModel ?? harnessSessionModel ?? DEFAULT_ANTIGRAVITY_PICKER_ID);
+    const candidate = pendingReasoningEffort ?? currentAntigravityEffort;
+    if (candidate && entry?.efforts.includes(candidate)) return candidate;
+    return entry?.defaultEffort ?? null;
+  }, [activeProvider, pendingModel, harnessSessionModel, pendingReasoningEffort, currentAntigravityEffort]);
 
   // Drop the pending choice once the conversation is actually on it: the saved
   // value takes over from there, and a later change made elsewhere is not
   // masked by a selection the user has already had applied.
+  const confirmedReasoningEffort = activeProvider === 'antigravity'
+    ? currentAntigravityEffort
+    : activeProvider === 'claude'
+      ? (savedReasoningEffort ?? DEFAULT_CLAUDE_EFFORT)
+      : savedReasoningEffort;
   useEffect(() => {
-    if (pendingReasoningEffort && pendingReasoningEffort === savedReasoningEffort) {
+    if (pendingReasoningEffort && pendingReasoningEffort === confirmedReasoningEffort) {
       setPendingReasoningEffort(null);
     }
-  }, [pendingReasoningEffort, savedReasoningEffort]);
+  }, [pendingReasoningEffort, confirmedReasoningEffort]);
+
+  // Drop a pending effort if the newly selected model does not offer it.
+  useEffect(() => {
+    if (!pendingReasoningEffort) return;
+    if (activeProvider === 'antigravity') {
+      const efforts = antigravityModelEntry(pendingModel ?? harnessSessionModel ?? DEFAULT_ANTIGRAVITY_PICKER_ID)?.efforts ?? [];
+      if (!efforts.includes(pendingReasoningEffort)) setPendingReasoningEffort(null);
+    } else if (activeProvider === 'codex') {
+      const efforts = effortsForCodexModel(pendingModel ?? harnessSessionModel ?? DEFAULT_CODEX_MODEL_ID);
+      if (!efforts.includes(pendingReasoningEffort)) setPendingReasoningEffort(null);
+    } else if (activeProvider === 'claude') {
+      const efforts = effortsForClaudeModel(pendingModel ?? harnessSessionModel ?? '');
+      if (!efforts.includes(pendingReasoningEffort)) setPendingReasoningEffort(null);
+    }
+  }, [activeProvider, pendingModel, harnessSessionModel, pendingReasoningEffort]);
+
+  const handleConversationModelChange = useCallback((modelId: string | null) => {
+    if (activeProvider === 'antigravity') {
+      setPendingModel(modelId === currentAntigravityModel ? null : modelId);
+      return;
+    }
+    setPendingModel(modelId === harnessSessionModel ? null : modelId);
+  }, [activeProvider, currentAntigravityModel, harnessSessionModel]);
+
+  const handleConversationEffortChange = useCallback((effortId: string | null) => {
+    if (activeProvider === 'antigravity') {
+      const entry = antigravityModelEntry(pendingModel ?? harnessSessionModel ?? DEFAULT_ANTIGRAVITY_PICKER_ID);
+      const chosen = effortId ?? entry?.defaultEffort ?? null;
+      setPendingReasoningEffort(chosen === currentAntigravityEffort ? null : chosen);
+      return;
+    }
+    if (activeProvider === 'claude') {
+      const currentClaudeEffort = savedReasoningEffort ?? DEFAULT_CLAUDE_EFFORT;
+      const chosen = effortId ?? DEFAULT_CLAUDE_EFFORT;
+      setPendingReasoningEffort(chosen === currentClaudeEffort ? null : chosen);
+      return;
+    }
+    const chosen = effortId ?? DEFAULT_CODEX_EFFORT;
+    setPendingReasoningEffort(chosen === savedReasoningEffort ? null : chosen);
+  }, [activeProvider, pendingModel, harnessSessionModel, currentAntigravityEffort, savedReasoningEffort]);
+
+  const handleConversationModelAndEffortChange = useCallback(
+    (modelId: string | null, effortId: string | null, meta: { optionId: string; group?: string }) => {
+      if (activeProvider === 'antigravity') {
+        const pickedModel = modelId ?? meta.optionId;
+        const entry = antigravityModelEntry(pickedModel);
+        const chosenEffort = effortId ?? entry?.defaultEffort ?? null;
+        setPendingModel(pickedModel === currentAntigravityModel ? null : pickedModel);
+        setPendingReasoningEffort(chosenEffort === currentAntigravityEffort ? null : chosenEffort);
+        return;
+      }
+      if (activeProvider === 'claude') {
+        if (meta.group === 'Your endpoints') {
+          setPendingModel(modelId === harnessSessionModel ? null : modelId);
+          setPendingReasoningEffort(null);
+          return;
+        }
+        setPendingModel(modelId === harnessSessionModel ? null : modelId);
+        const currentClaudeEffort = savedReasoningEffort ?? DEFAULT_CLAUDE_EFFORT;
+        const chosenEffort = effortId ?? DEFAULT_CLAUDE_EFFORT;
+        setPendingReasoningEffort(chosenEffort === currentClaudeEffort ? null : chosenEffort);
+        return;
+      }
+      setPendingModel(modelId === harnessSessionModel ? null : modelId);
+      const chosenEffort = effortId ?? DEFAULT_CODEX_EFFORT;
+      setPendingReasoningEffort(chosenEffort === savedReasoningEffort ? null : chosenEffort);
+    },
+    [activeProvider, currentAntigravityModel, currentAntigravityEffort, harnessSessionModel, savedReasoningEffort],
+  );
 
   // A coordinator's thread is its conversation with the user and its worker
   // blocks; its own tool use folds behind one line. The flag comes from the
@@ -647,6 +789,38 @@ export function ConversationView({ sidebarOpen, onToggleSidebar, conversationId:
   // has no list row, reads as active and its header offers Archive again
   // instead of Restore.
   const isArchived = resolveIsArchived(conversationSummary, conversationDetails);
+  // A worker with no list row (archived, or not yet listed) takes its title
+  // from the task its project dispatched it with.
+  const { data: workerTask } = useQuery({
+    queryKey: ['worker-task', parentConversationId, conversationId],
+    queryFn: async (): Promise<string | null> => {
+      const response = await api.getWorkers(parentConversationId!);
+      return response.workers.find((worker) => worker.worker === conversationId)?.task ?? null;
+    },
+    enabled: Boolean(parentConversationId && conversationId && !conversationSummary),
+    staleTime: 5 * 60_000,
+  });
+  const sessionTitle = resolveSessionTitle(
+    conversationSummary ? titleOf(conversationSummary) : null,
+    conversationDetails,
+    workerTask,
+  );
+  // The loaded messages give what was just streamed; the server reads the
+  // whole log, so older screenshots and links stay listed.
+  const { data: indexedOutputs } = useQuery({
+    queryKey: ['conversation-outputs', conversationId],
+    queryFn: async (): Promise<ProjectOutputs | null> => {
+      const response = await fetch(`/api/conv/${encodeURIComponent(conversationId!)}/outputs`);
+      return response.ok ? (await response.json() as ProjectOutputs) : null;
+    },
+    enabled: Boolean(conversationId && isCoordinator && insightsPanelOpen),
+    staleTime: 60_000,
+    refetchInterval: 120_000,
+  });
+  const projectOutputs = useMemo(
+    () => (isCoordinator && insightsPanelOpen ? mergeOutputs(extractOutputs(harnessMessages), indexedOutputs ?? null) : null),
+    [isCoordinator, insightsPanelOpen, harnessMessages, indexedOutputs],
+  );
   const threadRenderItems = useMemo(
     () => (isCoordinator ? foldCoordinatorMachinery(harnessRenderItems, isStreaming) : harnessRenderItems),
     [isCoordinator, harnessRenderItems, isStreaming],
@@ -847,6 +1021,49 @@ export function ConversationView({ sidebarOpen, onToggleSidebar, conversationId:
     onAnnotationsReleased: releaseAnnotations,
     onAnnotationsSent: consumeAnnotations,
   });
+
+  // Antigravity encodes model and thinking level in one id (`agy:gemini-4-neon-xhigh`).
+  // Combine pending model/effort changes into that full id on send, and omit both
+  // when neither changed so ordinary turns don't trigger a respawn.
+  const handleComposerSubmit = useCallback(async (
+    message: string,
+    workingDirectory?: string,
+    model?: string,
+    permissionMode?: string,
+    attachments?: Parameters<typeof handleSendMessage>[4],
+    reasoningEffort?: string,
+    pastes?: Parameters<typeof handleSendMessage>[6],
+  ) => {
+    if (activeProvider === 'antigravity') {
+      let targetModel: string | undefined;
+      if (pendingModel !== null || pendingReasoningEffort !== null) {
+        const base = pendingModel ?? currentAntigravityModel ?? DEFAULT_ANTIGRAVITY_PICKER_ID;
+        const full = antigravityModelId(base, pendingReasoningEffort ?? currentAntigravityEffort);
+        if (full !== harnessSessionModel) targetModel = full;
+      }
+      await handleSendMessage(message, workingDirectory, targetModel, permissionMode, attachments, undefined, pastes);
+      return;
+    }
+    if (activeProvider === 'claude') {
+      const targetEffort = pendingReasoningEffort ?? undefined;
+      await handleSendMessage(message, workingDirectory, model, permissionMode, attachments, targetEffort, pastes);
+      if (targetEffort && conversationId) {
+        void queryClient.invalidateQueries({ queryKey: conversationKeys.details(conversationId) });
+      }
+      return;
+    }
+    await handleSendMessage(message, workingDirectory, model, permissionMode, attachments, reasoningEffort, pastes);
+  }, [
+    activeProvider,
+    conversationId,
+    pendingModel,
+    pendingReasoningEffort,
+    currentAntigravityModel,
+    currentAntigravityEffort,
+    harnessSessionModel,
+    handleSendMessage,
+    queryClient,
+  ]);
 
   // The toolkit composer refuses an empty submit, so "notes with no typed
   // message" needs its own entry point into the same send path.
@@ -1270,7 +1487,7 @@ export function ConversationView({ sidebarOpen, onToggleSidebar, conversationId:
       <ExplainsProvider sessionId={conversationId ?? undefined} explains={harnessExplains}>
       <ToolkitBridge>
       <div className="h-full w-full flex flex-col bg-background relative overflow-hidden" {...(embedded ? { 'data-side-chat-view': 'true' } : { role: 'main', 'aria-label': 'Conversation view' })}>
-      {!embedded && <ConversationHeader
+      {!embedded && <ErrorBoundary name="ConversationHeader" inline><ConversationHeader
         sessionId={conversationId}
         isArchived={isArchived}
         isPinned={conversationSummary?.pinned || false}
@@ -1279,11 +1496,12 @@ export function ConversationView({ sidebarOpen, onToggleSidebar, conversationId:
           repo: conversationSummary.workingDirectory.split('/').pop() || 'project',
         } : undefined}
         parentConversationId={parentConversationId}
+        title={sessionTitle}
         insightsPanelOpen={hasInsightsPanel && insightsPanelOpen}
         onToggleInsightsPanel={hasInsightsPanel ? toggleInsightsPanel : undefined}
         crossSessionSidebarOpen={crossSessionSidebarOpen}
         onToggleCrossSessionSidebar={toggleCrossSessionSidebar}
-      />}
+      /></ErrorBoundary>}
 
       {displayError && (
         <div
@@ -1308,6 +1526,7 @@ export function ConversationView({ sidebarOpen, onToggleSidebar, conversationId:
           <>
           <Profiler id="MessageList" onRender={onPerfRender}>
             <ImageNotesContext.Provider value={embedded ? null : imageNotes}>
+            <WorkersByIdContext.Provider value={workersById}>
             <MessageList
               sessionId={conversationId}
               messages={unifiedHydrating && combinedMessages.length === 0 ? [] : combinedMessages}
@@ -1344,6 +1563,7 @@ export function ConversationView({ sidebarOpen, onToggleSidebar, conversationId:
               actionTrace={harnessActionTrace}
               hydrationPhase={harnessHydrationPhase}
             />
+            </WorkersByIdContext.Provider>
             </ImageNotesContext.Provider>
           </Profiler>
 
@@ -1401,7 +1621,7 @@ export function ConversationView({ sidebarOpen, onToggleSidebar, conversationId:
                 </div>
               )}
               {harnessOpenDecision && openCardOutOfSight && <OpenQuestionStrip key={harnessOpenDecision.asked.id} question={harnessOpenDecision.asked.question} onJump={jumpToOpenCard} onDismiss={dismissOpenCard} />}
-              {!embedded && conversationId && <RunningJobsStrip conversationId={conversationId} />}
+              {!embedded && conversationId && <RunningJobsStrip conversationId={conversationId} hideOnDesktop={isCoordinator && insightsPanelOpen} />}
               {/* Pending mid-turn injected messages — floating above composer */}
               <QueuedMessages key={conversationId} messages={harnessPendingMessages} />
               {/*
@@ -1430,7 +1650,7 @@ export function ConversationView({ sidebarOpen, onToggleSidebar, conversationId:
                   ref={composerRef}
                   core={{
                     sessionId: conversationId,
-                    onSubmit: handleSendMessage,
+                    onSubmit: handleComposerSubmit,
                     isLoading: harnessConnected || isPermissionDecisionLoading,
                     // Compaction no longer locks the composer: sends made while
                     // it runs are queued and drained on completion, so a couple
@@ -1474,23 +1694,32 @@ export function ConversationView({ sidebarOpen, onToggleSidebar, conversationId:
                     sessionStartTime: harnessActiveStartTime ?? undefined,
                     onFetchFileSystem: handleFetchFileSystem,
                     onFetchCommands: handleFetchCommands,
-                    sessionModel: harnessSessionModel,
+                    sessionModel: activeProvider === 'antigravity' ? currentAntigravityModel : harnessSessionModel,
                     sessionModelFallback: harnessSessionModelFallback,
+                    ...(inklingModelEntry(harnessSessionModel) ? { sessionModelLabel: inklingModelEntry(harnessSessionModel)!.label } : {}),
                     ...(activeProviderCapabilities.modelSwitching.model ? {
                       availableModels: activeProvider === 'codex'
                         ? switchableCodexModels
                         : activeProvider === 'antigravity'
                           ? switchableAntigravityModels
                           : switchableClaudeModels,
+                      availableEffortsByGroup: switchableEffortsByGroup,
                       modelMenuNote: activeProvider === 'claude' ? claudeModels.note : undefined,
                       modelMenuLayout: 'rail',
                       selectedModel: pendingModel,
-                      onModelChange: setPendingModel,
+                      onModelChange: handleConversationModelChange,
+                      onModelAndEffortChange: handleConversationModelAndEffortChange,
                     } : {}),
                     ...(activeProviderCapabilities.modelSwitching.reasoningEffort ? {
-                      availableEfforts: switchableCodexEfforts,
-                      selectedEffort: pendingReasoningEffort ?? savedReasoningEffort,
-                      onEffortChange: setPendingReasoningEffort,
+                      availableEfforts: activeProvider === 'antigravity'
+                        ? switchableAntigravityEfforts
+                        : activeProvider === 'codex'
+                          ? switchableCodexEfforts
+                          : switchableClaudeEfforts,
+                      selectedEffort: activeProvider === 'antigravity'
+                        ? effectiveAntigravityEffort
+                        : (pendingReasoningEffort ?? savedReasoningEffort),
+                      onEffortChange: handleConversationEffortChange,
                     } : {}),
                   }}
                 />
@@ -1506,6 +1735,7 @@ export function ConversationView({ sidebarOpen, onToggleSidebar, conversationId:
             onClose={closeInsightsPanel}
             workers={workers}
             project={project}
+            profile={profileRoster}
             coordinatorRunning={harnessStatus === 'streaming' || harnessStatus === 'initializing'}
             onOpenWorker={(workerId) => navigate(`/c/${workerId}`)}
             coordinatorId={conversationId}
@@ -1513,6 +1743,8 @@ export function ConversationView({ sidebarOpen, onToggleSidebar, conversationId:
             latestDecision={harnessLatestDecision}
             heldReplies={harnessHeldReplies}
             repliedAt={repliedAt}
+            outputs={projectOutputs}
+            title={conversationSummary ? titleOf(conversationSummary) : null}
           />
           ) : isWorkerSession ? null : (
           <InsightsPanel

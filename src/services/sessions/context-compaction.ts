@@ -33,12 +33,15 @@ import { profileForRecorded } from '../../constants/coordinator-profiles.js';
 import { coordinatorProfileSettings } from './coordinator-defaults.js';
 import { claudeEndpointModels, installedProviders, sessionReadsImages } from './installed-providers.js';
 import { tryAdmitTurn } from './turn-admission.js';
+import { profileChangeSinceLastInput, COORDINATOR_PROFILE_EVENT } from './coordinator-profile-change.js';
 import { unfinishedSwitch } from './coordinator-switch-state.js';
 import { foldProjectState, type ProjectOpenThread } from '../../types/project-state.js';
 
 import {
   CONTEXT_RESTORE_END,
   CONTEXT_RESTORE_PREFIX,
+  SERVER_NOTE_END,
+  SERVER_NOTE_PREFIX,
   foldWorkerStates,
   stripWorkerQuestionMarker,
   type WorkerEventLike,
@@ -346,6 +349,25 @@ export function buildCoordinatorTakeoverBlock(conversationId: string, opening: r
 }
 
 /**
+ * The preamble again, for a coordinator moved onto another profile since its
+ * last input: its routing and chief of staff come from the profile, so the
+ * text it was given at creation no longer says who it works with.
+ */
+function buildProfileChangeBlock(conversationId: string, workingDirectory: string): string {
+  const change = profileChangeSinceLastInput(iterateEventsNewestFirst(conversationId, ['input:sent', COORDINATOR_PROFILE_EVENT]));
+  if (!change) return '';
+  const settings = coordinatorProfileSettings();
+  const from = profileForRecorded(change.from, settings).name;
+  const to = profileForRecorded(change.to, settings).name;
+  return buildCoordinatorRestoreBlock(conversationId, workingDirectory, getEvents(conversationId), [
+    `${SERVER_NOTE_PREFIX} This project has moved from the "${from}" profile to "${to}", which changes who you dispatch and`,
+    'whether you have a chief of staff. Below is your standing preamble as it now reads, with the state of your workers;',
+    'where it differs from what you were given before, this is the one that holds. Your workers, threads and project record',
+    'are unchanged. The message after the end marker is the one to act on.]',
+  ], SERVER_NOTE_END);
+}
+
+/**
  * The block to put in front of a conversation's next input after it
  * compacted: a coordinator gets its preamble, roster and project state; a
  * worker gets its parent, its assignment and where the shared record is; a
@@ -355,7 +377,9 @@ export function buildCoordinatorTakeoverBlock(conversationId: string, opening: r
 export function buildCoordinatorRestore(conversationId: string): string {
   const conversation = ConversationService.getInstance().getConversation(conversationId);
   if (!conversation) return '';
-  if (!compactedNewestFirst(iterateEventsNewestFirst(conversationId, ['input:sent', 'turn:end']))) return '';
+  if (!compactedNewestFirst(iterateEventsNewestFirst(conversationId, ['input:sent', 'turn:end']))) {
+    return conversation.coordinator ? buildProfileChangeBlock(conversationId, conversation.workingDirectory) : '';
+  }
   const events = getEvents(conversationId);
 
   if (conversation.coordinator) {

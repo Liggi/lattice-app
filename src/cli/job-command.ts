@@ -4,6 +4,7 @@
  */
 
 import path from 'node:path';
+import { runJobsCommand } from './jobs-command.js';
 import { serverAuthHeaders } from './server-auth.js';
 import { readServerAddress } from './session-commands.js';
 
@@ -89,6 +90,10 @@ export async function runJobCommand(args: string[]): Promise<void> {
   const verb = args[0];
   if (!verb || verb === '-h' || verb === '--help' || args.includes('-h') || args.includes('--help')) {
     process.stdout.write(`Usage:\n${JOB_USAGE}`);
+    return;
+  }
+  if (verb === 'list' || verb === 'show' || verb === 'get' || verb === 'logs') {
+    await runJobsCommand(args);
     return;
   }
   if (verb !== 'start' && verb !== 'stop') fail(`unknown verb ${verb}.\n\nUsage:\n${JOB_USAGE}`);

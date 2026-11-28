@@ -1,8 +1,9 @@
 import { type JSX, useEffect, useState } from 'react';
 import { AlertTriangle } from 'lucide-react';
-import { cannotRead, hasStarted, isStalled, jobRate } from '@/types/job-stall';
+import { cannotRead, hasStarted, isIndeterminateJob, isStalled, jobRate, quietSince } from '@/types/job-stall';
 import { useActivityStream, useActivityStreamSubscription } from '@/web/chat/contexts/ActivityStreamContext';
 import { SessionStateIcon } from '@/web/chat/components/shared/session-state-icon/SessionStateIcon';
+import { JobProgressBar } from '@/web/chat/components/shared/JobProgressBar';
 import type { JobProgress } from '@/services/sessions/job-progress';
 
 /**
@@ -15,13 +16,13 @@ import type { JobProgress } from '@/services/sessions/job-progress';
  * plain chat has no Running list at all, and on the phone it is behind a
  * button). Only running jobs: one that ended is reported by its agent.
  */
-export function RunningJobsStrip({ conversationId }: { conversationId: string }): JSX.Element | null {
+export function RunningJobsStrip({ conversationId, hideOnDesktop = false }: { conversationId: string; hideOnDesktop?: boolean }): JSX.Element | null {
   const jobs = useLiveJobs(conversationId);
   const now = useNow(30_000);
   if (jobs.length === 0) return null;
   return (
-    <div data-testid="running-jobs-strip" className="w-full max-w-3xl px-4 mb-2">
-      <div className="flex w-full flex-col gap-1.5 rounded-lg border border-line bg-surface px-3 py-2">
+    <div data-testid="running-jobs-strip" className={`w-full max-w-3xl px-4 mb-2 ${hideOnDesktop ? 'md:hidden' : ''}`}>
+      <div className="flex w-full flex-col gap-2 rounded-lg border border-line bg-surface/80 px-3 py-2">
         {jobs.map((job) => <JobLine key={`${job.session}:${job.label}`} job={job} now={now} />)}
       </div>
     </div>
@@ -31,24 +32,35 @@ export function RunningJobsStrip({ conversationId }: { conversationId: string })
 function JobLine({ job, now }: { job: JobProgress; now: number }) {
   const status = jobStatus(job, now);
   const stuck = status.kind === 'caution';
+  const hasCount = shows(job);
+  const statusLabel = status.text ? status.text.charAt(0).toUpperCase() + status.text.slice(1) : null;
   return (
-    <div data-testid="running-job" className="flex items-start gap-2 text-[12.5px] leading-[1.45]">
-      <span className="flex h-[18px] w-5 shrink-0 items-center justify-center">
-        <SessionStateIcon state={stuck ? { kind: 'idle' } : { kind: 'working', level: 1 }} variant="session" />
-      </span>
-      <span className="min-w-0 flex-1 break-words text-pretty">
-        <span className="text-fg">{job.label}</span>
-        {shows(job) && <span className="tabular-nums text-fg-2"> · {count(job.done)} of {count(job.total)}</span>}
-        {status.kind === 'plain' && status.text && <span className="text-fg-3"> · {status.text}</span>}
-        {stuck && (
-          <span className="text-amber-400 font-medium">
-            {' · '}
-            <AlertTriangle size={11} strokeWidth={2.25} className="inline -mt-[2px] mr-1" aria-hidden />
-            {status.text}
+    <div data-testid="running-job" className="flex flex-col gap-1.5 text-[12.5px] leading-[1.35]">
+      <div className="flex items-center gap-2 min-w-0">
+        <span className="flex h-5 w-5 shrink-0 items-center justify-center text-fg-3">
+          <SessionStateIcon state={stuck ? { kind: 'idle' } : { kind: 'working', level: 1 }} variant="session" size={18} />
+        </span>
+        <span title={job.label} className="min-w-0 flex-1 truncate text-fg">{job.label}</span>
+        {hasCount && (
+          <span className="shrink-0 whitespace-nowrap tabular-nums text-[12px] text-fg-2">
+            {count(job.done)} of {count(job.total)}
           </span>
         )}
-      </span>
-      {shows(job) && <JobBar job={job} stuck={stuck} className="mt-[7px] w-20" />}
+      </div>
+      {(hasCount || statusLabel) && (
+        <div className="flex items-center gap-3 pl-7">
+          {hasCount && <JobBar job={job} stuck={stuck} className="flex-1" />}
+          {status.kind === 'plain' && statusLabel && (
+            <span className="shrink-0 whitespace-nowrap text-[12px] text-fg-3">{statusLabel}</span>
+          )}
+          {stuck && statusLabel && (
+            <span className="flex shrink-0 items-center gap-1 whitespace-nowrap text-[12px] font-medium text-amber-400">
+              <AlertTriangle size={11} strokeWidth={2.25} className="shrink-0" aria-hidden />
+              <span>{statusLabel}</span>
+            </span>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -59,6 +71,11 @@ export type Status = { kind: 'plain' | 'caution'; text: string | null };
 export function jobStatus(job: JobProgress, now: number): Status {
   const error = cannotRead(job);
   if (error !== null) return { kind: 'caution', text: `can't read the count: ${error}` };
+  if (isIndeterminateJob(job)) {
+    return isStalled(job, now)
+      ? { kind: 'caution', text: `no output for ${duration(now - quietSince(job))}` }
+      : { kind: 'plain', text: `running, ${duration(now - job.startedAt)}${job.stage ? ` · ${job.stage}` : ''}` };
+  }
   if (!hasStarted(job)) {
     return isStalled(job, now)
       ? { kind: 'caution', text: `no first item after ${duration(now - job.startedAt)}` }
@@ -99,19 +116,21 @@ export function useLiveJobs(conversationId: string | undefined): JobProgress[] {
   return jobs;
 }
 
-/** How far through the job is, as a thin bar: cyan while it moves, amber once it is stuck. */
+/** How far through the job is, using the unified thin flat bar across Lattice. */
 export function JobBar({ job, stuck, className = '' }: { job: JobProgress; stuck: boolean; className?: string }): JSX.Element {
-  const share = job.total > 0 ? Math.min(1, Math.max(0, job.done / job.total)) : 0;
   return (
-    <span aria-hidden className={`block h-[3px] shrink-0 overflow-hidden rounded-full bg-line-2 ${className}`}>
-      <span className={`block h-full rounded-full ${stuck ? 'bg-amber-400' : 'bg-accent'}`} style={{ width: `${Math.max(share * 100, 2)}%` }} />
-    </span>
+    <JobProgressBar
+      done={job.done}
+      total={job.total > 0 ? job.total : null}
+      state={stuck ? 'stalled' : 'working'}
+      className={className}
+    />
   );
 }
 
 /** Whether there is a count to show: the job has moved, or work was already done when it was started. */
 export function shows(job: JobProgress): boolean {
-  return hasStarted(job) || job.done > 0;
+  return job.total > 0 && (hasStarted(job) || job.done > 0);
 }
 
 /** Whole percent done, never 100 before the last item: "15%". */

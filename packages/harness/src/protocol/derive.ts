@@ -198,8 +198,11 @@ export interface TurnUsage {
   cacheReadInputTokens: number
   /** Cumulative session cost in USD (from CLI result event). */
   costUsd?: number
-  /** Total prompt tokens from the most recent API call — the actual context window size. */
-  contextTokens?: number
+  /**
+   * Total prompt tokens from the most recent API call — the actual context window size.
+   * Null after a compaction that reported no new size, until the next call measures it.
+   */
+  contextTokens?: number | null
 }
 
 /**
@@ -214,10 +217,14 @@ export interface TurnUsage {
  */
 export function deriveUsage(events: readonly SessionEvent[]): TurnUsage | null {
   let turnUsage: TurnUsage | null = null
-  let contextTokens: number | undefined
+  let contextTokens: number | null | undefined
+  // Past a compaction boundary, older calls measured the context before it.
+  let pastCompaction = false
+  let inputSinceCompaction = false
 
   for (let i = events.length - 1; i >= 0; i--) {
     const e = events[i]
+    if (e.type === 'input:sent') inputSinceCompaction = true
 
     // Per-turn totals from turn:end
     if (!turnUsage && e.type === 'turn:end') {
@@ -236,16 +243,20 @@ export function deriveUsage(events: readonly SessionEvent[]): TurnUsage | null {
     // A successful compaction boundary is the newest authoritative context
     // size until another provider call reports apiUsage. Without this, the UI
     // keeps showing the pre-compact count immediately after compaction.
-    if (contextTokens === undefined && e.type === 'turn:end') {
+    // With no post-compaction size the context is unknown until the next call;
+    // a later turn's totals measure it when the provider reports no per-call usage (Codex).
+    if (contextTokens === undefined && !pastCompaction && e.type === 'turn:end') {
       const data = e.data as TurnEndData
-      if (data.compact && typeof data.postTokens === 'number') {
-        contextTokens = data.postTokens
+      if (data.compact) {
+        pastCompaction = true
+        if (typeof data.postTokens === 'number') contextTokens = data.postTokens
+        else if (!inputSinceCompaction) contextTokens = null
       }
     }
 
     // Context window size from the last content event with apiUsage. A
     // subagent's messages (parentToolUseId set) report its own context.
-    if (contextTokens === undefined && e.type === 'content') {
+    if (contextTokens === undefined && !pastCompaction && e.type === 'content') {
       const data = e.data as ContentData & { parentToolUseId?: string | null }
       if (data.apiUsage && data.parentToolUseId == null) {
         contextTokens =
@@ -255,7 +266,7 @@ export function deriveUsage(events: readonly SessionEvent[]): TurnUsage | null {
       }
     }
 
-    if (turnUsage && contextTokens !== undefined) break
+    if (turnUsage && (contextTokens !== undefined || pastCompaction)) break
   }
 
   if (turnUsage) {

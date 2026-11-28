@@ -27,7 +27,7 @@ function due(events: ProjectEventLike[], now: number, extra: { workers?: Array<{
 }
 
 describe('ask decay', () => {
-  it('decays the user\'s asks after three hours and nothing else', () => {
+  it('decays the user\'s asks after 72 hours and nothing else', () => {
     const call = usersCall('place names');
     const mine = note('open', 'build it', { owner: { kind: 'coordinator' } });
     expect(due([call, mine], T0 + ASK_DECAY_MS - 1)).toEqual([]);
@@ -37,7 +37,7 @@ describe('ask decay', () => {
 
   it('keeps an ask a live worker is on, one answered from its row, and one the coordinator is still taking in a message about', () => {
     const call = usersCall('pick fixes');
-    const later = T0 + 4 * 3_600_000;
+    const later = T0 + ASK_DECAY_MS + 3_600_000;
     expect(due([call], later, { workers: [{ worker: 'conv-w', thread: call.seq }] })).toEqual([]);
     expect(due([call], later, { replied: new Map([[`t:${call.seq}`, T0 + 60_000]]) })).toEqual([]);
     const sent = { seq: 99, type: 'user:sent', timestamp: T0 + 3_600_000, data: {} };
@@ -45,11 +45,22 @@ describe('ask decay', () => {
     expect(due([call, sent, { seq: 100, type: 'turn:end', timestamp: T0 + 3_700_000, data: {} }], later)).toEqual([call.seq]);
   });
 
+  it('decays an ask whose worker already reported and stayed idle, unless it resumed or reported waiting on the thread', () => {
+    const call = usersCall('stale report');
+    const later = T0 + ASK_DECAY_MS + 3_600_000;
+    // Reported and idle with no waitingOn: no longer holding up active work, so it decays.
+    expect(due([call], later, { workers: [{ worker: 'conv-w', thread: call.seq, phase: 'reported', waitingOn: null, workedSinceReport: false }] })).toEqual([call.seq]);
+    // Resumed working since report: still active, kept.
+    expect(due([call], later, { workers: [{ worker: 'conv-w', thread: call.seq, phase: 'reported', waitingOn: null, workedSinceReport: true }] })).toEqual([]);
+    // Reported explicitly waiting on the thread: kept by waitedOn.
+    expect(due([call], later, { workers: [{ worker: 'conv-w', thread: call.seq, phase: 'reported', waitingOn: `thread [${call.seq}]`, workedSinceReport: false }] })).toEqual([]);
+  });
+
   it('keeps an ask other work is blocked on, and still decays one nothing waits on', () => {
     const call = usersCall('live writing', T0);
     const named = note('update', 'named', { ref: call.seq, name: 'Live writing delivery' });
     const blocked = note('open', 'install it', { owner: { kind: 'coordinator' }, waitingOn: { kind: 'dependency', text: String(call.seq), thread: call.seq } });
-    const later = T0 + 4 * 3_600_000;
+    const later = T0 + ASK_DECAY_MS + 3_600_000;
     expect(due([call, named, blocked], later)).toEqual([]);
     // A dependency written as a bare id with no thread field counts the same.
     expect(due([call, note('open', 'other', { waitingOn: { kind: 'dependency', text: `thread ${call.seq}` } })], later)).toEqual([]);
@@ -68,11 +79,11 @@ describe('ask decay', () => {
   it('counts from the card about the thread when it showed later, and from a restore', () => {
     const call = usersCall('pick fixes');
     const card = { asked: { id: 'd1', thread: call.seq }, seq: 50, shownAt: T0 + 2 * 3_600_000 } as unknown as OpenDecision;
-    expect(due([call], T0 + 4 * 3_600_000, { card })).toEqual([]);
+    expect(due([call], T0 + ASK_DECAY_MS + 3_600_000, { card })).toEqual([]);
     const parked = note('park', 'No answer', { ref: call.seq, decayed: true }, T0 + ASK_DECAY_MS);
-    const restored = note('unpark', 'back', { ref: call.seq, by: 'user' }, T0 + 4 * 3_600_000);
-    expect(due([call, parked, restored], T0 + 5 * 3_600_000)).toEqual([]);
-    expect(due([call, parked, restored], T0 + 7 * 3_600_000)).toEqual([call.seq]);
+    const restored = note('unpark', 'back', { ref: call.seq, by: 'user' }, T0 + ASK_DECAY_MS + 3_600_000);
+    expect(due([call, parked, restored], T0 + ASK_DECAY_MS + 2 * 3_600_000)).toEqual([]);
+    expect(due([call, parked, restored], T0 + 2 * ASK_DECAY_MS + 3_600_000)).toEqual([call.seq]);
   });
 
   it('tells the coordinator where the ask went and the one way to bring it back', () => {

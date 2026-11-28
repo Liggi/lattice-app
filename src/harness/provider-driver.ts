@@ -9,7 +9,8 @@ export type ProviderTransport =
   | 'claude-daemon'
   | 'codex-app-server'
   | 'opencode-server'
-  | 'antigravity-cli';
+  | 'antigravity-cli'
+  | 'inkling-cli';
 
 /**
  * One provider/transport implementation behind the shared harness contract.

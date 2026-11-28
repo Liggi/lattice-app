@@ -606,6 +606,28 @@ export interface WorkerCardState extends WorkerState {
    * is written; the card shows the worker's own words meanwhile.
    */
   waitPhrase?: string | null;
+  /**
+   * What the coordinator's profile calls this worker when it is not the
+   * profile's usual kind: "Chief of staff", or a worker role such as "Fable".
+   * Absent for the usual workers and on the built-in profile.
+   */
+  role?: { label: string; chiefOfStaff: boolean };
+}
+
+/** A role on a coordinator's profile and the workers that have filled it, archived ones included. */
+export interface ProfileRole {
+  label: string;
+  chiefOfStaff: boolean;
+  /** Worker ids in dispatch order; empty when the role has not been used. */
+  workers: string[];
+  /** The chief of staff only: how many times the coordinator has written to it. */
+  consults?: number;
+}
+
+/** The coordinator's profile and how each of its roles has been used. Absent on the built-in profile. */
+export interface ProfileRoster {
+  name: string;
+  roles: ProfileRole[];
 }
 
 /**
@@ -752,6 +774,8 @@ export interface WorkersResponse {
    * newer need not ask again.
    */
   asOfSeq?: number;
+  /** A coordinator on a profile other than the built-in one: its roles and who filled them. */
+  profile?: ProfileRoster;
 }
 
 // ---------------------------------------------------------------------------

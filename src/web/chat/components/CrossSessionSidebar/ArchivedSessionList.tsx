@@ -23,10 +23,6 @@ function formatRelativeTime(timestamp: string): string {
   return `${Math.floor(diffHours / 24)}d`;
 }
 
-function archivedAgo(archivedAt: string): string {
-  const relative = formatRelativeTime(archivedAt);
-  return relative === 'now' ? 'archived just now' : `archived ${relative} ago`;
-}
 
 function getArchivedLabel(session: UnifiedConversationSummary): string {
   const insights = session.insights;
@@ -76,10 +72,10 @@ export function ArchivedSessionList({
       >
         <button
           onClick={() => onSelectSession(session.conversationId)}
-          className="flex min-w-0 flex-1 items-baseline gap-2.5 px-2 py-[5px] text-left text-[13px] cursor-pointer"
+          className="flex min-w-0 flex-1 items-baseline gap-2.5 py-[5px] pl-[46px] pr-2 text-left text-[13px] leading-snug cursor-pointer"
           type="button"
         >
-          <span className={`min-w-0 flex-1 truncate ${isCurrent ? 'text-fg' : 'text-fg-2'}`}>{label}</span>
+          <span className={`min-w-0 flex-1 break-words line-clamp-3 ${isCurrent ? 'text-fg' : 'text-fg-2'}`} title={label}>{label}</span>
           {/*
             Only a recorded archive time is shown. Rows archived before it was
             recorded show none: their last activity moves on every server boot,
@@ -88,7 +84,7 @@ export function ArchivedSessionList({
           */}
           {session.archivedAt && (
             <span className="shrink-0 text-xs text-fg-3 tabular-nums group-hover:opacity-0 group-focus-within:opacity-0 pointer-coarse:mr-7 pointer-coarse:opacity-100">
-              {archivedAgo(session.archivedAt)}
+              {formatRelativeTime(session.archivedAt)}
             </span>
           )}
         </button>
@@ -106,6 +102,7 @@ export function ArchivedSessionList({
             isRestoring ? 'text-accent' : 'text-fg-3 hover:text-fg'
           }`}
           aria-label={`Restore ${label}`}
+          title="Restore"
         >
           {isRestoring ? <Loader2 size={12} className="animate-spin" /> : <RotateCcw size={12} />}
         </button>

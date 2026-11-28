@@ -63,6 +63,8 @@ export interface ShipItem {
   /** When it reached that stage, epoch ms, where known. */
   at?: number;
   href?: string;
+  /** On an open pull request with failing checks: the failing checks' names, when read. */
+  failedChecks?: string[];
   /** A thread's unmerged branches when it has more than one, newest first. */
   branches?: Array<{ name: string; subject: string; at: number }>;
 }
@@ -106,6 +108,7 @@ export async function readProjectShipping(project: ProjectState, now = Date.now(
       try {
         const found = await pullRequests(github, numbers, viewer, now);
         items.push(...found.items);
+        unread.push(...found.unread);
         usesPullRequests = found.usesPullRequests;
       } catch (error) {
         unread.push(`pull requests on ${github}: ${message(error)}`);
@@ -171,6 +174,11 @@ export class ShippingWatcher {
     watched.askedAt = now;
     if (now - watched.snapshot.readAt > this.freshMs) void this.refresh(conversationId, now).catch(() => {});
     return watched.snapshot;
+  }
+
+  /** The last read, if any, without starting another or counting as asked: for the Inbox, which must not wait on gh. */
+  peek(conversationId: string): ShippingSnapshot | null {
+    return this.projects.get(conversationId)?.snapshot ?? null;
   }
 
   /** Re-reads the projects asked about in the last day, now and every `everyMs`. */
@@ -256,21 +264,87 @@ type GhPull = {
   author: { login: string };
   state: 'OPEN' | 'MERGED' | 'CLOSED';
   isDraft: boolean;
-  reviewDecision: string | null;
   mergedAt: string | null;
   closedAt: string | null;
   updatedAt: string;
   url: string;
   mergeCommit: { oid: string } | null;
-  statusCheckRollup: Array<{ conclusion?: string | null; status?: string; state?: string }>;
   additions: number;
   deletions: number;
   changedFiles: number;
 };
 
-async function pullRequests(github: string, numbers: Set<number>, viewer: string, now: number): Promise<{ items: ShipItem[]; usesPullRequests: boolean }> {
-  const fields = 'author,number,title,state,isDraft,reviewDecision,mergedAt,closedAt,updatedAt,url,mergeCommit,statusCheckRollup,additions,deletions,changedFiles';
-  const pulls = parseJson(await run('gh', ['pr', 'list', '--repo', github, '--state', 'all', '--limit', '100', '--json', fields])) as GhPull[];
+type GhChecks = {
+  reviewDecision: string | null;
+  /** A CheckRun carries `name`; a commit StatusContext carries `context`. */
+  statusCheckRollup: Array<{ conclusion?: string | null; status?: string; state?: string; name?: string; context?: string }>;
+};
+
+/**
+ * The list leaves out check runs and reviews: asking for them on a hundred
+ * pull requests at once times GitHub's GraphQL API out on large repos (HTTP
+ * 504 on a large repository, 2026-11-25). They are read one pull request at a time,
+ * only for the open ones the panel shows.
+ */
+const PULL_FIELDS = 'author,number,title,state,isDraft,mergedAt,closedAt,updatedAt,url,mergeCommit,additions,deletions,changedFiles';
+const CHECK_FIELDS = 'reviewDecision,statusCheckRollup';
+/** Mentioned pull requests missing from the recent list that are looked up one by one, newest numbers first. */
+const MISSING_LOOKUPS = 20;
+const LOOKUP_CONCURRENCY = 4;
+
+/** Merged and closed pull requests do not change, nor does a number that is not a pull request, so each is read once. */
+const settledPulls = new Map<string, GhPull | null>();
+function settle(key: string, pull: GhPull | null): void {
+  settledPulls.set(key, pull);
+  if (settledPulls.size > GH_CACHE_LIMIT) settledPulls.delete(settledPulls.keys().next().value!);
+}
+
+export interface PullRequestReader {
+  list(github: string): Promise<GhPull[]>;
+  view(github: string, number: number): Promise<GhPull>;
+  checks(github: string, number: number): Promise<GhChecks>;
+}
+
+const ghReader: PullRequestReader = {
+  list: async (github) => parseJson(await run('gh', ['pr', 'list', '--repo', github, '--state', 'all', '--limit', '100', '--json', PULL_FIELDS])) as GhPull[],
+  view: async (github, number) => parseJson(await run('gh', ['pr', 'view', String(number), '--repo', github, '--json', PULL_FIELDS])) as GhPull,
+  checks: async (github, number) => parseJson(await run('gh', ['pr', 'view', String(number), '--repo', github, '--json', CHECK_FIELDS])) as GhChecks,
+};
+
+/** Each pull request's mentioned number that the recent list lacks, read on its own; a failure goes to `unread`. */
+async function lookUpMissing(github: string, numbers: Set<number>, listed: GhPull[], reader: PullRequestReader, unread: string[]): Promise<GhPull[]> {
+  const have = new Set(listed.map((pull) => pull.number));
+  const missing = [...numbers].filter((number) => !have.has(number)).sort((a, b) => b - a).slice(0, MISSING_LOOKUPS);
+  const found = await mapLimit(missing, LOOKUP_CONCURRENCY, async (number) => {
+    const key = `${github}#${number}`;
+    if (settledPulls.has(key)) return settledPulls.get(key)!;
+    try {
+      const pull = await reader.view(github, number);
+      if (pull.state !== 'OPEN') settle(key, pull);
+      return pull;
+    } catch (error) {
+      // A number the record mentions that is not a pull request here (an issue, another repo's) is not a failure.
+      if (/could not resolve|not found|no pull requests? found/i.test(message(error))) {
+        settle(key, null);
+        return null;
+      }
+      unread.push(`${github} #${number}: ${message(error)}`);
+      return null;
+    }
+  });
+  return found.filter((pull): pull is GhPull => pull !== null);
+}
+
+export async function pullRequests(
+  github: string,
+  numbers: Set<number>,
+  viewer: string,
+  now: number,
+  reader: PullRequestReader = ghReader,
+): Promise<{ items: ShipItem[]; usesPullRequests: boolean; unread: string[] }> {
+  const unread: string[] = [];
+  const listed = await reader.list(github);
+  const pulls = [...listed, ...await lookUpMissing(github, numbers, listed, reader, unread)];
   // Only the user's own: the record also mentions bots' and colleagues' pull requests.
   const ours = pulls.filter((pull) => numbers.has(pull.number) && (!viewer || pull.author.login === viewer));
   const recent = ours.filter((pull) => {
@@ -282,6 +356,17 @@ async function pullRequests(github: string, numbers: Set<number>, viewer: string
   const promotionNumbers = new Set(promotions.map((promotion) => promotion.pull.number));
   const work = recent.filter((pull) => !promotionNumbers.has(pull.number));
   const workNumbers = new Set(work.map((pull) => pull.number));
+  // Checks for the open pull requests shown: the user's own work, and open promotions.
+  const open = [...new Set([...work, ...promotions.map((promotion) => promotion.pull)].filter((pull) => pull.state === 'OPEN' && !pull.isDraft))];
+  const checks = new Map<number, GhChecks>();
+  await mapLimit(open, LOOKUP_CONCURRENCY, async (pull) => {
+    try {
+      checks.set(pull.number, await reader.checks(github, pull.number));
+    } catch (error) {
+      unread.push(`checks on ${github} #${pull.number}: ${message(error)}`);
+    }
+  });
+  const stageOf = (pull: GhPull) => openStage(pull, checks.get(pull.number));
   const live = promotions.length === 0 && work.some((pull) => pull.state === 'MERGED') ? await productionDeploy(github) : null;
   const items: ShipItem[] = [];
   for (const promotion of promotions) {
@@ -291,12 +376,12 @@ async function pullRequests(github: string, numbers: Set<number>, viewer: string
     const title = carriedTitle(promotion);
     const base = { key: `${github}#${pull.number}`, title, href: pull.url };
     if (pull.state === 'MERGED') items.push({ ...base, stage: 'live', stageLabel: 'Live', at: Date.parse(pull.mergedAt ?? pull.updatedAt) });
-    else items.push({ ...base, ...openStage(pull) });
+    else items.push({ ...base, ...stageOf(pull) });
   }
   for (const pull of work) {
     const base = { key: `${github}#${pull.number}`, title: pull.title, href: pull.url };
     if (pull.state === 'MERGED' && promotions.length > 0) {
-      items.push({ ...base, ...promotedStage(pull, promotions) });
+      items.push({ ...base, ...promotedStage(pull, promotions, stageOf) });
       continue;
     }
     if (pull.state === 'CLOSED') {
@@ -312,17 +397,38 @@ async function pullRequests(github: string, numbers: Set<number>, viewer: string
       else items.push({ ...base, stage: 'merged-unchecked', stageLabel: 'Merged, no deploy to check', at: mergedAt });
       continue;
     }
-    items.push({ ...base, ...openStage(pull) });
+    items.push({ ...base, ...stageOf(pull) });
   }
-  return { items, usesPullRequests: pulls.some((pull) => pull.author.login === viewer) };
+  return { items, usesPullRequests: listed.some((pull) => pull.author.login === viewer), unread };
 }
 
-function openStage(pull: GhPull): Pick<ShipItem, 'stage' | 'stageLabel' | 'at'> {
-  const checks = checkState(pull.statusCheckRollup);
-  const approved = pull.reviewDecision === 'APPROVED';
+/** Runs `work` over `items`, at most `limit` at a time, keeping their order. */
+async function mapLimit<T, R>(items: T[], limit: number, work: (item: T) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const index = next++;
+      results[index] = await work(items[index]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
+
+type Stage = Pick<ShipItem, 'stage' | 'stageLabel' | 'at' | 'failedChecks'>;
+
+function openStage(pull: GhPull, read: GhChecks | undefined): Stage {
   const at = Date.parse(pull.updatedAt);
   if (pull.isDraft) return { stage: 'draft', stageLabel: 'Draft', at };
-  if (checks === 'failing') return { stage: 'checks-failing', stageLabel: 'Checks failing', at };
+  // Checks that could not be read are in `unread`; the row says so rather than guessing.
+  if (!read) return { stage: 'checks-running', stageLabel: "Open, checks not read", at };
+  const checks = checkState(read.statusCheckRollup ?? []);
+  const approved = read.reviewDecision === 'APPROVED';
+  if (checks === 'failing') {
+    const failedChecks = failingCheckNames(read.statusCheckRollup ?? []);
+    return { stage: 'checks-failing', stageLabel: 'Checks failing', at, ...(failedChecks.length ? { failedChecks } : {}) };
+  }
   if (checks === 'running') return { stage: 'checks-running', stageLabel: approved ? 'Approved, checks running' : 'Checks running', at };
   if (approved) return { stage: 'approved', stageLabel: 'Approved, checks passed', at };
   return { stage: 'checks-passed', stageLabel: 'Checks passed, not reviewed', at };
@@ -445,7 +551,7 @@ function furthest(environments: string[]): string | undefined {
  * environment a merged promotion carried it to, and the promotion still open
  * that carries it on, if any.
  */
-function promotedStage(pull: GhPull, promotions: Promotion[]): Pick<ShipItem, 'stage' | 'stageLabel' | 'at'> {
+function promotedStage(pull: GhPull, promotions: Promotion[], stageOf: (pull: GhPull) => Stage): Stage {
   const carrying = promotions.filter((promotion) => promotion.carried.some((carried) => carried.number === pull.number));
   const merged = carrying.filter((promotion) => promotion.pull.state === 'MERGED');
   const reached = furthest(merged.flatMap((promotion) => promotion.environments));
@@ -455,7 +561,7 @@ function promotedStage(pull: GhPull, promotions: Promotion[]): Pick<ShipItem, 's
   const next = carrying.find((promotion) => promotion.pull.state === 'OPEN');
   if (!next) return { stage: 'merged', stageLabel: where, at: reachedAt };
   const to = furthest(next.environments) ?? 'the next environment';
-  const checks = openStage(next.pull);
+  const checks = stageOf(next.pull);
   if (checks.stage === 'checks-failing') return { stage: 'checks-failing', stageLabel: `${where}; promotion to ${to} failing checks`, at: checks.at };
   return { stage: 'merged', stageLabel: `${where}; promotion to ${to} open`, at: checks.at };
 }
@@ -470,14 +576,29 @@ function carriedTitle(promotion: Promotion): string {
   return rest === 0 ? `${where}: ${newest.title}` : `${where}: ${newest.title}, and ${rest} more`;
 }
 
-function checkState(rollup: GhPull['statusCheckRollup']): 'failing' | 'running' | 'passed' {
+const FAILED_OUTCOMES = ['FAILURE', 'ERROR', 'TIMED_OUT', 'CANCELLED', 'ACTION_REQUIRED', 'STARTUP_FAILURE'];
+/** Failing check names kept on a pull request; the PR page has the rest. */
+const MAX_FAILED_CHECKS = 6;
+
+const outcomeOf = (check: GhChecks['statusCheckRollup'][number]) => (check.conclusion ?? check.state ?? '').toUpperCase();
+
+function checkState(rollup: GhChecks['statusCheckRollup']): 'failing' | 'running' | 'passed' {
   let running = false;
   for (const check of rollup) {
-    const outcome = (check.conclusion ?? check.state ?? '').toUpperCase();
-    if (['FAILURE', 'ERROR', 'TIMED_OUT', 'CANCELLED', 'ACTION_REQUIRED', 'STARTUP_FAILURE'].includes(outcome)) return 'failing';
+    const outcome = outcomeOf(check);
+    if (FAILED_OUTCOMES.includes(outcome)) return 'failing';
     if (!outcome || ['PENDING', 'EXPECTED', 'QUEUED', 'IN_PROGRESS'].includes(outcome) || (check.status && check.status !== 'COMPLETED')) running = true;
   }
   return running ? 'running' : 'passed';
+}
+
+/** The failing checks' names, each once, in the order GitHub lists them. */
+export function failingCheckNames(rollup: GhChecks['statusCheckRollup']): string[] {
+  const names = rollup
+    .filter((check) => FAILED_OUTCOMES.includes(outcomeOf(check)))
+    .map((check) => (check.name ?? check.context ?? '').trim())
+    .filter(Boolean);
+  return [...new Set(names)].slice(0, MAX_FAILED_CHECKS);
 }
 
 async function productionDeploy(github: string): Promise<{ sha: string; at: number } | null> {
@@ -649,9 +770,11 @@ function cachedGh(args: string[], freshMs: number, version = ''): Promise<string
 
 function run(command: string, args: string[]): Promise<string> {
   return new Promise((resolve, reject) => {
-    execFile(command, args, { timeout: COMMAND_TIMEOUT_MS, maxBuffer: 8 * 1024 * 1024 }, (error, stdout) => {
-      if (error) reject(error);
-      else resolve(stdout);
+    execFile(command, args, { timeout: COMMAND_TIMEOUT_MS, maxBuffer: 8 * 1024 * 1024 }, (error, stdout, stderr) => {
+      if (!error) resolve(stdout);
+      // The error's own first line is the whole command; what went wrong is on stderr.
+      else if (error.killed) reject(new Error(`timed out after ${COMMAND_TIMEOUT_MS / 1000}s`));
+      else reject(new Error(firstLine(String(stderr ?? '')) ?? error.message.split('\n')[0]));
     });
   });
 }

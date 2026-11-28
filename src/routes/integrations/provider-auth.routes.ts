@@ -6,6 +6,7 @@ import { getProviderAuthService } from '@/services/provider-auth-service.js';
 import type { ProcessManagerClient } from '@/process-daemon/process-manager-client.js';
 import type { LoginTerminalOutputEventData, LoginTerminalStateEventData } from '@/process-daemon/types.js';
 import { LatticeError } from '@/types/index.js';
+import { inklingStatus } from '@/harness/inkling-process-adapter.js';
 import { createLogger } from '@/services/infrastructure/logger.js';
 
 const logger = createLogger('ProviderAuthRoutes');
@@ -156,6 +157,12 @@ export function createProviderAuthRoutes(deps: ProviderAuthRouteDeps = {}): Rout
       return;
     }
     res.json(result);
+  }));
+
+  // Inkling needs no sign-in: it is offered when the `inkling` CLI is
+  // installed, and says whether its local model server is answering.
+  router.get('/inkling/status', asyncHandler(async (_req, res) => {
+    res.json(await inklingStatus());
   }));
 
   router.get('/codex/status', asyncHandler(async (_req, res) => {

@@ -37,26 +37,27 @@ const HOUR = 60 * 60 * 1000;
 /** How far a row slides before its Park and Dismiss show on a touch screen. */
 const SWIPE_OPEN_PX = 48;
 
-async function post(path: string, body?: unknown): Promise<void> {
+async function post<T = unknown>(path: string, body?: unknown): Promise<T> {
   const response = await fetch(path, {
     method: 'POST',
     ...(body === undefined ? {} : { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
   });
-  if (response.ok) return;
+  if (response.ok) return await response.json().catch(() => null) as T;
   const parsed = await response.json().catch(() => null) as { error?: string } | null;
   throw new Error(parsed?.error ?? `HTTP ${response.status}`);
 }
 
-export function holdReply(coordinatorId: string, target: ReplyTarget, text: string): Promise<void> {
+/** Holds a reply for `REPLY_HOLD_MS`; the returned id is what Undo takes back. */
+export function holdReply(coordinatorId: string, target: ReplyTarget, text: string): Promise<{ id: string; until: number }> {
   return post(`/api/conv/${encodeURIComponent(coordinatorId)}/project/replies`, { target, text });
 }
 
-export function undoReply(coordinatorId: string, id: string): Promise<void> {
-  return post(`/api/conv/${encodeURIComponent(coordinatorId)}/project/replies/${encodeURIComponent(id)}/undo`);
+export async function undoReply(coordinatorId: string, id: string): Promise<void> {
+  await post(`/api/conv/${encodeURIComponent(coordinatorId)}/project/replies/${encodeURIComponent(id)}/undo`);
 }
 
-export function threadAction(coordinatorId: string, seq: number, action: 'dismiss' | 'park' | 'restore'): Promise<void> {
-  return post(`/api/conv/${encodeURIComponent(coordinatorId)}/project/threads/${seq}/${action}`);
+export async function threadAction(coordinatorId: string, seq: number, action: 'dismiss' | 'park' | 'restore'): Promise<void> {
+  await post(`/api/conv/${encodeURIComponent(coordinatorId)}/project/threads/${seq}/${action}`);
 }
 
 const TONE: Record<CallStage, { name: string; ask: string; age: string }> = {

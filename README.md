@@ -188,7 +188,7 @@ pnpm test             # Playwright behavioural tests (needs `npx playwright inst
 pnpm dev              # server with reload on change, from source
 ```
 
-`pnpm dev` runs from `src/` under `tsx` and reloads on changes. A clone never checks for new versions; start it with `LATTICE_UPDATE_PREVIEW=0.9.0` to see the update notice, with sample notes and an Update button that installs nothing. On Linux, `pnpm service:setup` installs optional systemd user services; the other `service:*` scripts manage them.
+`pnpm dev` runs from `src/` under `tsx` and reloads on changes. A clone never checks for new versions; start it with `LATTICE_UPDATE_PREVIEW=0.11.0` to see the update notice, with sample notes and an Update button that installs nothing. On Linux, `pnpm service:setup` installs optional systemd user services; the other `service:*` scripts manage them.
 
 ## Licence
 

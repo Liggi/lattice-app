@@ -16,6 +16,8 @@ import { createConversationDiagnosticsRoutes } from '@/routes/diagnostics/conver
 import type { DiagnosticsRuntimeDeps } from '@/diagnostics/collect-conversation-diagnostics.js';
 import { createInsightsRoutes } from '@/routes/insights/insights.routes.js';
 import { createTeamsRoutes } from '@/routes/teams.routes.js';
+import { createInboxRoutes } from '@/routes/inbox.routes.js';
+import { createJobsRoutes } from '@/routes/jobs.routes.js';
 import { createNotificationRoutes } from '@/routes/system/notifications.routes.js';
 import { createFeedbackRoutes } from '@/routes/system/feedback.routes.js';
 import { createPluginsRoutes } from '@/routes/system/plugins.routes.js';
@@ -27,6 +29,7 @@ import { createNotesRoutes } from '@/routes/session/notes.routes.js';
 import { createSideQuestionRoutes } from '@/routes/conversation/side-questions.routes.js';
 import { createProviderAuthRoutes } from '@/routes/integrations/provider-auth.routes.js';
 import { createChatGPTPlanRoutes } from '@/routes/integrations/chatgpt-plan.routes.js';
+import { createPlanUsageRoutes } from '@/routes/integrations/plan-usage.routes.js';
 import { createBackgroundRoutes } from '@/routes/system/background.routes.js';
 import { createSessionTransferRoutes } from '@/routes/session/session-transfer.routes.js';
 import { createSessionStatusRoutes } from '@/routes/session/session-status.routes.js';
@@ -80,14 +83,18 @@ export function registerAppRoutes(deps: RegisterAppRoutesDeps): void {
   app.use('/api/permissions', createPermissionRoutes(deps.permissionTracker));
   app.use('/api/filesystem', createFileSystemRoutes(deps.fileSystemService));
   app.use('/api/images', createImageRoutes({
-    listWorkingDirectories: async () =>
-      (await deps.workingDirectoriesService.getWorkingDirectories()).directories.map((d) => d.path),
+    listWorkingDirectories: async () => {
+      const fromHistory = (await deps.workingDirectoriesService.getWorkingDirectories()).directories.map((d) => d.path);
+      const fromConversations = deps.conversationService?.listWorkingDirectories() ?? [];
+      return [...new Set([...fromHistory, ...fromConversations])];
+    },
   }));
   app.use('/api/logs', createLogRoutes());
   app.use('/api/working-directories', createWorkingDirectoriesRoutes(deps.workingDirectoriesService));
   app.use('/api/config', createConfigRoutes(deps.configService));
   app.use('/api/provider-auth', createProviderAuthRoutes({ processManagerClient: deps.processManagerClient }));
   app.use('/api/chatgpt-plan', createChatGPTPlanRoutes());
+  app.use('/api/plan-usage', createPlanUsageRoutes());
   app.use('/api/background', createBackgroundRoutes());
   app.use('/api/notifications', createNotificationRoutes());
   app.use('/api/feedback', createFeedbackRoutes(deps.configService));
@@ -139,6 +146,8 @@ export function registerAppRoutes(deps: RegisterAppRoutesDeps): void {
   app.use('/api/notes', createNotesRoutes());
   app.use('/api/side-questions', createSideQuestionRoutes());
   app.use('/api/teams', createTeamsRoutes());
+  app.use('/api/inbox', createInboxRoutes());
+  app.use('/api/jobs', createJobsRoutes());
 
   // Learning map — agent write path for typed article nodes.
   // See docs/learning-map-api.md.

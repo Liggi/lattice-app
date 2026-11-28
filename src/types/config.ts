@@ -311,6 +311,13 @@ export interface LatticeConfig {
   typesafe?: TypeSafeConfig;
 
   /**
+   * The user's own Slack user token (`xoxp-…`), saved with `lattice keys
+   * import` and read by plugins through `host.keys.get('slack')`: Lattice posts
+   * with it only when the user taps Send on a Slack draft card.
+   */
+  slack?: { apiKey?: string };
+
+  /**
    * The person using this Lattice, as agents refer to them.
    */
   user?: UserConfig;

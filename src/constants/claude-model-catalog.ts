@@ -31,6 +31,40 @@ function family(id: string): string {
   return baseId(id).split('-')[1] ?? id;
 }
 
+const FAMILY_RANK: Record<string, number> = {
+  fable: 0,
+  opus: 1,
+  sonnet: 2,
+  haiku: 3,
+};
+
+function claudeVersion(id: string): [number, number] {
+  const parts = baseId(id).split('-').slice(2);
+  const major = /^\d+$/.test(parts[0] ?? '') ? Number(parts[0]) : 0;
+  // Treat 8-digit release dates (e.g. 20251001) as not a minor version.
+  const minor = /^\d{1,2}$/.test(parts[1] ?? '') ? Number(parts[1]) : 0;
+  return [major, minor];
+}
+
+/**
+ * Orders Claude models by capability (Fable → Opus → Sonnet → Haiku), newest
+ * version first within each family, with common models before older ones.
+ */
+export function sortClaudeCatalogModels(models: ClaudeCatalogModel[]): ClaudeCatalogModel[] {
+  return [...models].sort((a, b) => {
+    const otherDiff = Number(a.other) - Number(b.other);
+    if (otherDiff !== 0) return otherDiff;
+    const rankA = FAMILY_RANK[family(a.id)] ?? 99;
+    const rankB = FAMILY_RANK[family(b.id)] ?? 99;
+    if (rankA !== rankB) return rankA - rankB;
+    const [majA, minA] = claudeVersion(a.id);
+    const [majB, minB] = claudeVersion(b.id);
+    if (majA !== majB) return majB - majA;
+    if (minA !== minB) return minB - minA;
+    return 0;
+  });
+}
+
 /**
  * The menu's list from what the CLI says this sign-in can use. Each family's
  * newest model is what the CLI's own alias for it (opus, sonnet, …) resolves
@@ -62,6 +96,5 @@ export function catalogFromCliModels(cliModels: ClaudeCliModel[]): { models: Cla
       other: aliasedFamilies.has(family(id)) && !aliasTargets.has(baseId(id)),
     });
   }
-  // Common models first, each group in the CLI's order.
-  return { models: [...models.filter((m) => !m.other), ...models.filter((m) => m.other)], defaultModel };
+  return { models: sortClaudeCatalogModels(models), defaultModel };
 }

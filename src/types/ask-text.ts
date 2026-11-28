@@ -26,7 +26,7 @@ const RECOMMENDATION = /\s*Recommend(?:ation|ed)?:\s*(.+?)\.?\s*$/is;
 /**
  * The numbered questions, on their own lines or run together ("… 1. A? 2.
  * B?"), counted from 1 in order so a stray "2." inside a sentence does not
- * split one. Null when there are fewer than two.
+ * split one. Supports one or more numbered questions; null when none are found.
  */
 export function parseAsk(text: string): ParsedAsk | null {
   const marks: { at: number; end: number }[] = [];
@@ -35,7 +35,7 @@ export function parseAsk(text: string): ParsedAsk | null {
     if (Number(match[2]) !== marks.length + 1) continue;
     marks.push({ at: match.index + match[1].length, end: match.index + match[0].length });
   }
-  if (marks.length < 2) return null;
+  if (marks.length < 1) return null;
   const questions = marks.map((mark, i) => {
     const body = text.slice(mark.end, marks[i + 1]?.at ?? text.length).replace(/\s+/g, ' ').trim();
     const rec = body.match(RECOMMENDATION);

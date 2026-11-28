@@ -1,4 +1,4 @@
-import { parseJson } from '../../../utils/json.js';
+import { parseJson } from './json.js';
 
 /**
  * The ```lattice-gallery fence an agent writes to show screenshots as a series

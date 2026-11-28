@@ -15,8 +15,10 @@ import { readServerAddress } from './session-commands.js';
 
 export const KEYS_USAGE = `  lattice keys import <file>
       Save the API keys in a key file, as Save does in Settings → Providers,
-      then delete the file. The file is JSON with either or both of
-      {"anthropic": "sk-ant-…", "typesafe": "…"}; a key left out is skipped.
+      then delete the file. The file is JSON with any of
+      {"anthropic": "sk-ant-…", "typesafe": "…", "slack": "xoxp-…"}; a key
+      left out is skipped. "slack" is your own Slack user token, which Slack
+      draft cards post with when you tap Send.
       Use this for any key file; never cat, print or paste one.
 `;
 
@@ -24,6 +26,7 @@ export const KEYS_USAGE = `  lattice keys import <file>
 const KEY_FIELDS = {
   anthropic: 'Anthropic key',
   typesafe: 'TypeSafe key',
+  slack: 'Slack user token',
 } as const;
 
 type KeyField = keyof typeof KEY_FIELDS;
@@ -41,13 +44,13 @@ export function parseKeyFile(text: string): KeyFile {
     throw new Error('the file is not valid JSON.');
   }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new Error('the file must be a JSON object like {"anthropic": "…", "typesafe": "…"}.');
+    throw new Error('the file must be a JSON object like {"anthropic": "…", "typesafe": "…", "slack": "…"}.');
   }
   const keys: KeyFile = {};
   for (const [field, value] of Object.entries(parsed)) {
     if (!(field in KEY_FIELDS)) {
       // Not named: a mistyped file could have a key where a field name goes.
-      throw new Error(`the file has a field other than ${Object.keys(KEY_FIELDS).join(' and ')}.`);
+      throw new Error(`the file has a field other than ${Object.keys(KEY_FIELDS).join(', ')}.`);
     }
     if (value === null || value === undefined) continue;
     if (typeof value !== 'string') throw new Error(`"${field}" must be a string.`);

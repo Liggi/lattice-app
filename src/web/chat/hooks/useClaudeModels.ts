@@ -1,16 +1,17 @@
 import { useQuery } from '@tanstack/react-query';
 import { parseJson } from '../../../utils/json.js';
 import { CLAUDE_MODELS } from '@/constants/claude-models';
-import type { ClaudeCatalogModel, ClaudeModelCatalog } from '@/constants/claude-model-catalog';
+import { sortClaudeCatalogModels, type ClaudeCatalogModel, type ClaudeModelCatalog } from '@/constants/claude-model-catalog';
 
 /**
  * Lattice's own list, offered only when the CLI could not be asked (none
  * installed, or it failed); the server logs why.
  */
-const REGISTRY_MODELS: ClaudeCatalogModel[] = CLAUDE_MODELS
-  .filter((model) => model.composerSelectable)
-  .map((model) => ({ id: model.id, label: model.label, description: model.description, other: model.other === true }))
-  .sort((a, b) => Number(a.other) - Number(b.other));
+const REGISTRY_MODELS: ClaudeCatalogModel[] = sortClaudeCatalogModels(
+  CLAUDE_MODELS
+    .filter((model) => model.composerSelectable)
+    .map((model) => ({ id: model.id, label: model.label, description: model.description, other: model.other === true })),
+);
 
 export interface ClaudeModels {
   models: ClaudeCatalogModel[];
@@ -45,6 +46,6 @@ export function useClaudeModels(): ClaudeModels {
     retry: false,
   });
   return data?.source === 'cli'
-    ? { models: data.models.map(withVersionedLabel), cliDefaultModel: data.defaultModel }
+    ? { models: sortClaudeCatalogModels(data.models.map(withVersionedLabel)), cliDefaultModel: data.defaultModel }
     : { models: REGISTRY_MODELS, cliDefaultModel: null, ...(data || isError ? { note: FALLBACK_NOTE } : {}) };
 }

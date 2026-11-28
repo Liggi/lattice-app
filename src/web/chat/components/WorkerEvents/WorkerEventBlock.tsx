@@ -21,8 +21,10 @@
  * while it is open (2026-09-19 flow agreement).
  */
 
-import React, { type JSX, useState } from 'react';
-import { ArrowRightLeft, ChevronDown, ChevronRight, ExternalLink, MessageSquare, Play, SquarePen } from 'lucide-react';
+import React, { type JSX, useContext, useState } from 'react';
+import { ArrowRightLeft, ChevronDown, ChevronRight, MessageSquare, SquarePen } from 'lucide-react';
+import { SessionStateIcon } from '../shared/session-state-icon/SessionStateIcon';
+import { WorkersByIdContext, workerGlyph } from '../shared/session-state-icon/worker-glyph';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { remarkSlackBullets } from '../../utils/slack-bullets';
@@ -90,26 +92,36 @@ function StartedBlock({
   time: string;
   onNavigateToSession?: (sessionId: string) => void;
 }) {
-  return (
-    <div data-testid="worker-started" className="rounded-lg border border-line bg-surface px-3.5 py-2.5">
-      <div className="flex items-center gap-2 text-[12.5px] text-fg-3">
-        <Play size={13} className="text-fg-3" />
-        <span className="font-medium text-fg-2">{providerLabel(data.provider)} worker</span>
-        {data.model && <span>{data.model}</span>}
-        <span className="flex-1" />
-        {time && <span>{data.movedFrom ? `Moved here from ${data.movedFrom.project ?? data.movedFrom.coordinator} ${time}` : `Started ${time}`}</span>}
-        {onNavigateToSession && (
-          <button
-            type="button"
-            onClick={() => onNavigateToSession(data.worker)}
-            className="inline-flex items-center gap-1 text-fg-3 hover:text-fg"
-            title="Open the worker's session"
-          >
-            <ExternalLink size={12} />
-          </button>
-        )}
-      </div>
-      <div className="mt-1 text-sm text-fg">{data.task}</div>
+  const known = useContext(WorkersByIdContext).get(data.worker);
+  const glyph = workerGlyph(known ?? { model: data.model });
+  const when = data.movedFrom ? `Moved here from ${data.movedFrom.project ?? data.movedFrom.coordinator} ${time}` : `Started ${time}`;
+  const who = [`${providerLabel(data.provider)} worker`, data.model].filter(Boolean).join(', ');
+  const row = (
+    <>
+      <span className="flex h-[19px] shrink-0 items-center text-fg-3">
+        <SessionStateIcon state={{ kind: 'idle' }} variant="session" glyph={glyph} size={16} />
+      </span>
+      <span className="min-w-0 flex-1 break-words leading-[1.45]">
+        <span className="text-fg-2">{data.task}</span>
+        {data.movedFrom && <span className="ml-2 text-fg-3">moved here from {data.movedFrom.project ?? data.movedFrom.coordinator}</span>}
+      </span>
+      {time && <span className="shrink-0 text-xs tabular-nums leading-[19px] text-fg-3">{time}</span>}
+    </>
+  );
+  // One quiet row: the cube, the task, the time. Which model runs it is on hover.
+  return onNavigateToSession ? (
+    <button
+      type="button"
+      data-testid="worker-started"
+      onClick={() => onNavigateToSession(data.worker)}
+      title={`${who}. ${when}. Open the worker's session`}
+      className="flex w-full items-start gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-[13.5px] hover:bg-surface-2"
+    >
+      {row}
+    </button>
+  ) : (
+    <div data-testid="worker-started" title={`${who}. ${when}`} className="flex w-full items-start gap-2.5 px-2.5 py-1.5 text-[13.5px]">
+      {row}
     </div>
   );
 }
@@ -129,8 +141,8 @@ function ReassignedLine({ data, time }: { data: WorkerReassignedData; time: stri
     >
       <SquarePen size={14} className="shrink-0 text-fg-3" />
       <span className="min-w-0 flex-1 leading-[1.4]">
-        <span className="font-medium text-fg">Moved the worker on to</span>
-        <span> · {data.task}</span>
+        <span className="text-fg-2">Moved the worker on to</span>
+        <span className="ml-2 text-fg">{data.task}</span>
         {data.previousTask && <span className="text-fg-3"> (was {data.previousTask})</span>}
       </span>
       {time && <span className="shrink-0 text-xs text-fg-3">{time}</span>}
@@ -150,8 +162,8 @@ function MovedLine({ data, time }: { data: WorkerMovedData; time: string }) {
     >
       <ArrowRightLeft size={14} className="shrink-0 text-fg-3" />
       <span className="min-w-0 flex-1 leading-[1.4]">
-        <span className="font-medium text-fg">Moved the worker to {data.project ?? data.to}</span>
-        <span> · {data.task}</span>
+        <span className="text-fg-2">Moved the worker to {data.project ?? data.to}</span>
+        <span className="ml-2 text-fg">{data.task}</span>
       </span>
       {time && <span className="shrink-0 text-xs text-fg-3">{time}</span>}
     </div>
@@ -173,8 +185,8 @@ function AnsweredLine({ data, time }: { data: WorkerAnsweredData; time: string }
       >
         <MessageSquare size={14} className="shrink-0 text-fg-3" />
         <span className="min-w-0 flex-1 leading-[1.4]">
-          <span className="font-medium text-fg">{verb}</span>
-          {data.summary && <span> · {data.summary}</span>}
+          <span className="text-fg-3">{verb}</span>
+          {data.summary && <span className="ml-2 text-fg-2">{data.summary}</span>}
         </span>
         {time && <span className="shrink-0 text-xs text-fg-3">{time}</span>}
         <Chevron size={13} className="shrink-0 text-fg-3" />
@@ -270,9 +282,9 @@ function ReportedBlock({
   const canToggle = summary !== null || clipped || expanded;
   const reaction: ReactionTarget = { messageId, excerpt: summary?.title ?? firstLine(data.text), worker: data.worker };
   return (
-    <div data-testid="worker-reported" className="rounded-lg border border-line bg-surface px-3.5 py-2.5">
-      <div className="flex items-center gap-2 text-[12.5px]">
-        <span className="font-medium text-fg-2">Reported</span>
+    <div data-testid="worker-reported" className="px-2.5 py-1.5">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[12.5px]">
+        <span className="text-fg-3">Reported</span>
         {data.movedFrom && (
           <span className="text-[11px] text-fg-3">carried over from {data.movedFrom.project ?? data.movedFrom.coordinator}</span>
         )}
@@ -282,7 +294,7 @@ function ReportedBlock({
       </div>
       {summary && <SummaryLines title={summary.title} text={summary.text} />}
       {showsReport && (
-        <div className={`relative ${summary ? 'mt-3 border-t border-line pt-2.5' : 'mt-1.5'}`}>
+        <div className={`relative ${summary ? 'mt-3' : 'mt-1.5'}`}>
           <div
             ref={summary ? undefined : bodyRef}
             className={PROSE}
@@ -292,26 +304,25 @@ function ReportedBlock({
             <ReactMarkdown remarkPlugins={[remarkGfm, remarkSlackBullets]} components={markdownComponents}>{data.text}</ReactMarkdown>
           </div>
           {!expanded && clipped && (
-            <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-surface to-transparent" />
+            <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-bg to-transparent" />
           )}
         </div>
       )}
-      <div className="mt-2 flex items-center gap-3 border-t border-line pt-2 text-xs">
+      <div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
         {canToggle && (
           <button
             type="button"
             onClick={() => setExpanded((value) => !value)}
-            className="font-medium text-fg-2 hover:text-fg"
+            className="text-fg-3 hover:text-fg"
           >
             {expanded ? 'Show less' : 'Full report'}
           </button>
         )}
-        {canToggle && onNavigateToSession && <span className="text-fg-3">·</span>}
         {onNavigateToSession && (
           <button
             type="button"
             onClick={() => onNavigateToSession(data.worker)}
-            className="font-medium text-fg-2 hover:text-fg"
+            className="text-fg-3 hover:text-fg"
           >
             Open agent session
           </button>

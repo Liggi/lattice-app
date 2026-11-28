@@ -11,8 +11,8 @@ describe('catalogFromCliModels', () => {
   it('offers each family\'s newest model, older ones under Other, and leaves out superseded ones', () => {
     const { models, defaultModel } = catalogFromCliModels(recorded('models-subscription'));
     expect(models.map((m) => [m.id, m.label, m.other])).toEqual([
-      ['claude-opus-5-5', 'Opus 5.5', false],
       ['claude-fable-5-1', 'Fable 5.1', false],
+      ['claude-opus-5-5', 'Opus 5.5', false],
       ['claude-sonnet-5-5', 'Sonnet 5.5', false],
       ['claude-haiku-4-5-20251001', 'Haiku 4.5', false],
       ['claude-sonnet-5', 'Sonnet 5', true],
@@ -24,8 +24,8 @@ describe('catalogFromCliModels', () => {
   it('follows what an API key can use, keeping the id the CLI gives', () => {
     const { models } = catalogFromCliModels(recorded('models-api-key'));
     expect(models.map((m) => [m.id, m.other])).toEqual([
-      ['claude-opus-5-5', false],
       ['claude-fable-5-1[1m]', false],
+      ['claude-opus-5-5', false],
       ['claude-sonnet-5-5', false],
       ['claude-haiku-4-5-20251001', false],
     ]);

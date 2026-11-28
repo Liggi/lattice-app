@@ -52,6 +52,7 @@ beforeEach(async () => {
   inspect.mockReset();
   inspect.mockReturnValue(null);
   __resetTurnAdmissionForTests();
+  inbox.__resetRetryCircuitForTests();
 });
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -167,6 +168,54 @@ describe('drainInbox', () => {
     await inbox.drainInbox('conv-c');
     expect(inbox.getInboxItem(id)).toMatchObject({ read_at: null, attempts: 1 });
     expect(inbox.composeInboxInput(inbox.unreadInboxItems('conv-c'), 'lattice')).toContain('may have reached you');
+  });
+});
+
+describe('retry circuit', () => {
+  it('backs off after a run failure, stops draining once three failures open the circuit, and Retry drains once', async () => {
+    vi.useFakeTimers();
+    try {
+      let sends = 0;
+      vi.stubGlobal('fetch', async () => { sends += 1; return new Response('process could not start', { status: 500 }); });
+      inbox.enqueueInboxItem({ sessionId: 'conv-c', source: 'user', text: 'one' });
+
+      inbox.drainAfterRunFailure('conv-c', 'spawn failed');
+      // The backoff holds every drain, however it is asked for.
+      await inbox.drainInbox('conv-c');
+      expect(sends).toBe(0);
+      await vi.advanceTimersByTimeAsync(2_000);
+      // The delayed drain sent and failed: that is the second failure.
+      expect(sends).toBe(1);
+      expect(inbox.isRetryCircuitOpen('conv-c')).toBe(false);
+
+      inbox.drainAfterRunFailure('conv-c', 'spawn failed');
+      expect(inbox.isRetryCircuitOpen('conv-c')).toBe(true);
+      expect(appended.filter((event) => event.type === 'retry:circuit-open')).toEqual([
+        { sessionId: 'conv-c', type: 'retry:circuit-open', data: { reason: 'spawn failed', failures: 3 } },
+      ]);
+      await vi.advanceTimersByTimeAsync(60_000);
+      await inbox.drainInbox('conv-c');
+      expect(sends).toBe(1);
+
+      const retried = await inbox.retryInbox('conv-c');
+      expect(retried).toEqual({ wasOpen: true, retried: true });
+      expect(sends).toBe(2);
+      expect(appended.filter((event) => event.type === 'retry:circuit-closed')).toEqual([
+        { sessionId: 'conv-c', type: 'retry:circuit-closed', data: { why: 'retry' } },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('closes on a healthy turn and on the user writing again', () => {
+    for (let i = 0; i < 3; i += 1) inbox.drainAfterRunFailure('conv-c', 'boom');
+    expect(inbox.isRetryCircuitOpen('conv-c')).toBe(true);
+    expect(inbox.resetRetryCircuit('conv-c', 'turn-succeeded')).toBe(true);
+    expect(inbox.isRetryCircuitOpen('conv-c')).toBe(false);
+    for (let i = 0; i < 3; i += 1) inbox.drainAfterRunFailure('conv-c', 'boom');
+    expect(inbox.resetRetryCircuit('conv-c', 'user-send')).toBe(true);
+    expect(inbox.resetRetryCircuit('conv-c', 'user-send')).toBe(false);
   });
 });
 

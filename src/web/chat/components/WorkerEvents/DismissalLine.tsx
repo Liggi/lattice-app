@@ -26,7 +26,7 @@ export function DismissalLine({ message }: { message: ChatMessage }): JSX.Elemen
       <Icon size={14} className="shrink-0 text-fg-3" />
       <span className="min-w-0 flex-1 leading-[1.4]">
         <span className="font-medium text-fg">{dismissed ? 'You dismissed' : 'You brought back'}</span>
-        <span> · {dismissal.label}</span>
+        <span className="ml-2">{dismissal.label}</span>
         <span className="ml-2 text-fg-3">{dismissed ? 'Parked; the coordinator was told' : 'The coordinator was told'}</span>
       </span>
       {time && <span className="shrink-0 text-xs text-fg-3">{time}</span>}

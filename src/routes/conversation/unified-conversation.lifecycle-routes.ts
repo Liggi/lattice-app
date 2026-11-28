@@ -23,6 +23,8 @@ import { getHarnessSessionManager } from '@/harness/setup.js';
 import { DEFAULT_CODEX_MODEL_ID } from '@/constants/codex-models.js';
 import { DEFAULT_OPENCODE_MODEL_ID } from '@/constants/opencode-models.js';
 import { DEFAULT_ANTIGRAVITY_MODEL_ID } from '@/constants/antigravity-models.js';
+import { DEFAULT_INKLING_MODEL_ID } from '@/constants/inkling-models.js';
+import { inklingInstalled } from '@/harness/inkling-process-adapter.js';
 import { supersededModelRefusal } from '@/constants/superseded-models.js';
 import { modelProviderMismatch, providerForModel } from '@/constants/model-provider.js';
 import { resolveResumeModel } from '@/services/sessions/resume-model.js';
@@ -39,7 +41,9 @@ import { appendWorkerEvent } from '@/services/sessions/worker-events.js';
 import { readProjectState } from '@/services/sessions/project-state.js';
 import { buildProjectOrientation } from '@/services/sessions/project-orientation.js';
 import { buildWorkerDriftNote } from '@/services/sessions/worker-drift.js';
-import { switchCoordinator } from '@/services/sessions/coordinator-switch.js';
+import { switchCoordinator, type SwitchResult } from '@/services/sessions/coordinator-switch.js';
+import type { SwitchTarget } from '@/services/sessions/coordinator-switch-state.js';
+import { changeCoordinatorProfile } from '@/services/sessions/coordinator-profile-change.js';
 import { unfinishedSwitchRefusal } from '@/services/sessions/coordinator-switch-state.js';
 
 import type { ProjectOpenThread } from '@/types/project-state.js';
@@ -59,6 +63,7 @@ async function saveLargeFilesOrRefuse(conversationId: string, blocks: ContentBlo
 }
 
 const logger = createLogger('UnifiedConversationLifecycleRoutes');
+const INKLING_SESSION_PREAMBLE = 'This session runs in Lattice, which renders your replies as markdown in a chat on desktop and phone.\n\n---\n\n';
 const DEFAULT_CODEX_MODEL = DEFAULT_CODEX_MODEL_ID;
 const CODEX_PERMISSION_MODE = 'codex-bypass';
 /** opencode's server owns approval policy through its own agent config. */
@@ -69,6 +74,7 @@ function defaultModelForProvider(provider: Provider): string {
   if (provider === 'codex') return DEFAULT_CODEX_MODEL;
   if (provider === 'opencode') return DEFAULT_OPENCODE_MODEL_ID;
   if (provider === 'antigravity') return DEFAULT_ANTIGRAVITY_MODEL_ID;
+  if (provider === 'inkling') return DEFAULT_INKLING_MODEL_ID;
   return 'unknown';
 }
 
@@ -314,12 +320,15 @@ export function registerUnifiedConversationLifecycleRoutes(
       throw new LatticeError('INVALID_REQUEST', parsedPastes.error, 400);
     }
     const pastes = parsedPastes.spans;
-    if (provider !== 'claude' && provider !== 'codex' && provider !== 'opencode' && provider !== 'antigravity') {
+    if (provider !== 'claude' && provider !== 'codex' && provider !== 'opencode' && provider !== 'antigravity' && provider !== 'inkling') {
       res.status(400).json({
         error: 'unsupported_provider',
-        supportedProviders: ['claude', 'codex', 'opencode', 'antigravity'],
+        supportedProviders: ['claude', 'codex', 'opencode', 'antigravity', 'inkling'],
       });
       return;
+    }
+    if (provider === 'inkling' && !inklingInstalled()) {
+      throw new LatticeError('PROVIDER_NOT_INSTALLED', 'Inkling is not installed: no `inkling` on PATH or in ~/.local/bin', 400);
     }
     // Refused before the conversation row exists, so a mistyped folder leaves no project behind.
     if (!fs.statSync(workingDirectory, { throwIfNoEntry: false })?.isDirectory()) {
@@ -332,7 +341,7 @@ export function registerUnifiedConversationLifecycleRoutes(
     if (body.useSdkAdapter === true) {
       throw new LatticeError('SDK_TRANSPORT_REMOVED', 'Claude runs only through the Claude Code CLI installed on this machine; useSdkAdapter is no longer offered', 400);
     }
-    if (provider === 'claude' && requestedMode && !PERMISSION_MODES.includes(requestedMode as typeof PERMISSION_MODES[number])) {
+    if ((provider === 'claude' || provider === 'inkling') && requestedMode && !PERMISSION_MODES.includes(requestedMode as typeof PERMISSION_MODES[number])) {
       throw new LatticeError('INVALID_PERMISSION_MODE', `permissionMode must be one of: ${PERMISSION_MODES.join(', ')}`, 400);
     }
 
@@ -405,7 +414,10 @@ export function registerUnifiedConversationLifecycleRoutes(
                 conversationId, workingDirectory, cli: latticeCli(), installedProviders: installedProviders(), claudeEndpointModels: claudeEndpointModels(), readsImages,
                 ...(resolvedProfile && !('error' in resolvedProfile) ? { profile: resolvedProfile } : {}),
               }) + message
-            : buildSessionPreamble(latticeCli(), conversationId, readsImages) + (message ?? '');
+            : provider === 'inkling'
+              // A local model re-reads every token: one line of orientation, not the full session guide.
+              ? INKLING_SESSION_PREAMBLE + (message ?? '')
+              : buildSessionPreamble(latticeCli(), conversationId, readsImages) + (message ?? '');
 
         // Prime conversation metadata
         await sessionInfoService.updateSessionInfo(conversationId, {
@@ -459,6 +471,9 @@ export function registerUnifiedConversationLifecycleRoutes(
             } : {}),
             ...(provider === 'antigravity' ? {
               model: model ?? DEFAULT_ANTIGRAVITY_MODEL_ID,
+            } : {}),
+            ...(provider === 'inkling' ? {
+              model: model ?? DEFAULT_INKLING_MODEL_ID,
             } : {}),
             systemPrompt: body.systemPrompt,
             initialContent,
@@ -643,10 +658,11 @@ export function registerUnifiedConversationLifecycleRoutes(
     if (latestSegment.provider !== 'claude'
       && latestSegment.provider !== 'codex'
       && latestSegment.provider !== 'opencode'
-      && latestSegment.provider !== 'antigravity') {
+      && latestSegment.provider !== 'antigravity'
+      && latestSegment.provider !== 'inkling') {
       res.status(400).json({
         error: 'unsupported_provider',
-        supportedProviders: ['claude', 'codex', 'opencode', 'antigravity'],
+        supportedProviders: ['claude', 'codex', 'opencode', 'antigravity', 'inkling'],
       });
       return;
     }
@@ -696,7 +712,7 @@ export function registerUnifiedConversationLifecycleRoutes(
             model: resumeModel,
             ...(knownResumeEffort ? { reasoningEffort: knownResumeEffort } : {}),
           } : {}),
-          ...(latestSegment.provider === 'opencode' || latestSegment.provider === 'antigravity' ? {
+          ...(latestSegment.provider === 'opencode' || latestSegment.provider === 'antigravity' || latestSegment.provider === 'inkling' ? {
             model: resumeModel,
           } : {}),
           initialContent,
@@ -766,26 +782,16 @@ export function registerUnifiedConversationLifecycleRoutes(
     }
   }));
 
-  // Move a coordinator to another provider in place: same conversation id,
-  // log, project record and workers (coordinator-switch.ts). Refuses unless
-  // it is idle; `status` in the body says which of switched / unchanged /
-  // refused / failed happened.
-  router.post('/:conversationId/switch', asyncHandler(async (req: RequestWithRequestId, res) => {
-    const { conversationId } = req.params;
-    const body = (req.body ?? {}) as { provider?: string; model?: string };
-    if (body.provider !== 'claude' && body.provider !== 'codex' && body.provider !== 'antigravity') {
-      throw new LatticeError('INVALID_REQUEST', 'provider must be claude, codex or antigravity', 400);
-    }
-    if (typeof body.model !== 'string' || body.model.trim() === '') {
-      throw new LatticeError('INVALID_REQUEST', 'model is required', 400);
-    }
+  // A coordinator switch with the spawn settings a create or resume would use,
+  // shared by the switch route and a profile change that moves front's model.
+  async function runCoordinatorSwitch(conversationId: string, target: SwitchTarget): Promise<SwitchResult> {
     const harnessSessionManager = getHarnessSessionManager();
     if (!harnessSessionManager) {
       throw new LatticeError('HARNESS_UNAVAILABLE', 'Harness session manager not available', 500);
     }
     const conversation = conversationService.getConversation(conversationId);
     const claudePermissionMode = resolveExistingConversationPermissionMode({ provider: 'claude' });
-    const result = await switchCoordinator(conversationId, { provider: body.provider, model: body.model.trim() }, {
+    const result = await switchCoordinator(conversationId, target, {
       sessionManager: harnessSessionManager,
       conversationService,
       registry: activeConversationRegistry,
@@ -845,9 +851,57 @@ export function registerUnifiedConversationLifecycleRoutes(
     if (result.status === 'switched' && result.to.provider === 'antigravity') {
       await sessionInfoService.updateSessionInfo(conversationId, { permission_mode: 'antigravity-managed' });
     }
+    return result;
+  }
+
+  // Move a coordinator to another provider in place: same conversation id,
+  // log, project record and workers (coordinator-switch.ts). Refuses unless
+  // it is idle; `status` in the body says which of switched / unchanged /
+  // refused / failed happened.
+  router.post('/:conversationId/switch', asyncHandler(async (req: RequestWithRequestId, res) => {
+    const { conversationId } = req.params;
+    const body = (req.body ?? {}) as { provider?: string; model?: string };
+    if (body.provider !== 'claude' && body.provider !== 'codex' && body.provider !== 'antigravity') {
+      throw new LatticeError('INVALID_REQUEST', 'provider must be claude, codex or antigravity', 400);
+    }
+    if (typeof body.model !== 'string' || body.model.trim() === '') {
+      throw new LatticeError('INVALID_REQUEST', 'model is required', 400);
+    }
+    const result = await runCoordinatorSwitch(conversationId, { provider: body.provider, model: body.model.trim() });
     const httpStatus = result.status === 'refused'
       ? (result.code === 'not-found' ? 404 : result.code === 'unknown-model' || result.code === 'unsupported' || result.code === 'not-coordinator' ? 400 : 409)
       : result.status === 'failed' ? 502 : 200;
+    res.status(httpStatus).json(result);
+  }));
+
+
+  // Move a running coordinator onto another profile, or back with `revert`
+  // (coordinator-profile-change.ts). Front's model moves only when the
+  // profile names a different one; the new routing reaches front with its
+  // next input.
+  router.post('/:conversationId/profile', asyncHandler(async (req: RequestWithRequestId, res) => {
+    const { conversationId } = req.params;
+    const body = (req.body ?? {}) as { profile?: unknown; revert?: unknown };
+    if (body.revert !== true && (typeof body.profile !== 'string' || body.profile.trim() === '')) {
+      throw new LatticeError('INVALID_REQUEST', 'profile (a name) or revert: true is required', 400);
+    }
+    const harnessSessionManager = getHarnessSessionManager();
+    if (!harnessSessionManager) {
+      throw new LatticeError('HARNESS_UNAVAILABLE', 'Harness session manager not available', 500);
+    }
+    const result = await changeCoordinatorProfile(
+      conversationId,
+      body.revert === true ? { revert: true } : { profile: body.profile as string },
+      {
+        sessionManager: harnessSessionManager,
+        conversationService,
+        settings: coordinatorProfileSettings(),
+        switchTo: (target) => runCoordinatorSwitch(conversationId, target),
+      },
+    );
+    const httpStatus = result.status !== 'refused' ? 200
+      : result.code === 'not-found' ? 404
+      : result.code === 'not-idle' || result.code === 'switch-failed' ? 409 : 400;
     res.status(httpStatus).json(result);
   }));
 

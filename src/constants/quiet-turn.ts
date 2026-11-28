@@ -6,7 +6,14 @@
  */
 export const QUIET_TURN_MARKER = 'NO_REPLY';
 
-/** Whether `text` is only the marker, allowing whitespace and code formatting around it. */
+/**
+ * Gemini sometimes glues a stray token of up to 3 capital letters onto the marker ("NO_REPLYCP", 24 Nov 2026,
+ * stored that way in agy's own record), then copies it in later turns.
+ */
+const QUIET_TURN_PART = new RegExp(`^${QUIET_TURN_MARKER}[A-Z]{0,3}$`);
+
+/** Whether `text` is only the marker, once or repeated, allowing whitespace and code formatting around it. */
 export function isQuietTurnMarker(text: string): boolean {
-  return text.trim().replace(/^`+|`+$/g, '').trim() === QUIET_TURN_MARKER;
+  const parts = text.split(/\s+/).map((part) => part.replace(/^`+|`+$/g, '')).filter(Boolean);
+  return parts.length > 0 && parts.every((part) => QUIET_TURN_PART.test(part));
 }

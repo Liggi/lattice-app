@@ -4,6 +4,8 @@ export interface CodexModelEntry {
   description: string;
   composerSelectable: boolean;
   efforts: string[];
+  /** Listed under "Older models" in the model picker. */
+  other?: boolean;
   /** The model to use instead. Set means new sessions, resumes and switches refuse this id. */
   supersededBy?: string;
   /** Runs on the OpenAI API with the key in Settings, not the ChatGPT sign-in. */
@@ -16,6 +18,8 @@ export interface CodexEffortEntry {
   description: string;
 }
 
+// Ordered by capability (top = strongest, bottom = fastest), with prior-gen
+// 5.6 models folded under "Older models".
 export const CODEX_MODELS: CodexModelEntry[] = [
   {
     id: 'gpt-6.2-astra',
@@ -26,16 +30,16 @@ export const CODEX_MODELS: CodexModelEntry[] = [
     apiKeyBilled: true,
   },
   {
-    id: 'gpt-6.1-sol',
-    label: 'Sol 6.1',
-    description: 'Capable model for sustained coding and agent work',
+    id: 'gpt-6-astra',
+    label: 'Astra 6',
+    description: 'Most capable model for complex, demanding work',
     composerSelectable: true,
     efforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
   },
   {
-    id: 'gpt-6-astra',
-    label: 'Astra 6',
-    description: 'Most capable model for complex, demanding work',
+    id: 'gpt-6.1-sol',
+    label: 'Sol 6.1',
+    description: 'Capable model for sustained coding and agent work',
     composerSelectable: true,
     efforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
   },
@@ -44,6 +48,7 @@ export const CODEX_MODELS: CodexModelEntry[] = [
     label: 'Sol 5.6',
     description: 'Latest frontier agentic coding model',
     composerSelectable: true,
+    other: true,
     efforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
   },
   {
@@ -51,6 +56,7 @@ export const CODEX_MODELS: CodexModelEntry[] = [
     label: 'Terra 5.6',
     description: 'Balanced agentic coding model for everyday work',
     composerSelectable: true,
+    other: true,
     efforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
   },
   {
@@ -58,6 +64,7 @@ export const CODEX_MODELS: CodexModelEntry[] = [
     label: 'Luna 5.6',
     description: 'Fast and affordable agentic coding model',
     composerSelectable: true,
+    other: true,
     efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
   },
   {

@@ -29,14 +29,18 @@
 import React, { type JSX, useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, ChevronDown, ChevronRight, PackageCheck } from 'lucide-react';
 import { ShipStateIcon } from './ShipStateIcon';
-import { cannotRead, hasStarted, isStalled, jobRate, needsLook, PROCESS_ENDED_REASON } from '@/types/job-stall';
+import { cannotRead, hasStarted, isIndeterminateJob, isStalled, jobRate, needsLook, PROCESS_ENDED_REASON, quietSince } from '@/types/job-stall';
 import { useActivityStream, useActivityStreamSubscription } from '@/web/chat/contexts/ActivityStreamContext';
 import { SessionStateIcon } from '@/web/chat/components/shared/session-state-icon/SessionStateIcon';
+import { JobProgressBar } from '@/web/chat/components/shared/JobProgressBar';
 import { Tooltip, TooltipContentPlain, TooltipTrigger } from '@/web/chat/components/ui/tooltip';
 import type { WorkerCardState } from '@/types/worker-events';
 import type { JobProgress } from '@/services/sessions/job-progress';
 import type { ProjectShipping, ShipItem, ShipStage } from '@/services/sessions/project-shipping';
 import { workerStateLine } from './WorkersSection';
+import { OutputsSection } from './PanelShapes';
+import type { ProjectOutputs } from './project-outputs';
+import { plainUnread } from './shipping-unread';
 
 interface NarrowPanelProps {
   coordinatorId?: string;
@@ -51,6 +55,12 @@ interface NarrowPanelProps {
   /** A worker's row, with the jobs it reports drawn inside it when it has any. */
   renderWorker: (worker: WorkerCardState, jobs?: WorkerJobs) => React.ReactNode;
   onOpenWorker?: (conversationId: string) => void;
+  /** A last section, drawn by the caller: the coordinator's profile roles. */
+  footer?: React.ReactNode;
+  /** The project's threads as a step chain, drawn by the caller; null when it has none. */
+  track?: React.ReactNode;
+  /** Screenshots and links the conversation has produced. */
+  outputs?: ProjectOutputs | null;
 }
 
 /** The jobs a worker reports, drawn for its row, and whether any has stopped moving. */
@@ -59,7 +69,7 @@ export interface WorkerJobs {
   stalled: boolean;
 }
 
-export function NarrowPanel({ coordinatorId, attention, backlog = null, workers, carrying = NO_WORKERS, coordinatorRunning, renderWorker, onOpenWorker }: NarrowPanelProps): JSX.Element {
+export function NarrowPanel({ coordinatorId, attention, backlog = null, workers, carrying = NO_WORKERS, coordinatorRunning, renderWorker, onOpenWorker, footer = null, track = null, outputs = null }: NarrowPanelProps): JSX.Element {
   const jobs = useJobs(coordinatorId, workers);
   const shipping = usePolled<ProjectShipping>(coordinatorId && `/api/conv/${encodeURIComponent(coordinatorId)}/shipping`, 30_000);
   const now = useNow(30_000);
@@ -67,6 +77,9 @@ export function NarrowPanel({ coordinatorId, attention, backlog = null, workers,
   const { live, ended } = splitJobs(jobs);
   const running = runningRows(workers, carrying, live, coordinatorRunning, now);
   const items = shipping?.items ? orderShipping(shipping.items) : null;
+  const unread = useMemo(() => plainUnread(shipping?.unread ?? []), [shipping]);
+  // A pull request the shipping section already lists is not repeated under Outputs.
+  const shippedHrefs = useMemo(() => new Set((shipping?.items ?? []).flatMap((item) => (item.href ? [item.href] : []))), [shipping]);
 
   return (
     <div data-testid="narrow-panel" className="flex flex-col gap-8">
@@ -77,6 +90,7 @@ export function NarrowPanel({ coordinatorId, attention, backlog = null, workers,
           {backlog}
         </Section>
       )}
+      {track}
       <Section title="Running" testId="panel-running">
         {running.length === 0 && ended.length === 0 && <Empty>Nothing running</Empty>}
         {running.map((row) => (row.kind === 'worker'
@@ -88,19 +102,26 @@ export function NarrowPanel({ coordinatorId, attention, backlog = null, workers,
       </Section>
       <Section title="Pull requests and releases" testId="panel-shipping">
         {items === null && <Empty>Checking</Empty>}
-        {items?.length === 0 && <Empty>No open pull requests, nothing shipped today</Empty>}
+        {items?.length === 0 && unread.length === 0 && <Empty>No open pull requests, nothing shipped today</Empty>}
         {items?.filter((item) => !SHIPPED.includes(item.stage)).map((item) => <ShipRow key={item.key} item={item} now={now} />)}
         {items?.some((item) => SHIPPED.includes(item.stage)) && (
           <ShippedGroup>
             {items.filter((item) => SHIPPED.includes(item.stage)).map((item) => <ShipRow key={item.key} item={item} now={now} />)}
           </ShippedGroup>
         )}
+        {unread.length > 0 && (
+          <div data-testid="panel-shipping-unread" className="flex flex-col gap-0.5 px-2 pl-[46px] text-[12px] text-fg-3/70">
+            {unread.map((line) => <div key={line}>{line}</div>)}
+          </div>
+        )}
       </Section>
+      <OutputsSection outputs={outputs} excludeHrefs={shippedHrefs} />
+      {footer}
     </div>
   );
 }
 
-function Section({ title, testId, children }: { title: string; testId: string; children: React.ReactNode }) {
+export function Section({ title, testId, children }: { title: string; testId: string; children: React.ReactNode }): JSX.Element {
   return (
     <section data-testid={testId} className="flex flex-col gap-1">
       <h3 className="px-2 pb-1.5 pl-[46px] text-[13px] font-medium text-fg-2">{title}</h3>
@@ -158,18 +179,24 @@ function runningRows(workers: WorkerCardState[], carrying: ReadonlySet<string>, 
  */
 function WorkerJob({ job, now }: { job: JobProgress; now: number }) {
   const stuck = needsLook(job, now);
+  const hasCount = counted(job);
   return (
     <span data-testid="panel-job" data-job-state={jobState(job, now)} className="mt-2.5 flex flex-col">
-      {counted(job) ? (
+      {hasCount ? (
         <>
-          <span className="flex items-baseline justify-between gap-3 text-[12.5px]">
-            <span className="min-w-0 break-words text-pretty text-fg-2">{job.label}</span>
-            <JobCount job={job} stalled={stuck} />
-          </span>
+          <span className="min-w-0 break-words text-pretty text-[12.5px] leading-[1.45] text-fg-2">{job.label}</span>
           <Ticks done={job.done} total={job.total} stalled={stuck} />
+          <span className="mt-1.5 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-[12px]">
+            <JobStatus job={job} now={now} />
+            <span className="ml-auto"><JobCount job={job} stalled={stuck} /></span>
+          </span>
         </>
-      ) : <StartingLine job={job} now={now} />}
-      <JobStatus job={job} now={now} />
+      ) : (
+        <>
+          <StartingLine job={job} now={now} />
+          <span className="mt-1.5 text-[12px] empty:hidden"><JobStatus job={job} now={now} /></span>
+        </>
+      )}
     </span>
   );
 }
@@ -180,12 +207,13 @@ function WorkerJob({ job, now }: { job: JobProgress; now: number }) {
  * partway through), since that count was read from the work too.
  */
 function counted(job: JobProgress): boolean {
-  return hasStarted(job) || job.done > 0;
+  return job.total > 0 && (hasStarted(job) || job.done > 0);
 }
 
 /** What the panel's tests and the row's tone go by. */
 function jobState(job: JobProgress, now: number): string {
   if (cannotRead(job) !== null) return 'unreadable';
+  if (isIndeterminateJob(job)) return isStalled(job, now) ? 'silent' : 'running';
   if (!hasStarted(job)) return isStalled(job, now) ? 'starting-stalled' : 'starting';
   return isStalled(job, now) ? 'stalled' : 'moving';
 }
@@ -193,10 +221,16 @@ function jobState(job: JobProgress, now: number): string {
 /**
  * Before the first item there is no count worth drawing: "Starting: Turns
  * checked, 4 min", grey, amber once it has taken twice as long as its agent
- * said one item takes, or 20 minutes (`job-stall.ts`).
+ * said one item takes, or 20 minutes (`job-stall.ts`). A job with no count
+ * says "Running: Sweep finished, 24 min", amber once its command goes quiet.
  */
 function StartingLine({ job, now }: { job: JobProgress; now: number }) {
   const late = isStalled(job, now);
+  if (isIndeterminateJob(job)) {
+    return late
+      ? <Caution testId="panel-job-running">{job.label}: no output for {duration(now - quietSince(job))}</Caution>
+      : <span data-testid="panel-job-running" className="break-words text-pretty text-[12.5px] text-fg-2">Running: {job.label}, {duration(now - job.startedAt)}</span>;
+  }
   const text = `Starting: ${job.label}, ${duration(now - job.startedAt)}`;
   return late
     ? <Caution testId="panel-job-starting">{text}</Caution>
@@ -206,22 +240,26 @@ function StartingLine({ job, now }: { job: JobProgress; now: number }) {
 /** The line under a job: the count can't be read, it is stuck, or its rate and time left. */
 function JobStatus({ job, now }: { job: JobProgress; now: number }) {
   const error = cannotRead(job);
-  if (error !== null) return <span className="mt-1.5 text-[12px]"><Caution testId="panel-job-unreadable">Can't read the count: {error}</Caution></span>;
+  if (error !== null) return <Caution testId="panel-job-unreadable">Can't read the count: {error}</Caution>;
+  if (isIndeterminateJob(job)) {
+    const note = job.stage ?? job.message;
+    return note ? <span data-testid="panel-job-stage" className="break-words text-pretty text-fg-3">{note}</span> : null;
+  }
   if (!hasStarted(job)) {
     if (job.done === 0) return null;
     const waited = duration(now - job.startedAt);
     return isStalled(job, now)
-      ? <span className="mt-1.5 text-[12px]"><Caution testId="panel-job-starting">No new item in {waited}</Caution></span>
-      : <span data-testid="panel-job-starting" className="mt-1.5 text-[12px] text-fg-3">No new item yet, {waited}</span>;
+      ? <Caution testId="panel-job-starting">No new item in {waited}</Caution>
+      : <span data-testid="panel-job-starting" className="text-fg-3">No new item yet, {waited}</span>;
   }
-  if (isStalled(job, now)) return <span className="mt-1.5 text-[12px]"><Caution testId="panel-job-stuck">No progress for {duration(now - job.movedAt)}</Caution></span>;
+  if (isStalled(job, now)) return <Caution testId="panel-job-stuck">No progress for {duration(now - job.movedAt)}</Caution>;
   const pace = jobPace(job, now);
-  return pace ? <span data-testid="panel-job-pace" className="mt-1.5 text-[12px] text-fg-3">{pace}</span> : null;
+  return pace ? <span data-testid="panel-job-pace" className="text-fg-3">{pace}</span> : null;
 }
 
 function JobCount({ job, stalled }: { job: JobProgress; stalled: boolean }) {
   return (
-    <span className="shrink-0 tabular-nums text-fg-3">
+    <span className="shrink-0 whitespace-nowrap tabular-nums text-fg-3">
       <span className={stalled ? 'text-fg-2' : 'text-fg'}>{count(job.done)}</span> of {count(job.total)}
     </span>
   );
@@ -260,22 +298,28 @@ function jobPace(job: JobProgress, now: number): string | null {
  */
 export function JobRow({ job, now, onOpen }: { job: JobProgress; now: number; onOpen?: (conversationId: string) => void }): JSX.Element {
   const stuck = needsLook(job, now);
+  const hasCount = counted(job);
   const body = (
     <>
-      <span className={`flex h-5 w-7 shrink-0 items-center justify-center ${stuck || !hasStarted(job) ? 'text-fg-3' : 'text-fg-2'}`}>
+      <span className={`flex h-7 w-7 shrink-0 items-center justify-center ${stuck || (!hasStarted(job) && !isIndeterminateJob(job)) ? 'text-fg-3' : 'text-fg-2'}`}>
         <SessionStateIcon state={stuck ? { kind: 'idle' } : { kind: 'working', level: 1 }} variant="session" />
       </span>
-      <span className="flex min-w-0 flex-1 flex-col">
-        {counted(job) ? (
+      <span className="flex min-h-7 min-w-0 flex-1 flex-col justify-center">
+        {hasCount ? (
           <>
-            <span className="flex items-baseline justify-between gap-3">
-              <span className={`min-w-0 text-[13.5px] leading-[1.45] break-words text-pretty ${stuck ? 'text-fg-2' : 'text-fg'}`}>{job.label}</span>
-              <span className="text-[12.5px]"><JobCount job={job} stalled={stuck} /></span>
-            </span>
+            <span className={`min-w-0 text-[13.5px] leading-[20px] break-words text-pretty ${stuck ? 'text-fg-2' : 'text-fg'}`}>{job.label}</span>
             <Ticks done={job.done} total={job.total} stalled={stuck} />
+            <span className="mt-1.5 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-[12px]">
+              <JobStatus job={job} now={now} />
+              <span className="ml-auto"><JobCount job={job} stalled={stuck} /></span>
+            </span>
           </>
-        ) : <span className="leading-[1.45]"><StartingLine job={job} now={now} /></span>}
-        <JobStatus job={job} now={now} />
+        ) : (
+          <>
+            <span className="leading-[20px]"><StartingLine job={job} now={now} /></span>
+            <span className="mt-1.5 text-[12px] empty:hidden"><JobStatus job={job} now={now} /></span>
+          </>
+        )}
       </span>
     </>
   );
@@ -287,49 +331,17 @@ export function JobRow({ job, now, onOpen }: { job: JobProgress; now: number; on
   );
 }
 
-const TICKS = 48;
-
-/**
- * The strip: 48 fine ticks lit in proportion, so big jobs share one grain. A
- * job of fewer items gets one segment each, so the one being worked on is as
- * wide as its share of the job and lights whole when it finishes.
- */
+/** Unified calm thin progress bar matching Running now and the chat composer strip. */
 function Ticks({ done, total, stalled }: { done: number; total: number; stalled: boolean }) {
-  const ticks = Math.min(total, TICKS);
-  const lit = Math.floor((done / total) * ticks);
   return (
-    <span aria-hidden className="ssi mt-2 flex h-[9px] items-stretch gap-[2px]">
-      {Array.from({ length: ticks }, (_, i) => {
-        if (i === lit && !stalled) return <span key={i} className="flex-1" style={ticks < TICKS ? NEXT_ITEM : NEXT_TICK} />;
-        const current = ticks < TICKS ? 'ring-1 ring-inset ring-fg-3/70' : 'bg-fg-2/40';
-        const tone = i < lit ? (stalled ? 'bg-fg-3/55' : 'bg-fg-2/75') : i === lit ? current : 'bg-fg-3/15';
-        return <span key={i} className={`flex-1 ${tone}`} />;
-      })}
-    </span>
+    <JobProgressBar
+      done={done}
+      total={total > 0 ? total : null}
+      state={stalled ? 'stalled' : 'working'}
+      className="mt-2"
+    />
   );
 }
-
-/** The tick being worked on: cyan, breathing; stops under reduced motion with the other state icons. */
-const NEXT_TICK = {
-  background: '#22d3ee',
-  boxShadow: '0 0 5px rgba(34,211,238,.7)',
-  animation: 'ssi-breathe 1.6s ease-in-out infinite',
-  '--lo': .35,
-  '--hi': 1,
-} as React.CSSProperties;
-
-/**
- * An item being worked on, when each item has its own segment: a wide solid
- * cyan bar would read as done, so it is a faint cyan fill under a cyan edge,
- * breathing.
- */
-const NEXT_ITEM = {
-  background: 'rgba(34,211,238,.14)',
-  boxShadow: 'inset 0 0 0 1px rgba(34,211,238,.75)',
-  animation: 'ssi-breathe 1.6s ease-in-out infinite',
-  '--lo': .45,
-  '--hi': 1,
-} as React.CSSProperties;
 
 /**
  * A job that finished or stopped, laid out as the worker rows are: the

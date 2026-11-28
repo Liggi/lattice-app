@@ -119,7 +119,7 @@ export function useWorkers(
       stale.current = null;
       api.getWorkers(conversationId)
         .then((next) => {
-          const seen = { workers: next.workers, history: next.history ?? [], project: next.project ?? null, senders: next.senders ?? {}, references: next.references ?? {}, repliedAt: next.repliedAt ?? {} };
+          const seen = { workers: next.workers, history: next.history ?? [], project: next.project ?? null, senders: next.senders ?? {}, references: next.references ?? {}, repliedAt: next.repliedAt ?? {}, ...(next.profile ? { profile: next.profile } : {}) };
           lastSeen.set(conversationId, seen);
           answeredAt.current = typeof next.asOfSeq === 'number' ? { conversationId, seq: next.asOfSeq } : null;
           if (current.current === conversationId) setResponse(seen);

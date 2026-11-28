@@ -158,3 +158,6 @@ scripts/immigrant-*.mjs
 scripts/species-*.mjs
 scripts/war-*.mjs
 .vercel
+
+# Records of servers running from this checkout, read by client builds
+.running-servers/

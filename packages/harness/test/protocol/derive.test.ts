@@ -1120,6 +1120,27 @@ describe('deriveUsage', () => {
     expect(deriveUsage([before, boundary, after])?.contextTokens).toBe(16_010)
   })
 
+  // Antigravity and Codex report no size after compacting: unknown, not the
+  // size before it, until a later turn measures it.
+  it('reads the context as unknown after a compaction with no postTokens', () => {
+    const before = makeEvent('content', {
+      blocks: [{ type: 'text', text: 'before compact' }],
+      apiUsage: { input_tokens: 210_000, output_tokens: 20 },
+    })
+    const boundary = makeEvent('turn:end', { compact: true, preTokens: 210_000 })
+    const compactTurnEnd = makeEvent('turn:end', { usage: { input_tokens: 210_000, output_tokens: 900 } })
+    expect(deriveUsage([before, boundary, compactTurnEnd])?.contextTokens).toBeNull()
+
+    // A Codex turn after it has only turn totals, which are its measurement.
+    const nextTurn = [
+      makeEvent('input:sent', { text: 'next' }),
+      makeEvent('turn:end', { usage: { input_tokens: 15_000, output_tokens: 40 } }),
+    ]
+    const usage = deriveUsage([before, boundary, compactTurnEnd, ...nextTurn])
+    expect(usage?.contextTokens).toBeUndefined()
+    expect(usage?.inputTokens).toBe(15_000)
+  })
+
   it('defaults missing cache fields to 0', () => {
     const events = [
       makeEvent('turn:end', {

@@ -1,22 +1,22 @@
 /**
  * Antigravity CLI (`agy`) provider adapter.
  *
- * Runs one long-lived `agy` print-mode process per Lattice conversation, with
- * stream-json on both sides: each stdin line `{"event":"user","message":...}`
- * runs one turn, and stdout is a stream of `init`, `step_update` and `result`
- * events. This adapter translates those into the Claude-CLI-shaped JSONL the
- * harness consumes.
+ * Runs one long-lived `agy acp` process per Lattice conversation and speaks
+ * the Agent Client Protocol to it over stdio: `session/new` or
+ * `session/resume` (agy's conversation id), then one `session/prompt` per
+ * input. This adapter translates agy's `session/update` notifications into the
+ * Claude-CLI-shaped JSONL the harness consumes.
  *
- * Event mapping (agy -> emitted line):
- *   init                                  -> system/init (conversation_id is the session id)
- *   step_update agent_response text_delta -> accumulated per step, assistant text on DONE
- *   step_update tool ACTIVE               -> assistant tool_use
- *   step_update tool DONE / ERROR         -> user tool_result
- *   result                                -> result
+ * Update mapping (agy -> emitted line):
+ *   agent_thought_chunk                 -> assistant thinking, when the thought ends
+ *   agent_message_chunk                 -> assistant text, when the reply segment ends
+ *   tool_call / tool_call_update        -> assistant tool_use, then user tool_result once completed or failed
+ *   usage_update                        -> the context size on each message; a sharp drop is a compact boundary
+ *   session/prompt answered, none left  -> result
  *
- * agy does not stream its thinking text, only a token count, so there are no
- * thinking blocks. SIGINT makes agy end the turn with an "interrupted" result
- * and exit; the next message respawns it with `--conversation`.
+ * A prompt sent while a turn runs steers it (agy reads it after its current
+ * step), which is what `steer()` uses. SIGINT sends `session/cancel` and agy
+ * stays up for the next input.
  */
 
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
@@ -24,18 +24,18 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import readline from 'node:readline';
-import type { ProcessAdapter, ProcessHandle, SpawnConfig } from '@liggi/agent-ui-harness/server';
+import type { ProcessAdapter, ProcessHandle, SpawnConfig, SteerOutcome, SteerRequest } from '@liggi/agent-ui-harness/server';
 import { createLogger } from '../services/infrastructure/logger.js';
 import { parseJson } from '../utils/json.js';
 import { agyModelArg, DEFAULT_ANTIGRAVITY_MODEL_ID } from '../constants/antigravity-models.js';
 import { createStdoutQueue } from './stdout-queue.js';
 import { parseAttachmentBlocks } from './attachment-blocks.js';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 const logger = createLogger('AntigravityAdapter');
 
 /** The installer puts `agy` in ~/.local/bin, which a launchd PATH often lacks. */
-function agyBinary(): string {
+export function agyBinary(): string {
   if (process.env.LATTICE_AGY_BIN) return process.env.LATTICE_AGY_BIN;
   const installed = path.join(os.homedir(), '.local', 'bin', 'agy');
   return fs.existsSync(installed) ? installed : 'agy';
@@ -136,10 +136,10 @@ export function agyCommandOutput(output: string): string {
 
 /**
  * A reply cut where Gemini runs on into a turn it invented: a bare `user` role line
- * followed by the opening of one of agy's `<SYSTEM_MESSAGE>` injections.
+ * followed by the opening of one of agy's `<SYSTEM_MESSAGE>` or `<USER_REQUEST>` wrappers.
  */
 export function agyReplyText(text: string): string {
-  const invented = /^user[ \t]*\r?\n\s*(?:The following is a <SYSTEM_MESSAGE>|<SYSTEM_MESSAGE>)/m.exec(text);
+  const invented = /^user[ \t]*\r?\n\s*(?:The following is a <SYSTEM_MESSAGE>|<SYSTEM_MESSAGE>|<USER_REQUEST>)/m.exec(text);
   return invented ? text.slice(0, invented.index).trim() : text;
 }
 
@@ -202,6 +202,17 @@ interface HandleOptions {
   env?: Record<string, string>;
 }
 
+interface RpcError { code?: number; message?: string }
+
+/** How one `session/prompt` call ended. */
+type PromptEnd = { ok: true; stopReason: string } | { ok: false; error: string };
+
+/** How long `steer()` waits for agy to show it took the input before answering `uncertain`. */
+const STEER_ACK_TIMEOUT_MS = 15_000;
+
+/** A context that falls below this share of the previous call's means agy condensed its history. */
+const COMPACTION_DROP_RATIO = 0.7;
+
 class AntigravityProcessHandle implements ProcessHandle {
   readonly stdout = createStdoutQueue();
   pid?: number;
@@ -214,20 +225,35 @@ class AntigravityProcessHandle implements ProcessHandle {
     this.exitedResolve = resolve;
   });
 
-  private conversationId = '';
+  private sessionId = '';
   private sentInit = false;
-  /** Turns written to agy that have not reported a result yet; agy queues a prompt sent mid-turn. */
-  private pendingTurns = 0;
+  /** initialize, then session/new or session/resume, then the model: every prompt waits on it. */
+  private ready: Promise<void> = Promise.resolve();
+  private nextRpcId = 0;
+  private readonly rpcWaiters = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
+
+  /**
+   * One Lattice turn can span several prompts: a prompt sent while a turn runs
+   * steers it, agy answers the earlier prompt at once, and the turn ends only
+   * when no prompt is left unanswered.
+   */
+  private turnOpen = false;
+  private unansweredPrompts = 0;
+  /** The newest prompt's outcome, which a steer waits on to see its own input taken. */
+  private latestPrompt: Promise<PromptEnd> = Promise.resolve({ ok: true, stopReason: 'end_turn' });
   private turnStartedAt = 0;
-  /** Text deltas of the agent_response steps still streaming, by step index. */
-  private readonly textByStep = new Map<number, string>();
-  /** Tool steps already announced as tool_use, so a DONE without ACTIVE still gets one. */
-  private readonly announcedTools = new Set<number>();
-  private stderrTail = '';
-  /** The newest model call's token counts; its prompt size is the session's context size. */
-  private lastCall: AgyUsage | null = null;
-  /** The model calls of the turn in progress, added up. */
   private turn: Required<Omit<AgyUsage, 'thinking_tokens'>> = { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0 };
+
+  private text = '';
+  private thought = '';
+  private segment = 0;
+  /** Per-handle nonce so a respawned agy process never reuses earlier runs' message ids. */
+  private readonly runNonce = randomUUID().slice(0, 8);
+  /** Tool calls already announced as tool_use, so an update without the first event still gets one. */
+  private readonly announcedTools = new Set<string>();
+  /** The context size at the newest model call, from agy's usage_update. */
+  private contextUsed: number | null = null;
+  private stderrTail = '';
 
   constructor(private readonly options: HandleOptions) {}
 
@@ -236,22 +262,12 @@ class AntigravityProcessHandle implements ProcessHandle {
   }
 
   async start(prompt: string): Promise<void> {
-    const args = [
-      '--input-format', 'stream-json',
-      '--output-format', 'stream-json',
-      '--dangerously-skip-permissions',
-      ...(this.options.model ? ['--model', this.options.model] : []),
-      ...(this.options.resume ? ['--conversation', this.options.resume] : []),
-      // Print mode with the prompts arriving on stdin; `-p` alone would take the next flag as its prompt.
-      '-p=',
-    ];
-    this.child = spawn(agyBinary(), args, {
+    this.child = spawn(agyBinary(), ['acp', '--dangerously-skip-permissions'], {
       cwd: this.options.cwd,
       env: { ...process.env, ...this.options.env },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     this.pid = this.child.pid;
-    if (this.options.resume) this.conversationId = this.options.resume;
     this.processId = `agy-${this.child.pid ?? Date.now()}`;
 
     const lines = readline.createInterface({ input: this.child.stdout });
@@ -259,149 +275,315 @@ class AntigravityProcessHandle implements ProcessHandle {
     this.child.stderr.on('data', (chunk: Buffer) => {
       this.stderrTail = (this.stderrTail + chunk.toString()).slice(-2000);
     });
+    this.child.stdin.on('error', (err) => logger.warn('agy stdin closed', { error: String(err) }));
     this.child.on('error', (err) => {
       logger.error('agy failed to start', { error: String(err) });
       this.emitError(`Antigravity CLI failed to start: ${String(err)}`);
       this.close(1);
     });
     this.child.on('exit', (code, signal) => {
-      if (this.pendingTurns > 0) {
+      if (this.turnOpen) {
         logger.warn('agy exited mid-turn', { code, signal, stderr: this.stderrTail });
         this.emitError(this.stderrTail.trim() || `Antigravity CLI exited (${signal ?? code})`);
       }
+      for (const waiter of this.rpcWaiters.values()) waiter.reject(new Error('Antigravity CLI exited'));
+      this.rpcWaiters.clear();
       this.close(code ?? 1, signal ?? undefined);
     });
 
-    this.sendPrompt(prompt);
+    this.ready = this.openSession();
+    this.ready.catch((err) => {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error('agy session setup failed', { error: message, stderr: this.stderrTail });
+      this.emitError(`Antigravity session could not start: ${message}`);
+      this.child.kill('SIGTERM');
+    });
+    void this.sendPrompt(prompt);
+  }
+
+  private async openSession(): Promise<void> {
+    await this.rpc('initialize', {
+      protocolVersion: 1,
+      clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
+    });
+    const session = { cwd: this.options.cwd, mcpServers: [] };
+    if (this.options.resume) {
+      await this.rpc('session/resume', { sessionId: this.options.resume, ...session });
+      this.sessionId = this.options.resume;
+    } else {
+      const created = await this.rpc('session/new', session) as { sessionId?: unknown };
+      if (typeof created?.sessionId !== 'string' || !created.sessionId) throw new Error('session/new returned no session id');
+      this.sessionId = created.sessionId;
+    }
+    if (this.options.model) await this.rpc('session/set_model', { sessionId: this.sessionId, modelId: this.options.model });
+    this.emitInit();
   }
 
   write(input: string, extra?: Record<string, unknown>): void {
     // Synchronous, so an attachment agy cannot read fails the send visibly.
-    this.sendPrompt(agyPromptWithAttachments(input.replace(/\n$/, ''), extra?.attachments, this.options.attachmentDir));
+    void this.sendPrompt(agyPromptWithAttachments(input.replace(/\n$/, ''), extra?.attachments, this.options.attachmentDir));
   }
 
+  /**
+   * Deliver into the running turn by sending another prompt, which agy's ACP
+   * server takes as steering: the agent reads it after its current step, and
+   * agy answers the prompt it was running straight away. That answer is the
+   * acknowledgement, and it is also the incorporation, since the turn has
+   * now been handed to the new prompt.
+   */
+  async steer(request: SteerRequest): Promise<SteerOutcome> {
+    if (!this.aliveValue) return { status: 'rejected', reason: 'Antigravity CLI is not running' };
+    if (!this.turnOpen || this.unansweredPrompts === 0) return { status: 'rejected', reason: 'Antigravity has no running turn to steer' };
+    let text: string;
+    try {
+      text = agyPromptWithAttachments(request.input.replace(/\n$/, ''), request.extra?.attachments, this.options.attachmentDir);
+    } catch (err) {
+      return { status: 'rejected', reason: err instanceof Error ? err.message : String(err) };
+    }
+    if (!text.trim()) return { status: 'rejected', reason: 'Nothing to steer with' };
+
+    const previous = this.latestPrompt;
+    request.onStage?.({ kind: 'handed-over' });
+    const mine = this.sendPrompt(text);
+
+    type Seen = { kind: 'taken' } | { kind: 'refused'; error: string } | { kind: 'timeout' } | { kind: 'exited' };
+    let timer: NodeJS.Timeout | undefined;
+    const taken: Promise<Seen> = Promise.race([
+      previous.then((): Seen => ({ kind: 'taken' })),
+      mine.then((end): Seen => (end.ok ? { kind: 'taken' } : { kind: 'refused', error: end.error })),
+      this.exited.then((): Seen => ({ kind: 'exited' })),
+    ]);
+    const seen = await Promise.race([
+      taken,
+      new Promise<Seen>((resolve) => { timer = setTimeout(() => resolve({ kind: 'timeout' }), STEER_ACK_TIMEOUT_MS); }),
+    ]);
+    clearTimeout(timer);
+
+    const detail = { sessionId: this.sessionId, deliveryId: request.deliveryId };
+    const incorporated = (): void => request.onStage?.({
+      kind: 'incorporated',
+      where: 'mid-turn',
+      evidence: 'agy answered the prompt it was running and went on with this one',
+    });
+    switch (seen.kind) {
+      case 'taken':
+        request.onStage?.({ kind: 'accepted', late: false, detail });
+        incorporated();
+        return { status: 'accepted', detail };
+      case 'refused':
+        return { status: 'rejected', reason: seen.error };
+      case 'exited':
+        return { status: 'uncertain', reason: 'Antigravity CLI exited before it acknowledged the input' };
+      case 'timeout':
+        void taken.then((late) => {
+          if (late.kind !== 'taken') return;
+          request.onStage?.({ kind: 'accepted', late: true, detail });
+          incorporated();
+        });
+        return { status: 'uncertain', reason: `agy did not take the input within ${STEER_ACK_TIMEOUT_MS / 1000}s` };
+    }
+  }
+
+  /** SIGINT cancels the running turn and leaves agy up for the next one; any other signal stops it. */
   signal(sig: NodeJS.Signals): void {
     if (!this.aliveValue) return;
+    if (sig === 'SIGINT') {
+      if (this.turnOpen && this.sessionId) this.notify('session/cancel', { sessionId: this.sessionId });
+      return;
+    }
     this.child.kill(sig);
   }
 
-  private sendPrompt(text: string): void {
-    if (!this.aliveValue) return;
-    if (this.pendingTurns === 0) this.turnStartedAt = Date.now();
-    this.pendingTurns += 1;
-    this.child.stdin.write(JSON.stringify({
-      event: 'user',
-      message: { role: 'user', content: [{ type: 'text', text }] },
-    }) + '\n');
+  private sendPrompt(text: string): Promise<PromptEnd> {
+    if (!this.aliveValue) return Promise.resolve({ ok: false, error: 'Antigravity CLI is not running' });
+    if (!this.turnOpen) {
+      this.turnOpen = true;
+      this.turnStartedAt = Date.now();
+    }
+    this.unansweredPrompts += 1;
+    const end = this.ready
+      .then(() => this.rpc('session/prompt', { sessionId: this.sessionId, prompt: [{ type: 'text', text }] }))
+      .then((result): PromptEnd => {
+        const r = (result ?? {}) as { stopReason?: unknown; usage?: Record<string, unknown> };
+        this.addUsage(r.usage);
+        return { ok: true, stopReason: typeof r.stopReason === 'string' ? r.stopReason : 'end_turn' };
+      }, (err): PromptEnd => ({ ok: false, error: err instanceof Error ? err.message : String(err) }));
+    void end.then((outcome) => this.promptAnswered(outcome));
+    this.latestPrompt = end;
+    return end;
+  }
+
+  private promptAnswered(end: PromptEnd): void {
+    if (this.unansweredPrompts > 0) this.unansweredPrompts -= 1;
+    // A failed setup or an exit has already ended the turn with its own error.
+    if (!this.turnOpen) return;
+    if (!end.ok) {
+      this.flush();
+      this.emitAssistant({ type: 'text', text: `Antigravity error: ${end.error}` }, `agy-error-${Date.now()}`);
+    } else if (end.stopReason !== 'end_turn' && end.stopReason !== 'cancelled') {
+      this.flush();
+      this.emitAssistant({ type: 'text', text: `Antigravity stopped the turn: ${end.stopReason}` }, `agy-stop-${Date.now()}`);
+    }
+    // A steered turn goes on under the newer prompt.
+    if (this.unansweredPrompts > 0) return;
+    this.flush();
+    const ok = end.ok && end.stopReason === 'end_turn';
+    this.emitResult(!ok, ok ? 'success' : 'error_during_execution');
+  }
+
+  private addUsage(usage: Record<string, unknown> | undefined): void {
+    if (!usage) return;
+    const n = (key: string): number => (typeof usage[key] === 'number' ? usage[key] as number : 0);
+    // agy's inputTokens leaves out what it read from cache, as the print-mode counts did.
+    this.turn.input_tokens += n('inputTokens');
+    this.turn.output_tokens += n('outputTokens');
+    this.turn.cache_read_tokens += n('cachedReadTokens');
+  }
+
+  private rpc(method: string, params: Record<string, unknown>): Promise<unknown> {
+    if (!this.aliveValue) return Promise.reject(new Error('Antigravity CLI is not running'));
+    const id = ++this.nextRpcId;
+    return new Promise((resolve, reject) => {
+      this.rpcWaiters.set(id, { resolve, reject });
+      this.child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n');
+    });
+  }
+
+  private notify(method: string, params: Record<string, unknown>): void {
+    this.child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method, params }) + '\n');
+  }
+
+  private reply(id: unknown, body: { result: unknown } | { error: RpcError }): void {
+    this.child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, ...body }) + '\n');
   }
 
   private handleLine(line: string): void {
     if (!line.trim()) return;
-    let event: Record<string, unknown>;
+    let msg: Record<string, unknown>;
     try {
-      event = parseJson(line) as Record<string, unknown>;
+      msg = parseJson(line) as Record<string, unknown>;
     } catch {
       logger.warn('agy wrote a non-JSON line', { line: line.slice(0, 200) });
       return;
     }
-    if (!event || typeof event !== 'object') return;
-    if (typeof event.conversation_id === 'string' && event.conversation_id) {
-      this.conversationId = event.conversation_id;
-    }
+    if (!msg || typeof msg !== 'object') return;
 
-    switch (event.event) {
-      case 'init': {
-        const init = (event.init ?? {}) as Record<string, unknown>;
-        this.emitInit(Array.isArray(init.tools) ? init.tools.map(String) : []);
-        break;
-      }
-      case 'step_update':
-        this.handleStep((event.step_update ?? {}) as Record<string, unknown>);
-        break;
-      case 'result':
-        this.handleResult((event.result ?? {}) as Record<string, unknown>);
-        break;
-      default:
-        break;
-    }
-  }
-
-  private handleStep(step: Record<string, unknown>): void {
-    if (typeof step.conversation_id === 'string' && step.conversation_id) {
-      this.conversationId = step.conversation_id;
-    }
-    if (!this.sentInit) this.emitInit([]);
-    const index = typeof step.step_index === 'number' ? step.step_index : -1;
-    const state = String(step.state ?? '');
-    const finished = state !== 'ACTIVE';
-
-    // A finished model step reports that one call; agy's result adds up the whole session.
-    // A checkpoint (agy condensing its history) is a call too, but not the size of the next prompt.
-    if (finished && step.usage && typeof step.usage === 'object' && (step.step_type === 'agent_response' || step.step_type === 'checkpoint')) {
-      const usage = step.usage as AgyUsage;
-      if (step.step_type === 'agent_response') this.lastCall = usage;
-      this.turn.input_tokens += usage.input_tokens ?? 0;
-      this.turn.output_tokens += usage.output_tokens ?? 0;
-      this.turn.cache_read_tokens += usage.cache_read_tokens ?? 0;
-    }
-
-    if (step.step_type === 'agent_response') {
-      if (typeof step.text_delta === 'string') {
-        this.textByStep.set(index, (this.textByStep.get(index) ?? '') + step.text_delta);
-      }
-      if (finished) {
-        const text = agyReplyText((this.textByStep.get(index) ?? '').trim());
-        this.textByStep.delete(index);
-        if (text) this.emitAssistant({ type: 'text', text }, `agy-text-${index}`);
-      }
+    if (typeof msg.method !== 'string') {
+      const waiter = typeof msg.id === 'number' ? this.rpcWaiters.get(msg.id) : undefined;
+      if (!waiter) return;
+      this.rpcWaiters.delete(msg.id as number);
+      if (msg.error) waiter.reject(new Error((msg.error as RpcError).message ?? JSON.stringify(msg.error)));
+      else waiter.resolve(msg.result);
       return;
     }
 
-    if (step.step_type === 'tool') {
-      const info = (step.tool_info ?? {}) as Record<string, unknown>;
-      const name = String(step.tool_name ?? info.name ?? 'tool');
-      const id = `agy-${this.conversationId}-${index}`;
-      if (!this.announcedTools.has(index)) {
-        this.announcedTools.add(index);
-        const params = (info.parameters && typeof info.parameters === 'object' ? info.parameters : {}) as Record<string, unknown>;
-        this.emitAssistant({ type: 'tool_use', id, ...agyToolUse(name, params) }, `agy-tool-${index}`);
-      }
-      if (finished) {
-        this.announcedTools.delete(index);
-        const output = typeof info.output === 'string' ? info.output
-          : info.output !== undefined ? JSON.stringify(info.output)
-          : typeof step.error === 'string' ? step.error : '';
-        this.emitToolResult(id, name === 'run_command' ? agyCommandOutput(output) : output, state !== 'DONE');
-      }
+    const params = (msg.params ?? {}) as Record<string, unknown>;
+    if (msg.method === 'session/update') {
+      this.handleUpdate((params.update ?? {}) as Record<string, unknown>);
+      return;
+    }
+    if (msg.id === undefined) return;
+    if (msg.method === 'session/request_permission') {
+      // agy runs with --dangerously-skip-permissions, so this should not come; if it does, allow as print mode did.
+      const options = Array.isArray(params.options) ? params.options as Array<Record<string, unknown>> : [];
+      const allow = options.find((o) => o.kind === 'allow_always') ?? options.find((o) => o.kind === 'allow_once') ?? options[0];
+      this.reply(msg.id, allow
+        ? { result: { outcome: { outcome: 'selected', optionId: allow.optionId } } }
+        : { result: { outcome: { outcome: 'cancelled' } } });
+      return;
+    }
+    this.reply(msg.id, { error: { code: -32601, message: `Lattice does not handle ${msg.method}` } });
+  }
+
+  private handleUpdate(update: Record<string, unknown>): void {
+    const content = (update.content ?? {}) as Record<string, unknown>;
+    switch (update.sessionUpdate) {
+      case 'agent_message_chunk':
+        if (this.thought) this.flush();
+        if (typeof content.text === 'string') this.text += content.text;
+        return;
+      case 'agent_thought_chunk':
+        if (this.text) this.flush();
+        if (typeof content.text === 'string') this.thought += content.text;
+        return;
+      case 'tool_call':
+      case 'tool_call_update':
+        this.flush();
+        this.handleTool(update);
+        return;
+      case 'usage_update':
+        this.handleContextSize(update.used);
+        return;
+      default:
+        return;
     }
   }
 
-  private handleResult(result: Record<string, unknown>): void {
-    // agy reports a shutdown as an error result even when no turn is running.
-    if (this.pendingTurns === 0) return;
-    // Flush text from a step that never reported DONE, so nothing is lost.
-    for (const [index, raw] of this.textByStep) {
-      const text = agyReplyText(raw.trim());
-      if (text) this.emitAssistant({ type: 'text', text }, `agy-text-${index}`);
+  private handleTool(update: Record<string, unknown>): void {
+    const callId = typeof update.toolCallId === 'string' ? update.toolCallId : `call-${this.runNonce}-${this.segment}`;
+    const id = `agy-${this.sessionId}-${callId}`;
+    const name = typeof update.name === 'string' && update.name ? update.name : 'tool';
+    if (!this.announcedTools.has(callId)) {
+      this.announcedTools.add(callId);
+      const raw = update.args ?? update.rawInput;
+      const params = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+      this.emitAssistant({ type: 'tool_use', id, ...agyToolUse(name, params) }, `agy-tool-${callId}`);
     }
-    this.textByStep.clear();
-    const ok = result.status === 'SUCCESS';
-    if (!ok && typeof result.error === 'string' && result.error && result.error !== 'interrupted') {
-      this.emitAssistant({ type: 'text', text: `Antigravity error: ${result.error}` }, `agy-error-${Date.now()}`);
-    }
-    this.emitResult(!ok, ok ? 'success' : 'error_during_execution', this.turn);
-    this.turn = { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0 };
+    const status = update.status;
+    if (status !== 'completed' && status !== 'failed') return;
+    this.announcedTools.delete(callId);
+    const rawOutput = (update.rawOutput ?? {}) as Record<string, unknown>;
+    const contentText = Array.isArray(update.content)
+      ? (update.content as Array<Record<string, unknown>>)
+        .map((c) => ((c.content ?? {}) as Record<string, unknown>).text)
+        .filter((t): t is string => typeof t === 'string')
+        .join('\n')
+      : '';
+    const output = typeof rawOutput.output === 'string' ? rawOutput.output : contentText;
+    this.emitToolResult(id, name === 'run_command' ? agyCommandOutput(output) : output, status === 'failed');
   }
 
-  private emitInit(tools: string[]): void {
+  /**
+   * agy's ACP server says nothing when it condenses its history, but the next
+   * call's context is then much smaller than the one before, which no other
+   * step does. That drop is marked as a compaction.
+   */
+  private handleContextSize(used: unknown): void {
+    if (typeof used !== 'number' || used <= 0) return;
+    const before = this.contextUsed;
+    this.contextUsed = used;
+    if (before !== null && used < before * COMPACTION_DROP_RATIO) {
+      this.stdout.push(JSON.stringify({
+        type: 'system',
+        subtype: 'compact_boundary',
+        session_id: this.sessionId,
+        // The size after is what the composer's context count shows; without it the count hides until the next reply.
+        compact_metadata: { pre_tokens: before, post_tokens: used },
+        provider: 'antigravity',
+      }));
+    }
+  }
+
+  /** Thinking or text gathered from chunks becomes one message when something else starts. */
+  private flush(): void {
+    if (this.thought.trim()) {
+      this.emitAssistant({ type: 'thinking', thinking: this.thought.trim() }, `agy-thought-${this.runNonce}-${this.segment++}`);
+    }
+    this.thought = '';
+    const text = agyReplyText(this.text.trim());
+    if (text) this.emitAssistant({ type: 'text', text }, `agy-text-${this.runNonce}-${this.segment++}`);
+    this.text = '';
+  }
+
+  private emitInit(): void {
     if (this.sentInit) return;
     this.sentInit = true;
     this.stdout.push(JSON.stringify({
       type: 'system',
       subtype: 'init',
-      session_id: this.conversationId,
+      session_id: this.sessionId,
       cwd: this.options.cwd,
-      tools,
+      tools: [],
       mcp_servers: [],
       model: this.options.model ? `agy:${this.options.model}` : DEFAULT_ANTIGRAVITY_MODEL_ID,
       permissionMode: 'antigravity-managed',
@@ -411,13 +593,14 @@ class AntigravityProcessHandle implements ProcessHandle {
   }
 
   private emitAssistant(block: Record<string, unknown>, id: string): void {
+    if (!this.sentInit) this.emitInit();
     this.stdout.push(JSON.stringify({
       type: 'assistant',
-      session_id: this.conversationId,
+      session_id: this.sessionId,
       message: {
         id, type: 'message', role: 'assistant', content: [block],
         model: this.options.model ? `agy:${this.options.model}` : DEFAULT_ANTIGRAVITY_MODEL_ID,
-        ...(this.lastCall ? { usage: agyCallUsage(this.lastCall) } : {}),
+        ...(this.contextUsed !== null ? { usage: agyCallUsage({ input_tokens: this.contextUsed }) } : {}),
       },
       provider: 'antigravity',
     }));
@@ -426,7 +609,7 @@ class AntigravityProcessHandle implements ProcessHandle {
   private emitToolResult(id: string, content: string, isError: boolean): void {
     this.stdout.push(JSON.stringify({
       type: 'user',
-      session_id: this.conversationId,
+      session_id: this.sessionId,
       message: {
         role: 'user',
         content: [{ type: 'tool_result', tool_use_id: id, content, ...(isError ? { is_error: true } : {}) }],
@@ -436,18 +619,16 @@ class AntigravityProcessHandle implements ProcessHandle {
   }
 
   private emitError(message: string): void {
-    if (this.pendingTurns === 0) return;
-    if (!this.sentInit) this.emitInit([]);
+    if (!this.turnOpen) return;
+    this.flush();
     this.emitAssistant({ type: 'text', text: message }, `agy-error-${Date.now()}`);
-    // The process is gone, so every turn still waiting on it ends here.
-    while (this.pendingTurns > 0) this.emitResult(true, 'error_during_execution', {});
+    this.emitResult(true, 'error_during_execution');
   }
 
-  private emitResult(isError: boolean, subtype: string, usage: AgyUsage): void {
-    if (this.pendingTurns === 0) return;
-    this.pendingTurns -= 1;
+  private emitResult(isError: boolean, subtype: string): void {
+    if (!this.turnOpen) return;
+    this.turnOpen = false;
     const duration = this.turnStartedAt ? Date.now() - this.turnStartedAt : 0;
-    this.turnStartedAt = Date.now();
     this.stdout.push(JSON.stringify({
       type: 'result',
       subtype,
@@ -455,10 +636,11 @@ class AntigravityProcessHandle implements ProcessHandle {
       duration_ms: duration,
       duration_api_ms: duration,
       num_turns: 1,
-      session_id: this.conversationId,
-      usage: { ...agyCallUsage(usage), server_tool_use: { web_search_requests: 0 } },
+      session_id: this.sessionId,
+      usage: { ...agyCallUsage(this.turn), server_tool_use: { web_search_requests: 0 } },
       provider: 'antigravity',
     }));
+    this.turn = { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0 };
   }
 
   private close(code: number, signal?: string): void {

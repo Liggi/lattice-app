@@ -1111,10 +1111,33 @@ function coalesceKey(msg: ChatMessage): string {
 }
 
 function chatMessageCoalescer(append: (msg: ChatMessage) => void) {
+  // Across runs, a provider or cassette replay can reuse a messageId after
+  // run:start resets the coalescer's scope. Keep the first run's id intact and
+  // disambiguate later runs' copies so React list keys stay unique while
+  // within-run fragments still coalesce under the raw key in byKey.
+  const seenIds = new Map<string, number>();
   return createRunScopedCoalescer<ChatMessage>({
     keyOf: coalesceKey,
     merge: coalesceInto,
-    append,
+    append: (msg) => {
+      const baseId = msg.messageId || msg.id;
+      if (baseId) {
+        const count = seenIds.get(baseId) ?? 0;
+        seenIds.set(baseId, count + 1);
+        if (count > 0) {
+          let next = count + 1;
+          let uniqueId = `${baseId}#${next}`;
+          while (seenIds.has(uniqueId)) {
+            next += 1;
+            uniqueId = `${baseId}#${next}`;
+          }
+          seenIds.set(uniqueId, 1);
+          msg.id = uniqueId;
+          msg.messageId = uniqueId;
+        }
+      }
+      append(msg);
+    },
   });
 }
 

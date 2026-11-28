@@ -95,6 +95,7 @@ import React, { type JSX, useLayoutEffect, useRef, useState } from 'react';
 import { ChevronUp } from 'lucide-react';
 import { WaitText, type WaitTextContext } from './WaitText';
 import { SessionStateIcon, type StateIconState } from '@/web/chat/components/shared/session-state-icon/SessionStateIcon';
+import { workerGlyph } from '@/web/chat/components/shared/session-state-icon/worker-glyph';
 import type { WorkerJobs } from './NarrowPanel';
 import { stripWorkerQuestionMarker, workerPendingState, workerResumedAfterReport, workerRuntimeWord, workerWaitingOn, type WorkerCardState } from '@/types/worker-events';
 
@@ -190,15 +191,13 @@ export function WorkerRow({
         {waitPhrase ? 'Waiting for' : 'Waiting on'} {waitReason}
       </span>
     );
+  } else if (working) {
+    // The mark already says it is working; what it is doing is on hover.
+    status = null;
   } else {
-    status = (
-      <>
-        {working && worker.activity
-          ? <span data-testid="worker-activity" className="text-fg-3">{worker.activity}</span>
-          : <span data-testid="worker-state" className={needsYou ? 'text-accent' : 'text-fg-3'}>{state}</span>}
-      </>
-    );
+    status = <span data-testid="worker-state" className={needsYou ? 'text-accent' : 'text-fg-3'}>{state}</span>;
   }
+  const age = compactAge(Date.now() - worker.startedAt);
 
   // The toggle is a sibling of the open button, not inside it: nested
   // buttons are invalid and the inner click would also open the worker.
@@ -209,7 +208,7 @@ export function WorkerRow({
       data-worker={worker.worker}
       data-worker-phase={worker.phase}
       data-pointed={pointed || undefined}
-      className={`group rounded-sm bg-bg transition-colors ${pointing ? '' : 'hover:bg-surface-2'}`}
+      className={`group rounded-sm bg-[var(--panel-bg,var(--color-bg))] transition-colors ${pointing ? '' : 'hover:bg-surface-2'}`}
     >
       <div className="flex items-start">
       <button
@@ -218,11 +217,20 @@ export function WorkerRow({
         className="flex min-w-0 flex-1 items-start gap-2.5 px-2 py-1.5 text-left"
       >
         <span className={`flex h-7 w-7 shrink-0 items-center justify-center ${pointed ? 'text-fg-2' : 'text-fg-3'}`}>
-          <SessionStateIcon state={icon} variant="session" />
+          <SessionStateIcon state={icon} variant="session" glyph={workerGlyph(worker)} />
         </span>
         <span className="flex min-h-7 min-w-0 flex-1 flex-col justify-center">
-          <span className={`text-[13px] leading-[1.45] break-words text-pretty ${jobs || pointed ? 'text-fg' : 'text-fg-2'}`}>{worker.task}</span>
-          <span className="mt-0.5 text-[12.5px] leading-[1.4] break-words">{status}</span>
+          <span className="flex items-start gap-3">
+            <span
+              title={working && worker.activity ? worker.activity : undefined}
+              className={`min-w-0 flex-1 break-words text-pretty text-[13.5px] leading-[20px] ${working || jobs || pointed ? 'text-fg' : 'text-fg-2'}`}
+            >
+              {worker.role?.chiefOfStaff ? worker.role.label : worker.task}
+            </span>
+            {age && <span className="shrink-0 text-[12px] tabular-nums leading-[20px] text-fg-3">{age}</span>}
+          </span>
+          {status && <span className="mt-0.5 text-[12.5px] leading-[1.4] break-words">{status}</span>}
+          {working && worker.activity && <span data-testid="worker-activity" className="sr-only">{worker.activity}</span>}
           {question && (
             <span
               ref={questionRef}
@@ -255,4 +263,15 @@ export function WorkerRow({
       )}
     </div>
   );
+}
+
+/** `12m`, `3h`, `2d`: how long ago, at the precision a glance needs. */
+function compactAge(ms: number): string | null {
+  if (!Number.isFinite(ms) || ms < 0) return null;
+  const minutes = Math.floor(ms / 60_000);
+  if (minutes < 1) return 'now';
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h`;
+  return `${Math.floor(hours / 24)}d`;
 }
