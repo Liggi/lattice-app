@@ -1,0 +1,50 @@
+name: Publish to npm
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24.x
+
+      - name: Check npm version supports OIDC Trusted Publishing
+        run: npm --version
+
+      - name: Verify release tag matches package.json version
+        if: github.event_name == 'release'
+        run: |
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          TAG_NAME="${GITHUB_REF_NAME}"
+          if [ "$TAG_NAME" != "v${PKG_VERSION}" ]; then
+            echo "Tag ${TAG_NAME} does not match package.json version v${PKG_VERSION}" >&2
+            exit 1
+          fi
+
+      - name: Install dependencies (builds harness and toolkit)
+        run: pnpm install --frozen-lockfile
+
+      - name: Build release
+        run: pnpm build
+
+      - name: Pack release tarball
+        run: |
+          TARBALL=$(pnpm --silent pack:release /tmp/release | tail -n 1)
+          echo "TARBALL=${TARBALL}" >> "$GITHUB_ENV"
+          echo "Packed ${TARBALL}"
+
+      - name: Publish to npm via Trusted Publishing
+        run: npm publish "${TARBALL}" --provenance --access public
